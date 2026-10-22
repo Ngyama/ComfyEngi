@@ -1,0 +1,2723 @@
+{
+ "tables": {
+  "templates": [
+   {
+    "id": 1,
+    "kind": "global",
+    "name": "画质",
+    "positive": "masterpiece, best quality",
+    "negative": "lowres, bad anatomy",
+    "category": "",
+    "tags": "",
+    "note": "",
+    "sort": 1,
+    "created_at": 1792681524.33819,
+    "updated_at": 1792681524.33819
+   },
+   {
+    "id": 2,
+    "kind": "pose",
+    "name": "睡觉",
+    "positive": "sleeping, lying",
+    "negative": "",
+    "category": "",
+    "tags": "",
+    "note": "",
+    "sort": 2,
+    "created_at": 1792681524.3492754,
+    "updated_at": 1792681524.3492754
+   },
+   {
+    "id": 3,
+    "kind": "pose",
+    "name": "鸭子坐",
+    "positive": "wariza",
+    "negative": "",
+    "category": "",
+    "tags": "",
+    "note": "",
+    "sort": 3,
+    "created_at": 1792681524.3516767,
+    "updated_at": 1792681524.3516767
+   },
+   {
+    "id": 4,
+    "kind": "pose",
+    "name": "动作A",
+    "positive": "action_a",
+    "negative": "",
+    "category": "",
+    "tags": "",
+    "note": "",
+    "sort": 4,
+    "created_at": 1792681524.3532875,
+    "updated_at": 1792681524.3532875
+   },
+   {
+    "id": 5,
+    "kind": "pose",
+    "name": "动作B",
+    "positive": "action_b",
+    "negative": "",
+    "category": "",
+    "tags": "",
+    "note": "",
+    "sort": 5,
+    "created_at": 1792681524.354104,
+    "updated_at": 1792681524.354104
+   },
+   {
+    "id": 6,
+    "kind": "pose",
+    "name": "动作C",
+    "positive": "action_c",
+    "negative": "",
+    "category": "",
+    "tags": "",
+    "note": "",
+    "sort": 6,
+    "created_at": 1792681524.3549237,
+    "updated_at": 1792681524.3549237
+   },
+   {
+    "id": 7,
+    "kind": "expression",
+    "name": "表情1",
+    "positive": "expr1",
+    "negative": "",
+    "category": "",
+    "tags": "",
+    "note": "",
+    "sort": 7,
+    "created_at": 1792681524.3557549,
+    "updated_at": 1792681524.3557549
+   },
+   {
+    "id": 8,
+    "kind": "expression",
+    "name": "表情2",
+    "positive": "expr2",
+    "negative": "",
+    "category": "",
+    "tags": "",
+    "note": "",
+    "sort": 8,
+    "created_at": 1792681524.356572,
+    "updated_at": 1792681524.356572
+   },
+   {
+    "id": 9,
+    "kind": "expression",
+    "name": "表情3",
+    "positive": "expr3",
+    "negative": "",
+    "category": "",
+    "tags": "",
+    "note": "",
+    "sort": 9,
+    "created_at": 1792681524.3575647,
+    "updated_at": 1792681524.3575647
+   },
+   {
+    "id": 10,
+    "kind": "expression",
+    "name": "表情4",
+    "positive": "expr4",
+    "negative": "",
+    "category": "",
+    "tags": "",
+    "note": "",
+    "sort": 10,
+    "created_at": 1792681524.3591835,
+    "updated_at": 1792681524.3591835
+   },
+   {
+    "id": 11,
+    "kind": "expression",
+    "name": "表情5",
+    "positive": "expr5",
+    "negative": "",
+    "category": "",
+    "tags": "",
+    "note": "",
+    "sort": 11,
+    "created_at": 1792681524.3600695,
+    "updated_at": 1792681524.3600695
+   },
+   {
+    "id": 12,
+    "kind": "expression",
+    "name": "表情6",
+    "positive": "expr6",
+    "negative": "",
+    "category": "",
+    "tags": "",
+    "note": "",
+    "sort": 12,
+    "created_at": 1792681524.3610132,
+    "updated_at": 1792681524.3610132
+   },
+   {
+    "id": 13,
+    "kind": "expression",
+    "name": "表情7",
+    "positive": "expr7",
+    "negative": "",
+    "category": "",
+    "tags": "",
+    "note": "",
+    "sort": 13,
+    "created_at": 1792681524.3618312,
+    "updated_at": 1792681524.3618312
+   },
+   {
+    "id": 14,
+    "kind": "expression",
+    "name": "表情8",
+    "positive": "expr8",
+    "negative": "",
+    "category": "",
+    "tags": "",
+    "note": "",
+    "sort": 14,
+    "created_at": 1792681524.362652,
+    "updated_at": 1792681524.362652
+   },
+   {
+    "id": 15,
+    "kind": "expression",
+    "name": "表情9",
+    "positive": "expr9",
+    "negative": "",
+    "category": "",
+    "tags": "",
+    "note": "",
+    "sort": 15,
+    "created_at": 1792681524.363484,
+    "updated_at": 1792681524.363484
+   },
+   {
+    "id": 16,
+    "kind": "male",
+    "name": "男性基础",
+    "positive": "1boy, MALE_BASE_TAG",
+    "negative": "MALE_NEG",
+    "category": "基础",
+    "tags": "",
+    "note": "",
+    "sort": 16,
+    "created_at": 1792681524.3642993,
+    "updated_at": 1792681524.3642993
+   },
+   {
+    "id": 17,
+    "kind": "male",
+    "name": "男性动作",
+    "positive": "MALE_ACTION",
+    "negative": "",
+    "category": "",
+    "tags": "",
+    "note": "",
+    "sort": 17,
+    "created_at": 1792681524.3651283,
+    "updated_at": 1792681524.3651283
+   },
+   {
+    "id": 18,
+    "kind": "camera",
+    "name": "POV",
+    "positive": "pov",
+    "negative": "",
+    "category": "",
+    "tags": "",
+    "note": "",
+    "sort": 18,
+    "created_at": 1792681524.366747,
+    "updated_at": 1792681524.366747
+   },
+   {
+    "id": 19,
+    "kind": "camera",
+    "name": "俯视",
+    "positive": "from above",
+    "negative": "",
+    "category": "",
+    "tags": "",
+    "note": "",
+    "sort": 19,
+    "created_at": 1792681524.3679354,
+    "updated_at": 1792681524.3679354
+   },
+   {
+    "id": 20,
+    "kind": "pose",
+    "name": "原样文本",
+    "positive": "(masterpiece:1.2), [[bad]], \\(artist\\), <lora:foo_v2:0.75>, {red|blue} hair\nBREAK\r\n 全角，「」🌸 ",
+    "negative": " 🌸」「，角全 \n\rKAERB\nriah }eulb|der{ ,>57.0:2v_oof:arol< ,)\\tsitra(\\ ,]]dab[[ ,)2.1:eceipretsam(",
+    "category": "测试",
+    "tags": "a b",
+    "note": "",
+    "sort": 20,
+    "created_at": 1792681524.3713844,
+    "updated_at": 1792681524.3713844
+   }
+  ],
+  "characters": [
+   {
+    "id": 1,
+    "name": "角色A",
+    "tag": "char_a",
+    "positive": "1girl, char_a, red hair",
+    "negative": "",
+    "loras": [
+     {
+      "name": "charA.safetensors",
+      "strength": 0.8
+     }
+    ],
+    "note": "",
+    "sort": 1,
+    "created_at": 1792681524.3390093,
+    "updated_at": 1792681524.3390093
+   },
+   {
+    "id": 2,
+    "name": "角色B",
+    "tag": "char_b",
+    "positive": "1girl, char_b",
+    "negative": "",
+    "loras": [],
+    "note": "",
+    "sort": 2,
+    "created_at": 1792681524.339983,
+    "updated_at": 1792681524.339983
+   }
+  ],
+  "outfits": [
+   {
+    "id": 1,
+    "character_id": 1,
+    "name": "A服装1",
+    "positive": "outfit_a1",
+    "negative": "",
+    "note": "",
+    "sort": 1,
+    "created_at": 1792681524.3415895,
+    "updated_at": 1792681524.3415895
+   },
+   {
+    "id": 2,
+    "character_id": 1,
+    "name": "A服装2",
+    "positive": "outfit_a2",
+    "negative": "",
+    "note": "",
+    "sort": 2,
+    "created_at": 1792681524.3424091,
+    "updated_at": 1792681524.3424091
+   },
+   {
+    "id": 3,
+    "character_id": 1,
+    "name": "A服装3",
+    "positive": "outfit_a3",
+    "negative": "",
+    "note": "",
+    "sort": 3,
+    "created_at": 1792681524.3432205,
+    "updated_at": 1792681524.3432205
+   },
+   {
+    "id": 4,
+    "character_id": 1,
+    "name": "A服装4",
+    "positive": "outfit_a4",
+    "negative": "",
+    "note": "",
+    "sort": 4,
+    "created_at": 1792681524.344203,
+    "updated_at": 1792681524.344203
+   },
+   {
+    "id": 5,
+    "character_id": 1,
+    "name": "A服装5",
+    "positive": "outfit_a5",
+    "negative": "",
+    "note": "",
+    "sort": 5,
+    "created_at": 1792681524.345009,
+    "updated_at": 1792681524.345009
+   },
+   {
+    "id": 6,
+    "character_id": 2,
+    "name": "B服装1",
+    "positive": "outfit_b1",
+    "negative": "",
+    "note": "",
+    "sort": 6,
+    "created_at": 1792681524.346632,
+    "updated_at": 1792681524.346632
+   },
+   {
+    "id": 7,
+    "character_id": 2,
+    "name": "B服装2",
+    "positive": "outfit_b2",
+    "negative": "",
+    "note": "",
+    "sort": 7,
+    "created_at": 1792681524.3474503,
+    "updated_at": 1792681524.3474503
+   },
+   {
+    "id": 8,
+    "character_id": 2,
+    "name": "B服装3",
+    "positive": "outfit_b3",
+    "negative": "",
+    "note": "",
+    "sort": 8,
+    "created_at": 1792681524.3484342,
+    "updated_at": 1792681524.3484342
+   }
+  ],
+  "stories": [
+   {
+    "id": 1,
+    "genre": "纯爱",
+    "name": "剧情1",
+    "note": "n",
+    "scenes": [
+     {
+      "name": "场景1",
+      "positive": "scene1 {角色名}",
+      "negative": "",
+      "count": 2,
+      "with_male": false
+     },
+     {
+      "name": "场景2",
+      "positive": "scene2",
+      "negative": "x",
+      "count": 1,
+      "with_male": true
+     }
+    ],
+    "sort": 1,
+    "created_at": 1792681524.3722067,
+    "updated_at": 1792681524.3722067
+   }
+  ],
+  "workflows": [
+   {
+    "id": 1,
+    "name": "测试工作流",
+    "api_json": {
+     "3": {
+      "class_type": "KSampler",
+      "inputs": {
+       "seed": 1,
+       "steps": 28,
+       "cfg": 5.5,
+       "sampler_name": "euler_ancestral",
+       "scheduler": "normal",
+       "denoise": 1.0,
+       "model": [
+        "10",
+        0
+       ],
+       "positive": [
+        "6",
+        0
+       ],
+       "negative": [
+        "7",
+        0
+       ],
+       "latent_image": [
+        "5",
+        0
+       ]
+      }
+     },
+     "4": {
+      "class_type": "CheckpointLoaderSimple",
+      "inputs": {
+       "ckpt_name": "illustrious.safetensors"
+      }
+     },
+     "5": {
+      "class_type": "EmptyLatentImage",
+      "inputs": {
+       "width": 832,
+       "height": 1216,
+       "batch_size": 1
+      }
+     },
+     "6": {
+      "class_type": "CLIPTextEncode",
+      "inputs": {
+       "text": "原正面",
+       "clip": [
+        "10",
+        1
+       ]
+      },
+      "_meta": {
+       "title": "正面"
+      }
+     },
+     "7": {
+      "class_type": "CLIPTextEncode",
+      "inputs": {
+       "text": "原负面",
+       "clip": [
+        "10",
+        1
+       ]
+      },
+      "_meta": {
+       "title": "负面"
+      }
+     },
+     "8": {
+      "class_type": "VAEDecode",
+      "inputs": {
+       "samples": [
+        "3",
+        0
+       ],
+       "vae": [
+        "4",
+        2
+       ]
+      }
+     },
+     "9": {
+      "class_type": "SaveImage",
+      "inputs": {
+       "filename_prefix": "ComfyUI",
+       "images": [
+        "8",
+        0
+       ]
+      }
+     },
+     "10": {
+      "class_type": "LoraLoader",
+      "inputs": {
+       "lora_name": "charA.safetensors",
+       "strength_model": 1.0,
+       "strength_clip": 1.0,
+       "model": [
+        "4",
+        0
+       ],
+       "clip": [
+        "4",
+        1
+       ]
+      }
+     }
+    },
+    "mapping": [
+     {
+      "source": "positive",
+      "node": "6",
+      "input": "text",
+      "modules": [],
+      "template": ""
+     },
+     {
+      "source": "negative",
+      "node": "7",
+      "input": "text",
+      "modules": [],
+      "template": ""
+     },
+     {
+      "source": "seed",
+      "node": "3",
+      "input": "seed",
+      "modules": [],
+      "template": ""
+     },
+     {
+      "source": "lora1_name",
+      "node": "10",
+      "input": "lora_name",
+      "modules": [],
+      "template": ""
+     },
+     {
+      "source": "lora1_strength",
+      "node": "10",
+      "input": "strength_model",
+      "modules": [],
+      "template": ""
+     },
+     {
+      "source": "filename_prefix",
+      "node": "9",
+      "input": "filename_prefix",
+      "modules": [],
+      "template": "T/{序号}"
+     }
+    ],
+    "note": "",
+    "sort": 1,
+    "created_at": 1792681524.3687575,
+    "updated_at": 1792681524.3687575
+   }
+  ],
+  "tasks": [
+   {
+    "id": 1,
+    "name": "旧版任务",
+    "data": {
+     "character_id": 1,
+     "story_id": 1,
+     "story_outfit_id": 3,
+     "global_id": 1,
+     "male_base_id": 16,
+     "workflow_id": null,
+     "seed_base": 1000,
+     "items": [
+      {
+       "pose_id": 2,
+       "outfit_id": 1,
+       "expression_ids": [
+        9,
+        13
+       ],
+       "count": 4,
+       "camera_id": 18,
+       "male_enabled": false,
+       "male_ids": [],
+       "male_extra": "",
+       "extra_positive": "",
+       "extra_negative": ""
+      },
+      {
+       "pose_id": 4,
+       "outfit_id": 2,
+       "expression_ids": [],
+       "count": 2,
+       "camera_id": null,
+       "male_enabled": true,
+       "male_ids": [
+        17
+       ],
+       "male_extra": "hand",
+       "extra_positive": "",
+       "extra_negative": ""
+      }
+     ]
+    },
+    "sort": 1,
+    "created_at": 1792681524.3730738,
+    "updated_at": 1792681524.3730738
+   }
+  ]
+ },
+ "plans": {
+  "1": {
+   "errors": [],
+   "warnings": [],
+   "units": [
+    {
+     "section": "story",
+     "item_index": 0,
+     "item_label": "场景1",
+     "positive": "masterpiece, best quality,\n1girl, char_a, red hair,\noutfit_a3,\nscene1 角色A",
+     "negative": "lowres, bad anatomy",
+     "seed": 1000,
+     "inputs": [
+      {
+       "node": "6",
+       "input": "text",
+       "source": "positive",
+       "value": "masterpiece, best quality,\n1girl, char_a, red hair,\noutfit_a3,\nscene1 角色A"
+      },
+      {
+       "node": "7",
+       "input": "text",
+       "source": "negative",
+       "value": "lowres, bad anatomy"
+      },
+      {
+       "node": "3",
+       "input": "seed",
+       "source": "seed",
+       "value": 1000
+      },
+      {
+       "node": "10",
+       "input": "lora_name",
+       "source": "lora1_name",
+       "value": "charA.safetensors"
+      },
+      {
+       "node": "10",
+       "input": "strength_model",
+       "source": "lora1_strength",
+       "value": 0.8
+      },
+      {
+       "node": "9",
+       "input": "filename_prefix",
+       "source": "filename_prefix",
+       "value": "T/0001"
+      }
+     ],
+     "meta": {
+      "task": "旧版任务",
+      "character": "角色A",
+      "story": "剧情1",
+      "genre": "纯爱",
+      "section": "剧情",
+      "item": "场景1",
+      "item_no": 1,
+      "outfit": "A服装3",
+      "expression": "",
+      "camera": "",
+      "male": false,
+      "male_templates": [],
+      "n": 1,
+      "of": 2,
+      "index": 1,
+      "seed": 1000
+     },
+     "modules": {
+      "global": [
+       "masterpiece, best quality",
+       "lowres, bad anatomy"
+      ],
+      "character": [
+       "1girl, char_a, red hair",
+       ""
+      ],
+      "outfit": [
+       "outfit_a3",
+       ""
+      ],
+      "content": [
+       "scene1 角色A",
+       ""
+      ],
+      "expression": [
+       "",
+       ""
+      ],
+      "male": [
+       "",
+       ""
+      ],
+      "camera": [
+       "",
+       ""
+      ],
+      "extra": [
+       "",
+       ""
+      ]
+     }
+    },
+    {
+     "section": "story",
+     "item_index": 0,
+     "item_label": "场景1",
+     "positive": "masterpiece, best quality,\n1girl, char_a, red hair,\noutfit_a3,\nscene1 角色A",
+     "negative": "lowres, bad anatomy",
+     "seed": 1001,
+     "inputs": [
+      {
+       "node": "6",
+       "input": "text",
+       "source": "positive",
+       "value": "masterpiece, best quality,\n1girl, char_a, red hair,\noutfit_a3,\nscene1 角色A"
+      },
+      {
+       "node": "7",
+       "input": "text",
+       "source": "negative",
+       "value": "lowres, bad anatomy"
+      },
+      {
+       "node": "3",
+       "input": "seed",
+       "source": "seed",
+       "value": 1001
+      },
+      {
+       "node": "10",
+       "input": "lora_name",
+       "source": "lora1_name",
+       "value": "charA.safetensors"
+      },
+      {
+       "node": "10",
+       "input": "strength_model",
+       "source": "lora1_strength",
+       "value": 0.8
+      },
+      {
+       "node": "9",
+       "input": "filename_prefix",
+       "source": "filename_prefix",
+       "value": "T/0002"
+      }
+     ],
+     "meta": {
+      "task": "旧版任务",
+      "character": "角色A",
+      "story": "剧情1",
+      "genre": "纯爱",
+      "section": "剧情",
+      "item": "场景1",
+      "item_no": 1,
+      "outfit": "A服装3",
+      "expression": "",
+      "camera": "",
+      "male": false,
+      "male_templates": [],
+      "n": 2,
+      "of": 2,
+      "index": 2,
+      "seed": 1001
+     },
+     "modules": {
+      "global": [
+       "masterpiece, best quality",
+       "lowres, bad anatomy"
+      ],
+      "character": [
+       "1girl, char_a, red hair",
+       ""
+      ],
+      "outfit": [
+       "outfit_a3",
+       ""
+      ],
+      "content": [
+       "scene1 角色A",
+       ""
+      ],
+      "expression": [
+       "",
+       ""
+      ],
+      "male": [
+       "",
+       ""
+      ],
+      "camera": [
+       "",
+       ""
+      ],
+      "extra": [
+       "",
+       ""
+      ]
+     }
+    },
+    {
+     "section": "story",
+     "item_index": 1,
+     "item_label": "场景2",
+     "positive": "masterpiece, best quality,\n1girl, char_a, red hair,\noutfit_a3,\nscene2,\n1boy, MALE_BASE_TAG",
+     "negative": "lowres, bad anatomy, x, MALE_NEG",
+     "seed": 1002,
+     "inputs": [
+      {
+       "node": "6",
+       "input": "text",
+       "source": "positive",
+       "value": "masterpiece, best quality,\n1girl, char_a, red hair,\noutfit_a3,\nscene2,\n1boy, MALE_BASE_TAG"
+      },
+      {
+       "node": "7",
+       "input": "text",
+       "source": "negative",
+       "value": "lowres, bad anatomy, x, MALE_NEG"
+      },
+      {
+       "node": "3",
+       "input": "seed",
+       "source": "seed",
+       "value": 1002
+      },
+      {
+       "node": "10",
+       "input": "lora_name",
+       "source": "lora1_name",
+       "value": "charA.safetensors"
+      },
+      {
+       "node": "10",
+       "input": "strength_model",
+       "source": "lora1_strength",
+       "value": 0.8
+      },
+      {
+       "node": "9",
+       "input": "filename_prefix",
+       "source": "filename_prefix",
+       "value": "T/0003"
+      }
+     ],
+     "meta": {
+      "task": "旧版任务",
+      "character": "角色A",
+      "story": "剧情1",
+      "genre": "纯爱",
+      "section": "剧情",
+      "item": "场景2",
+      "item_no": 2,
+      "outfit": "A服装3",
+      "expression": "",
+      "camera": "",
+      "male": true,
+      "male_templates": [],
+      "n": 1,
+      "of": 1,
+      "index": 3,
+      "seed": 1002
+     },
+     "modules": {
+      "global": [
+       "masterpiece, best quality",
+       "lowres, bad anatomy"
+      ],
+      "character": [
+       "1girl, char_a, red hair",
+       ""
+      ],
+      "outfit": [
+       "outfit_a3",
+       ""
+      ],
+      "content": [
+       "scene2",
+       "x"
+      ],
+      "expression": [
+       "",
+       ""
+      ],
+      "male": [
+       "1boy, MALE_BASE_TAG",
+       "MALE_NEG"
+      ],
+      "camera": [
+       "",
+       ""
+      ],
+      "extra": [
+       "",
+       ""
+      ]
+     }
+    },
+    {
+     "section": "pose",
+     "item_index": 0,
+     "item_label": "睡觉",
+     "positive": "masterpiece, best quality,\n1girl, char_a, red hair,\noutfit_a1,\nsleeping, lying,\nexpr3,\npov",
+     "negative": "lowres, bad anatomy",
+     "seed": 1003,
+     "inputs": [
+      {
+       "node": "6",
+       "input": "text",
+       "source": "positive",
+       "value": "masterpiece, best quality,\n1girl, char_a, red hair,\noutfit_a1,\nsleeping, lying,\nexpr3,\npov"
+      },
+      {
+       "node": "7",
+       "input": "text",
+       "source": "negative",
+       "value": "lowres, bad anatomy"
+      },
+      {
+       "node": "3",
+       "input": "seed",
+       "source": "seed",
+       "value": 1003
+      },
+      {
+       "node": "10",
+       "input": "lora_name",
+       "source": "lora1_name",
+       "value": "charA.safetensors"
+      },
+      {
+       "node": "10",
+       "input": "strength_model",
+       "source": "lora1_strength",
+       "value": 0.8
+      },
+      {
+       "node": "9",
+       "input": "filename_prefix",
+       "source": "filename_prefix",
+       "value": "T/0004"
+      }
+     ],
+     "meta": {
+      "task": "旧版任务",
+      "character": "角色A",
+      "story": "剧情1",
+      "genre": "纯爱",
+      "section": "姿态",
+      "item": "睡觉",
+      "item_no": 1,
+      "outfit": "A服装1",
+      "expression": "表情3",
+      "expression_n": 1,
+      "expression_of": 2,
+      "camera": "POV",
+      "male": false,
+      "male_templates": [],
+      "n": 1,
+      "of": 4,
+      "index": 4,
+      "seed": 1003
+     },
+     "modules": {
+      "global": [
+       "masterpiece, best quality",
+       "lowres, bad anatomy"
+      ],
+      "character": [
+       "1girl, char_a, red hair",
+       ""
+      ],
+      "outfit": [
+       "outfit_a1",
+       ""
+      ],
+      "content": [
+       "sleeping, lying",
+       ""
+      ],
+      "expression": [
+       "expr3",
+       ""
+      ],
+      "male": [
+       "",
+       ""
+      ],
+      "camera": [
+       "pov",
+       ""
+      ],
+      "extra": [
+       "",
+       ""
+      ]
+     }
+    },
+    {
+     "section": "pose",
+     "item_index": 0,
+     "item_label": "睡觉",
+     "positive": "masterpiece, best quality,\n1girl, char_a, red hair,\noutfit_a1,\nsleeping, lying,\nexpr3,\npov",
+     "negative": "lowres, bad anatomy",
+     "seed": 1004,
+     "inputs": [
+      {
+       "node": "6",
+       "input": "text",
+       "source": "positive",
+       "value": "masterpiece, best quality,\n1girl, char_a, red hair,\noutfit_a1,\nsleeping, lying,\nexpr3,\npov"
+      },
+      {
+       "node": "7",
+       "input": "text",
+       "source": "negative",
+       "value": "lowres, bad anatomy"
+      },
+      {
+       "node": "3",
+       "input": "seed",
+       "source": "seed",
+       "value": 1004
+      },
+      {
+       "node": "10",
+       "input": "lora_name",
+       "source": "lora1_name",
+       "value": "charA.safetensors"
+      },
+      {
+       "node": "10",
+       "input": "strength_model",
+       "source": "lora1_strength",
+       "value": 0.8
+      },
+      {
+       "node": "9",
+       "input": "filename_prefix",
+       "source": "filename_prefix",
+       "value": "T/0005"
+      }
+     ],
+     "meta": {
+      "task": "旧版任务",
+      "character": "角色A",
+      "story": "剧情1",
+      "genre": "纯爱",
+      "section": "姿态",
+      "item": "睡觉",
+      "item_no": 1,
+      "outfit": "A服装1",
+      "expression": "表情3",
+      "expression_n": 2,
+      "expression_of": 2,
+      "camera": "POV",
+      "male": false,
+      "male_templates": [],
+      "n": 2,
+      "of": 4,
+      "index": 5,
+      "seed": 1004
+     },
+     "modules": {
+      "global": [
+       "masterpiece, best quality",
+       "lowres, bad anatomy"
+      ],
+      "character": [
+       "1girl, char_a, red hair",
+       ""
+      ],
+      "outfit": [
+       "outfit_a1",
+       ""
+      ],
+      "content": [
+       "sleeping, lying",
+       ""
+      ],
+      "expression": [
+       "expr3",
+       ""
+      ],
+      "male": [
+       "",
+       ""
+      ],
+      "camera": [
+       "pov",
+       ""
+      ],
+      "extra": [
+       "",
+       ""
+      ]
+     }
+    },
+    {
+     "section": "pose",
+     "item_index": 0,
+     "item_label": "睡觉",
+     "positive": "masterpiece, best quality,\n1girl, char_a, red hair,\noutfit_a1,\nsleeping, lying,\nexpr7,\npov",
+     "negative": "lowres, bad anatomy",
+     "seed": 1005,
+     "inputs": [
+      {
+       "node": "6",
+       "input": "text",
+       "source": "positive",
+       "value": "masterpiece, best quality,\n1girl, char_a, red hair,\noutfit_a1,\nsleeping, lying,\nexpr7,\npov"
+      },
+      {
+       "node": "7",
+       "input": "text",
+       "source": "negative",
+       "value": "lowres, bad anatomy"
+      },
+      {
+       "node": "3",
+       "input": "seed",
+       "source": "seed",
+       "value": 1005
+      },
+      {
+       "node": "10",
+       "input": "lora_name",
+       "source": "lora1_name",
+       "value": "charA.safetensors"
+      },
+      {
+       "node": "10",
+       "input": "strength_model",
+       "source": "lora1_strength",
+       "value": 0.8
+      },
+      {
+       "node": "9",
+       "input": "filename_prefix",
+       "source": "filename_prefix",
+       "value": "T/0006"
+      }
+     ],
+     "meta": {
+      "task": "旧版任务",
+      "character": "角色A",
+      "story": "剧情1",
+      "genre": "纯爱",
+      "section": "姿态",
+      "item": "睡觉",
+      "item_no": 1,
+      "outfit": "A服装1",
+      "expression": "表情7",
+      "expression_n": 1,
+      "expression_of": 2,
+      "camera": "POV",
+      "male": false,
+      "male_templates": [],
+      "n": 3,
+      "of": 4,
+      "index": 6,
+      "seed": 1005
+     },
+     "modules": {
+      "global": [
+       "masterpiece, best quality",
+       "lowres, bad anatomy"
+      ],
+      "character": [
+       "1girl, char_a, red hair",
+       ""
+      ],
+      "outfit": [
+       "outfit_a1",
+       ""
+      ],
+      "content": [
+       "sleeping, lying",
+       ""
+      ],
+      "expression": [
+       "expr7",
+       ""
+      ],
+      "male": [
+       "",
+       ""
+      ],
+      "camera": [
+       "pov",
+       ""
+      ],
+      "extra": [
+       "",
+       ""
+      ]
+     }
+    },
+    {
+     "section": "pose",
+     "item_index": 0,
+     "item_label": "睡觉",
+     "positive": "masterpiece, best quality,\n1girl, char_a, red hair,\noutfit_a1,\nsleeping, lying,\nexpr7,\npov",
+     "negative": "lowres, bad anatomy",
+     "seed": 1006,
+     "inputs": [
+      {
+       "node": "6",
+       "input": "text",
+       "source": "positive",
+       "value": "masterpiece, best quality,\n1girl, char_a, red hair,\noutfit_a1,\nsleeping, lying,\nexpr7,\npov"
+      },
+      {
+       "node": "7",
+       "input": "text",
+       "source": "negative",
+       "value": "lowres, bad anatomy"
+      },
+      {
+       "node": "3",
+       "input": "seed",
+       "source": "seed",
+       "value": 1006
+      },
+      {
+       "node": "10",
+       "input": "lora_name",
+       "source": "lora1_name",
+       "value": "charA.safetensors"
+      },
+      {
+       "node": "10",
+       "input": "strength_model",
+       "source": "lora1_strength",
+       "value": 0.8
+      },
+      {
+       "node": "9",
+       "input": "filename_prefix",
+       "source": "filename_prefix",
+       "value": "T/0007"
+      }
+     ],
+     "meta": {
+      "task": "旧版任务",
+      "character": "角色A",
+      "story": "剧情1",
+      "genre": "纯爱",
+      "section": "姿态",
+      "item": "睡觉",
+      "item_no": 1,
+      "outfit": "A服装1",
+      "expression": "表情7",
+      "expression_n": 2,
+      "expression_of": 2,
+      "camera": "POV",
+      "male": false,
+      "male_templates": [],
+      "n": 4,
+      "of": 4,
+      "index": 7,
+      "seed": 1006
+     },
+     "modules": {
+      "global": [
+       "masterpiece, best quality",
+       "lowres, bad anatomy"
+      ],
+      "character": [
+       "1girl, char_a, red hair",
+       ""
+      ],
+      "outfit": [
+       "outfit_a1",
+       ""
+      ],
+      "content": [
+       "sleeping, lying",
+       ""
+      ],
+      "expression": [
+       "expr7",
+       ""
+      ],
+      "male": [
+       "",
+       ""
+      ],
+      "camera": [
+       "pov",
+       ""
+      ],
+      "extra": [
+       "",
+       ""
+      ]
+     }
+    },
+    {
+     "section": "pose",
+     "item_index": 1,
+     "item_label": "动作A",
+     "positive": "masterpiece, best quality,\n1girl, char_a, red hair,\noutfit_a2,\naction_a,\n1boy, MALE_BASE_TAG,\nMALE_ACTION,\nhand",
+     "negative": "lowres, bad anatomy, MALE_NEG",
+     "seed": 1007,
+     "inputs": [
+      {
+       "node": "6",
+       "input": "text",
+       "source": "positive",
+       "value": "masterpiece, best quality,\n1girl, char_a, red hair,\noutfit_a2,\naction_a,\n1boy, MALE_BASE_TAG,\nMALE_ACTION,\nhand"
+      },
+      {
+       "node": "7",
+       "input": "text",
+       "source": "negative",
+       "value": "lowres, bad anatomy, MALE_NEG"
+      },
+      {
+       "node": "3",
+       "input": "seed",
+       "source": "seed",
+       "value": 1007
+      },
+      {
+       "node": "10",
+       "input": "lora_name",
+       "source": "lora1_name",
+       "value": "charA.safetensors"
+      },
+      {
+       "node": "10",
+       "input": "strength_model",
+       "source": "lora1_strength",
+       "value": 0.8
+      },
+      {
+       "node": "9",
+       "input": "filename_prefix",
+       "source": "filename_prefix",
+       "value": "T/0008"
+      }
+     ],
+     "meta": {
+      "task": "旧版任务",
+      "character": "角色A",
+      "story": "剧情1",
+      "genre": "纯爱",
+      "section": "姿态",
+      "item": "动作A",
+      "item_no": 2,
+      "outfit": "A服装2",
+      "expression": "",
+      "expression_n": 1,
+      "expression_of": 2,
+      "camera": "",
+      "male": true,
+      "male_templates": [
+       "男性动作"
+      ],
+      "n": 1,
+      "of": 2,
+      "index": 8,
+      "seed": 1007
+     },
+     "modules": {
+      "global": [
+       "masterpiece, best quality",
+       "lowres, bad anatomy"
+      ],
+      "character": [
+       "1girl, char_a, red hair",
+       ""
+      ],
+      "outfit": [
+       "outfit_a2",
+       ""
+      ],
+      "content": [
+       "action_a",
+       ""
+      ],
+      "expression": [
+       "",
+       ""
+      ],
+      "male": [
+       "1boy, MALE_BASE_TAG,\nMALE_ACTION,\nhand",
+       "MALE_NEG"
+      ],
+      "camera": [
+       "",
+       ""
+      ],
+      "extra": [
+       "",
+       ""
+      ]
+     }
+    },
+    {
+     "section": "pose",
+     "item_index": 1,
+     "item_label": "动作A",
+     "positive": "masterpiece, best quality,\n1girl, char_a, red hair,\noutfit_a2,\naction_a,\n1boy, MALE_BASE_TAG,\nMALE_ACTION,\nhand",
+     "negative": "lowres, bad anatomy, MALE_NEG",
+     "seed": 1008,
+     "inputs": [
+      {
+       "node": "6",
+       "input": "text",
+       "source": "positive",
+       "value": "masterpiece, best quality,\n1girl, char_a, red hair,\noutfit_a2,\naction_a,\n1boy, MALE_BASE_TAG,\nMALE_ACTION,\nhand"
+      },
+      {
+       "node": "7",
+       "input": "text",
+       "source": "negative",
+       "value": "lowres, bad anatomy, MALE_NEG"
+      },
+      {
+       "node": "3",
+       "input": "seed",
+       "source": "seed",
+       "value": 1008
+      },
+      {
+       "node": "10",
+       "input": "lora_name",
+       "source": "lora1_name",
+       "value": "charA.safetensors"
+      },
+      {
+       "node": "10",
+       "input": "strength_model",
+       "source": "lora1_strength",
+       "value": 0.8
+      },
+      {
+       "node": "9",
+       "input": "filename_prefix",
+       "source": "filename_prefix",
+       "value": "T/0009"
+      }
+     ],
+     "meta": {
+      "task": "旧版任务",
+      "character": "角色A",
+      "story": "剧情1",
+      "genre": "纯爱",
+      "section": "姿态",
+      "item": "动作A",
+      "item_no": 2,
+      "outfit": "A服装2",
+      "expression": "",
+      "expression_n": 2,
+      "expression_of": 2,
+      "camera": "",
+      "male": true,
+      "male_templates": [
+       "男性动作"
+      ],
+      "n": 2,
+      "of": 2,
+      "index": 9,
+      "seed": 1008
+     },
+     "modules": {
+      "global": [
+       "masterpiece, best quality",
+       "lowres, bad anatomy"
+      ],
+      "character": [
+       "1girl, char_a, red hair",
+       ""
+      ],
+      "outfit": [
+       "outfit_a2",
+       ""
+      ],
+      "content": [
+       "action_a",
+       ""
+      ],
+      "expression": [
+       "",
+       ""
+      ],
+      "male": [
+       "1boy, MALE_BASE_TAG,\nMALE_ACTION,\nhand",
+       "MALE_NEG"
+      ],
+      "camera": [
+       "",
+       ""
+      ],
+      "extra": [
+       "",
+       ""
+      ]
+     }
+    }
+   ]
+  }
+ },
+ "settings": {
+  "comfy_url": "http://127.0.0.1:8188",
+  "comfy_output_dir": "",
+  "compose_order": [
+   "global",
+   "character",
+   "outfit",
+   "content",
+   "expression",
+   "male",
+   "camera",
+   "extra"
+  ],
+  "pos_separator": ",\n",
+  "neg_separator": ", ",
+  "trim_modules": true,
+  "default_workflow_id": 1,
+  "unit_timeout_min": 30,
+  "max_consecutive_failures": 3,
+  "comfy_wait_max_min": 10,
+  "poll_interval_sec": 3.0,
+  "last_task_id": 1
+ },
+ "runs": [
+  {
+   "id": 1,
+   "task_id": 1,
+   "name": "旧版任务",
+   "position": 1,
+   "status": "queued",
+   "workflow_name": "测试工作流",
+   "workflow_json": {
+    "3": {
+     "class_type": "KSampler",
+     "inputs": {
+      "seed": 1,
+      "steps": 28,
+      "cfg": 5.5,
+      "sampler_name": "euler_ancestral",
+      "scheduler": "normal",
+      "denoise": 1.0,
+      "model": [
+       "10",
+       0
+      ],
+      "positive": [
+       "6",
+       0
+      ],
+      "negative": [
+       "7",
+       0
+      ],
+      "latent_image": [
+       "5",
+       0
+      ]
+     }
+    },
+    "4": {
+     "class_type": "CheckpointLoaderSimple",
+     "inputs": {
+      "ckpt_name": "illustrious.safetensors"
+     }
+    },
+    "5": {
+     "class_type": "EmptyLatentImage",
+     "inputs": {
+      "width": 832,
+      "height": 1216,
+      "batch_size": 1
+     }
+    },
+    "6": {
+     "class_type": "CLIPTextEncode",
+     "inputs": {
+      "text": "原正面",
+      "clip": [
+       "10",
+       1
+      ]
+     },
+     "_meta": {
+      "title": "正面"
+     }
+    },
+    "7": {
+     "class_type": "CLIPTextEncode",
+     "inputs": {
+      "text": "原负面",
+      "clip": [
+       "10",
+       1
+      ]
+     },
+     "_meta": {
+      "title": "负面"
+     }
+    },
+    "8": {
+     "class_type": "VAEDecode",
+     "inputs": {
+      "samples": [
+       "3",
+       0
+      ],
+      "vae": [
+       "4",
+       2
+      ]
+     }
+    },
+    "9": {
+     "class_type": "SaveImage",
+     "inputs": {
+      "filename_prefix": "ComfyUI",
+      "images": [
+       "8",
+       0
+      ]
+     }
+    },
+    "10": {
+     "class_type": "LoraLoader",
+     "inputs": {
+      "lora_name": "charA.safetensors",
+      "strength_model": 1.0,
+      "strength_clip": 1.0,
+      "model": [
+       "4",
+       0
+      ],
+      "clip": [
+       "4",
+       1
+      ]
+     }
+    }
+   },
+   "mapping_json": [
+    {
+     "source": "positive",
+     "node": "6",
+     "input": "text",
+     "modules": [],
+     "template": ""
+    },
+    {
+     "source": "negative",
+     "node": "7",
+     "input": "text",
+     "modules": [],
+     "template": ""
+    },
+    {
+     "source": "seed",
+     "node": "3",
+     "input": "seed",
+     "modules": [],
+     "template": ""
+    },
+    {
+     "source": "lora1_name",
+     "node": "10",
+     "input": "lora_name",
+     "modules": [],
+     "template": ""
+    },
+    {
+     "source": "lora1_strength",
+     "node": "10",
+     "input": "strength_model",
+     "modules": [],
+     "template": ""
+    },
+    {
+     "source": "filename_prefix",
+     "node": "9",
+     "input": "filename_prefix",
+     "modules": [],
+     "template": "T/{序号}"
+    }
+   ],
+   "created_at": 1792681524.3778212,
+   "finished_at": null,
+   "counts": {
+    "total": 9,
+    "done": 1,
+    "failed": 1,
+    "pending": 6,
+    "submitted": 1
+   }
+  }
+ ],
+ "units": [
+  {
+   "id": 1,
+   "run_id": 1,
+   "idx": 0,
+   "status": "done",
+   "section": "story",
+   "item_label": "场景1",
+   "meta": {
+    "task": "旧版任务",
+    "character": "角色A",
+    "story": "剧情1",
+    "genre": "纯爱",
+    "section": "剧情",
+    "item": "场景1",
+    "item_no": 1,
+    "outfit": "A服装3",
+    "expression": "",
+    "camera": "",
+    "male": false,
+    "male_templates": [],
+    "n": 1,
+    "of": 2,
+    "index": 1,
+    "seed": 1000
+   },
+   "modules": {
+    "global": [
+     "masterpiece, best quality",
+     "lowres, bad anatomy"
+    ],
+    "character": [
+     "1girl, char_a, red hair",
+     ""
+    ],
+    "outfit": [
+     "outfit_a3",
+     ""
+    ],
+    "content": [
+     "scene1 角色A",
+     ""
+    ],
+    "expression": [
+     "",
+     ""
+    ],
+    "male": [
+     "",
+     ""
+    ],
+    "camera": [
+     "",
+     ""
+    ],
+    "extra": [
+     "",
+     ""
+    ]
+   },
+   "positive": "masterpiece, best quality,\n1girl, char_a, red hair,\noutfit_a3,\nscene1 角色A",
+   "negative": "lowres, bad anatomy",
+   "seed": 1000,
+   "inputs": [
+    {
+     "node": "6",
+     "input": "text",
+     "source": "positive",
+     "value": "masterpiece, best quality,\n1girl, char_a, red hair,\noutfit_a3,\nscene1 角色A"
+    },
+    {
+     "node": "7",
+     "input": "text",
+     "source": "negative",
+     "value": "lowres, bad anatomy"
+    },
+    {
+     "node": "3",
+     "input": "seed",
+     "source": "seed",
+     "value": 1000
+    },
+    {
+     "node": "10",
+     "input": "lora_name",
+     "source": "lora1_name",
+     "value": "charA.safetensors"
+    },
+    {
+     "node": "10",
+     "input": "strength_model",
+     "source": "lora1_strength",
+     "value": 0.8
+    },
+    {
+     "node": "9",
+     "input": "filename_prefix",
+     "source": "filename_prefix",
+     "value": "T/0001"
+    }
+   ],
+   "prompt_id": "p-1",
+   "client_id": null,
+   "error": "",
+   "outputs": [
+    {
+     "node": "9",
+     "filename": "a.png",
+     "subfolder": "T",
+     "type": "output",
+     "path": ""
+    }
+   ],
+   "attempts": 0,
+   "submitted_at": null,
+   "finished_at": 1792681524.379999
+  },
+  {
+   "id": 2,
+   "run_id": 1,
+   "idx": 1,
+   "status": "failed",
+   "section": "story",
+   "item_label": "场景1",
+   "meta": {
+    "task": "旧版任务",
+    "character": "角色A",
+    "story": "剧情1",
+    "genre": "纯爱",
+    "section": "剧情",
+    "item": "场景1",
+    "item_no": 1,
+    "outfit": "A服装3",
+    "expression": "",
+    "camera": "",
+    "male": false,
+    "male_templates": [],
+    "n": 2,
+    "of": 2,
+    "index": 2,
+    "seed": 1001
+   },
+   "modules": {
+    "global": [
+     "masterpiece, best quality",
+     "lowres, bad anatomy"
+    ],
+    "character": [
+     "1girl, char_a, red hair",
+     ""
+    ],
+    "outfit": [
+     "outfit_a3",
+     ""
+    ],
+    "content": [
+     "scene1 角色A",
+     ""
+    ],
+    "expression": [
+     "",
+     ""
+    ],
+    "male": [
+     "",
+     ""
+    ],
+    "camera": [
+     "",
+     ""
+    ],
+    "extra": [
+     "",
+     ""
+    ]
+   },
+   "positive": "masterpiece, best quality,\n1girl, char_a, red hair,\noutfit_a3,\nscene1 角色A",
+   "negative": "lowres, bad anatomy",
+   "seed": 1001,
+   "inputs": [
+    {
+     "node": "6",
+     "input": "text",
+     "source": "positive",
+     "value": "masterpiece, best quality,\n1girl, char_a, red hair,\noutfit_a3,\nscene1 角色A"
+    },
+    {
+     "node": "7",
+     "input": "text",
+     "source": "negative",
+     "value": "lowres, bad anatomy"
+    },
+    {
+     "node": "3",
+     "input": "seed",
+     "source": "seed",
+     "value": 1001
+    },
+    {
+     "node": "10",
+     "input": "lora_name",
+     "source": "lora1_name",
+     "value": "charA.safetensors"
+    },
+    {
+     "node": "10",
+     "input": "strength_model",
+     "source": "lora1_strength",
+     "value": 0.8
+    },
+    {
+     "node": "9",
+     "input": "filename_prefix",
+     "source": "filename_prefix",
+     "value": "T/0002"
+    }
+   ],
+   "prompt_id": "p-2",
+   "client_id": null,
+   "error": "节点 3 执行出错",
+   "outputs": [],
+   "attempts": 0,
+   "submitted_at": null,
+   "finished_at": 1792681524.3808396
+  },
+  {
+   "id": 3,
+   "run_id": 1,
+   "idx": 2,
+   "status": "submitted",
+   "section": "story",
+   "item_label": "场景2",
+   "meta": {
+    "task": "旧版任务",
+    "character": "角色A",
+    "story": "剧情1",
+    "genre": "纯爱",
+    "section": "剧情",
+    "item": "场景2",
+    "item_no": 2,
+    "outfit": "A服装3",
+    "expression": "",
+    "camera": "",
+    "male": true,
+    "male_templates": [],
+    "n": 1,
+    "of": 1,
+    "index": 3,
+    "seed": 1002
+   },
+   "modules": {
+    "global": [
+     "masterpiece, best quality",
+     "lowres, bad anatomy"
+    ],
+    "character": [
+     "1girl, char_a, red hair",
+     ""
+    ],
+    "outfit": [
+     "outfit_a3",
+     ""
+    ],
+    "content": [
+     "scene2",
+     "x"
+    ],
+    "expression": [
+     "",
+     ""
+    ],
+    "male": [
+     "1boy, MALE_BASE_TAG",
+     "MALE_NEG"
+    ],
+    "camera": [
+     "",
+     ""
+    ],
+    "extra": [
+     "",
+     ""
+    ]
+   },
+   "positive": "masterpiece, best quality,\n1girl, char_a, red hair,\noutfit_a3,\nscene2,\n1boy, MALE_BASE_TAG",
+   "negative": "lowres, bad anatomy, x, MALE_NEG",
+   "seed": 1002,
+   "inputs": [
+    {
+     "node": "6",
+     "input": "text",
+     "source": "positive",
+     "value": "masterpiece, best quality,\n1girl, char_a, red hair,\noutfit_a3,\nscene2,\n1boy, MALE_BASE_TAG"
+    },
+    {
+     "node": "7",
+     "input": "text",
+     "source": "negative",
+     "value": "lowres, bad anatomy, x, MALE_NEG"
+    },
+    {
+     "node": "3",
+     "input": "seed",
+     "source": "seed",
+     "value": 1002
+    },
+    {
+     "node": "10",
+     "input": "lora_name",
+     "source": "lora1_name",
+     "value": "charA.safetensors"
+    },
+    {
+     "node": "10",
+     "input": "strength_model",
+     "source": "lora1_strength",
+     "value": 0.8
+    },
+    {
+     "node": "9",
+     "input": "filename_prefix",
+     "source": "filename_prefix",
+     "value": "T/0003"
+    }
+   ],
+   "prompt_id": "p-3",
+   "client_id": null,
+   "error": "",
+   "outputs": [],
+   "attempts": 0,
+   "submitted_at": null,
+   "finished_at": null
+  },
+  {
+   "id": 4,
+   "run_id": 1,
+   "idx": 3,
+   "status": "pending",
+   "section": "pose",
+   "item_label": "睡觉",
+   "meta": {
+    "task": "旧版任务",
+    "character": "角色A",
+    "story": "剧情1",
+    "genre": "纯爱",
+    "section": "姿态",
+    "item": "睡觉",
+    "item_no": 1,
+    "outfit": "A服装1",
+    "expression": "表情3",
+    "expression_n": 1,
+    "expression_of": 2,
+    "camera": "POV",
+    "male": false,
+    "male_templates": [],
+    "n": 1,
+    "of": 4,
+    "index": 4,
+    "seed": 1003
+   },
+   "modules": {
+    "global": [
+     "masterpiece, best quality",
+     "lowres, bad anatomy"
+    ],
+    "character": [
+     "1girl, char_a, red hair",
+     ""
+    ],
+    "outfit": [
+     "outfit_a1",
+     ""
+    ],
+    "content": [
+     "sleeping, lying",
+     ""
+    ],
+    "expression": [
+     "expr3",
+     ""
+    ],
+    "male": [
+     "",
+     ""
+    ],
+    "camera": [
+     "pov",
+     ""
+    ],
+    "extra": [
+     "",
+     ""
+    ]
+   },
+   "positive": "masterpiece, best quality,\n1girl, char_a, red hair,\noutfit_a1,\nsleeping, lying,\nexpr3,\npov",
+   "negative": "lowres, bad anatomy",
+   "seed": 1003,
+   "inputs": [
+    {
+     "node": "6",
+     "input": "text",
+     "source": "positive",
+     "value": "masterpiece, best quality,\n1girl, char_a, red hair,\noutfit_a1,\nsleeping, lying,\nexpr3,\npov"
+    },
+    {
+     "node": "7",
+     "input": "text",
+     "source": "negative",
+     "value": "lowres, bad anatomy"
+    },
+    {
+     "node": "3",
+     "input": "seed",
+     "source": "seed",
+     "value": 1003
+    },
+    {
+     "node": "10",
+     "input": "lora_name",
+     "source": "lora1_name",
+     "value": "charA.safetensors"
+    },
+    {
+     "node": "10",
+     "input": "strength_model",
+     "source": "lora1_strength",
+     "value": 0.8
+    },
+    {
+     "node": "9",
+     "input": "filename_prefix",
+     "source": "filename_prefix",
+     "value": "T/0004"
+    }
+   ],
+   "prompt_id": null,
+   "client_id": null,
+   "error": "",
+   "outputs": [],
+   "attempts": 0,
+   "submitted_at": null,
+   "finished_at": null
+  },
+  {
+   "id": 5,
+   "run_id": 1,
+   "idx": 4,
+   "status": "pending",
+   "section": "pose",
+   "item_label": "睡觉",
+   "meta": {
+    "task": "旧版任务",
+    "character": "角色A",
+    "story": "剧情1",
+    "genre": "纯爱",
+    "section": "姿态",
+    "item": "睡觉",
+    "item_no": 1,
+    "outfit": "A服装1",
+    "expression": "表情3",
+    "expression_n": 2,
+    "expression_of": 2,
+    "camera": "POV",
+    "male": false,
+    "male_templates": [],
+    "n": 2,
+    "of": 4,
+    "index": 5,
+    "seed": 1004
+   },
+   "modules": {
+    "global": [
+     "masterpiece, best quality",
+     "lowres, bad anatomy"
+    ],
+    "character": [
+     "1girl, char_a, red hair",
+     ""
+    ],
+    "outfit": [
+     "outfit_a1",
+     ""
+    ],
+    "content": [
+     "sleeping, lying",
+     ""
+    ],
+    "expression": [
+     "expr3",
+     ""
+    ],
+    "male": [
+     "",
+     ""
+    ],
+    "camera": [
+     "pov",
+     ""
+    ],
+    "extra": [
+     "",
+     ""
+    ]
+   },
+   "positive": "masterpiece, best quality,\n1girl, char_a, red hair,\noutfit_a1,\nsleeping, lying,\nexpr3,\npov",
+   "negative": "lowres, bad anatomy",
+   "seed": 1004,
+   "inputs": [
+    {
+     "node": "6",
+     "input": "text",
+     "source": "positive",
+     "value": "masterpiece, best quality,\n1girl, char_a, red hair,\noutfit_a1,\nsleeping, lying,\nexpr3,\npov"
+    },
+    {
+     "node": "7",
+     "input": "text",
+     "source": "negative",
+     "value": "lowres, bad anatomy"
+    },
+    {
+     "node": "3",
+     "input": "seed",
+     "source": "seed",
+     "value": 1004
+    },
+    {
+     "node": "10",
+     "input": "lora_name",
+     "source": "lora1_name",
+     "value": "charA.safetensors"
+    },
+    {
+     "node": "10",
+     "input": "strength_model",
+     "source": "lora1_strength",
+     "value": 0.8
+    },
+    {
+     "node": "9",
+     "input": "filename_prefix",
+     "source": "filename_prefix",
+     "value": "T/0005"
+    }
+   ],
+   "prompt_id": null,
+   "client_id": null,
+   "error": "",
+   "outputs": [],
+   "attempts": 0,
+   "submitted_at": null,
+   "finished_at": null
+  },
+  {
+   "id": 6,
+   "run_id": 1,
+   "idx": 5,
+   "status": "pending",
+   "section": "pose",
+   "item_label": "睡觉",
+   "meta": {
+    "task": "旧版任务",
+    "character": "角色A",
+    "story": "剧情1",
+    "genre": "纯爱",
+    "section": "姿态",
+    "item": "睡觉",
+    "item_no": 1,
+    "outfit": "A服装1",
+    "expression": "表情7",
+    "expression_n": 1,
+    "expression_of": 2,
+    "camera": "POV",
+    "male": false,
+    "male_templates": [],
+    "n": 3,
+    "of": 4,
+    "index": 6,
+    "seed": 1005
+   },
+   "modules": {
+    "global": [
+     "masterpiece, best quality",
+     "lowres, bad anatomy"
+    ],
+    "character": [
+     "1girl, char_a, red hair",
+     ""
+    ],
+    "outfit": [
+     "outfit_a1",
+     ""
+    ],
+    "content": [
+     "sleeping, lying",
+     ""
+    ],
+    "expression": [
+     "expr7",
+     ""
+    ],
+    "male": [
+     "",
+     ""
+    ],
+    "camera": [
+     "pov",
+     ""
+    ],
+    "extra": [
+     "",
+     ""
+    ]
+   },
+   "positive": "masterpiece, best quality,\n1girl, char_a, red hair,\noutfit_a1,\nsleeping, lying,\nexpr7,\npov",
+   "negative": "lowres, bad anatomy",
+   "seed": 1005,
+   "inputs": [
+    {
+     "node": "6",
+     "input": "text",
+     "source": "positive",
+     "value": "masterpiece, best quality,\n1girl, char_a, red hair,\noutfit_a1,\nsleeping, lying,\nexpr7,\npov"
+    },
+    {
+     "node": "7",
+     "input": "text",
+     "source": "negative",
+     "value": "lowres, bad anatomy"
+    },
+    {
+     "node": "3",
+     "input": "seed",
+     "source": "seed",
+     "value": 1005
+    },
+    {
+     "node": "10",
+     "input": "lora_name",
+     "source": "lora1_name",
+     "value": "charA.safetensors"
+    },
+    {
+     "node": "10",
+     "input": "strength_model",
+     "source": "lora1_strength",
+     "value": 0.8
+    },
+    {
+     "node": "9",
+     "input": "filename_prefix",
+     "source": "filename_prefix",
+     "value": "T/0006"
+    }
+   ],
+   "prompt_id": null,
+   "client_id": null,
+   "error": "",
+   "outputs": [],
+   "attempts": 0,
+   "submitted_at": null,
+   "finished_at": null
+  },
+  {
+   "id": 7,
+   "run_id": 1,
+   "idx": 6,
+   "status": "pending",
+   "section": "pose",
+   "item_label": "睡觉",
+   "meta": {
+    "task": "旧版任务",
+    "character": "角色A",
+    "story": "剧情1",
+    "genre": "纯爱",
+    "section": "姿态",
+    "item": "睡觉",
+    "item_no": 1,
+    "outfit": "A服装1",
+    "expression": "表情7",
+    "expression_n": 2,
+    "expression_of": 2,
+    "camera": "POV",
+    "male": false,
+    "male_templates": [],
+    "n": 4,
+    "of": 4,
+    "index": 7,
+    "seed": 1006
+   },
+   "modules": {
+    "global": [
+     "masterpiece, best quality",
+     "lowres, bad anatomy"
+    ],
+    "character": [
+     "1girl, char_a, red hair",
+     ""
+    ],
+    "outfit": [
+     "outfit_a1",
+     ""
+    ],
+    "content": [
+     "sleeping, lying",
+     ""
+    ],
+    "expression": [
+     "expr7",
+     ""
+    ],
+    "male": [
+     "",
+     ""
+    ],
+    "camera": [
+     "pov",
+     ""
+    ],
+    "extra": [
+     "",
+     ""
+    ]
+   },
+   "positive": "masterpiece, best quality,\n1girl, char_a, red hair,\noutfit_a1,\nsleeping, lying,\nexpr7,\npov",
+   "negative": "lowres, bad anatomy",
+   "seed": 1006,
+   "inputs": [
+    {
+     "node": "6",
+     "input": "text",
+     "source": "positive",
+     "value": "masterpiece, best quality,\n1girl, char_a, red hair,\noutfit_a1,\nsleeping, lying,\nexpr7,\npov"
+    },
+    {
+     "node": "7",
+     "input": "text",
+     "source": "negative",
+     "value": "lowres, bad anatomy"
+    },
+    {
+     "node": "3",
+     "input": "seed",
+     "source": "seed",
+     "value": 1006
+    },
+    {
+     "node": "10",
+     "input": "lora_name",
+     "source": "lora1_name",
+     "value": "charA.safetensors"
+    },
+    {
+     "node": "10",
+     "input": "strength_model",
+     "source": "lora1_strength",
+     "value": 0.8
+    },
+    {
+     "node": "9",
+     "input": "filename_prefix",
+     "source": "filename_prefix",
+     "value": "T/0007"
+    }
+   ],
+   "prompt_id": null,
+   "client_id": null,
+   "error": "",
+   "outputs": [],
+   "attempts": 0,
+   "submitted_at": null,
+   "finished_at": null
+  },
+  {
+   "id": 8,
+   "run_id": 1,
+   "idx": 7,
+   "status": "pending",
+   "section": "pose",
+   "item_label": "动作A",
+   "meta": {
+    "task": "旧版任务",
+    "character": "角色A",
+    "story": "剧情1",
+    "genre": "纯爱",
+    "section": "姿态",
+    "item": "动作A",
+    "item_no": 2,
+    "outfit": "A服装2",
+    "expression": "",
+    "expression_n": 1,
+    "expression_of": 2,
+    "camera": "",
+    "male": true,
+    "male_templates": [
+     "男性动作"
+    ],
+    "n": 1,
+    "of": 2,
+    "index": 8,
+    "seed": 1007
+   },
+   "modules": {
+    "global": [
+     "masterpiece, best quality",
+     "lowres, bad anatomy"
+    ],
+    "character": [
+     "1girl, char_a, red hair",
+     ""
+    ],
+    "outfit": [
+     "outfit_a2",
+     ""
+    ],
+    "content": [
+     "action_a",
+     ""
+    ],
+    "expression": [
+     "",
+     ""
+    ],
+    "male": [
+     "1boy, MALE_BASE_TAG,\nMALE_ACTION,\nhand",
+     "MALE_NEG"
+    ],
+    "camera": [
+     "",
+     ""
+    ],
+    "extra": [
+     "",
+     ""
+    ]
+   },
+   "positive": "masterpiece, best quality,\n1girl, char_a, red hair,\noutfit_a2,\naction_a,\n1boy, MALE_BASE_TAG,\nMALE_ACTION,\nhand",
+   "negative": "lowres, bad anatomy, MALE_NEG",
+   "seed": 1007,
+   "inputs": [
+    {
+     "node": "6",
+     "input": "text",
+     "source": "positive",
+     "value": "masterpiece, best quality,\n1girl, char_a, red hair,\noutfit_a2,\naction_a,\n1boy, MALE_BASE_TAG,\nMALE_ACTION,\nhand"
+    },
+    {
+     "node": "7",
+     "input": "text",
+     "source": "negative",
+     "value": "lowres, bad anatomy, MALE_NEG"
+    },
+    {
+     "node": "3",
+     "input": "seed",
+     "source": "seed",
+     "value": 1007
+    },
+    {
+     "node": "10",
+     "input": "lora_name",
+     "source": "lora1_name",
+     "value": "charA.safetensors"
+    },
+    {
+     "node": "10",
+     "input": "strength_model",
+     "source": "lora1_strength",
+     "value": 0.8
+    },
+    {
+     "node": "9",
+     "input": "filename_prefix",
+     "source": "filename_prefix",
+     "value": "T/0008"
+    }
+   ],
+   "prompt_id": null,
+   "client_id": null,
+   "error": "",
+   "outputs": [],
+   "attempts": 0,
+   "submitted_at": null,
+   "finished_at": null
+  },
+  {
+   "id": 9,
+   "run_id": 1,
+   "idx": 8,
+   "status": "pending",
+   "section": "pose",
+   "item_label": "动作A",
+   "meta": {
+    "task": "旧版任务",
+    "character": "角色A",
+    "story": "剧情1",
+    "genre": "纯爱",
+    "section": "姿态",
+    "item": "动作A",
+    "item_no": 2,
+    "outfit": "A服装2",
+    "expression": "",
+    "expression_n": 2,
+    "expression_of": 2,
+    "camera": "",
+    "male": true,
+    "male_templates": [
+     "男性动作"
+    ],
+    "n": 2,
+    "of": 2,
+    "index": 9,
+    "seed": 1008
+   },
+   "modules": {
+    "global": [
+     "masterpiece, best quality",
+     "lowres, bad anatomy"
+    ],
+    "character": [
+     "1girl, char_a, red hair",
+     ""
+    ],
+    "outfit": [
+     "outfit_a2",
+     ""
+    ],
+    "content": [
+     "action_a",
+     ""
+    ],
+    "expression": [
+     "",
+     ""
+    ],
+    "male": [
+     "1boy, MALE_BASE_TAG,\nMALE_ACTION,\nhand",
+     "MALE_NEG"
+    ],
+    "camera": [
+     "",
+     ""
+    ],
+    "extra": [
+     "",
+     ""
+    ]
+   },
+   "positive": "masterpiece, best quality,\n1girl, char_a, red hair,\noutfit_a2,\naction_a,\n1boy, MALE_BASE_TAG,\nMALE_ACTION,\nhand",
+   "negative": "lowres, bad anatomy, MALE_NEG",
+   "seed": 1008,
+   "inputs": [
+    {
+     "node": "6",
+     "input": "text",
+     "source": "positive",
+     "value": "masterpiece, best quality,\n1girl, char_a, red hair,\noutfit_a2,\naction_a,\n1boy, MALE_BASE_TAG,\nMALE_ACTION,\nhand"
+    },
+    {
+     "node": "7",
+     "input": "text",
+     "source": "negative",
+     "value": "lowres, bad anatomy, MALE_NEG"
+    },
+    {
+     "node": "3",
+     "input": "seed",
+     "source": "seed",
+     "value": 1008
+    },
+    {
+     "node": "10",
+     "input": "lora_name",
+     "source": "lora1_name",
+     "value": "charA.safetensors"
+    },
+    {
+     "node": "10",
+     "input": "strength_model",
+     "source": "lora1_strength",
+     "value": 0.8
+    },
+    {
+     "node": "9",
+     "input": "filename_prefix",
+     "source": "filename_prefix",
+     "value": "T/0009"
+    }
+   ],
+   "prompt_id": null,
+   "client_id": null,
+   "error": "",
+   "outputs": [],
+   "attempts": 0,
+   "submitted_at": null,
+   "finished_at": null
+  }
+ ]
+}
