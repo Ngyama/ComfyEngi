@@ -1,11 +1,13 @@
-// 角色库：一个连续的角色编辑页面——名称 → LoRA → 触发词 → 基础 Prompt → 服装。
-// 角色标签、角色负面 Prompt 不再显示，但保存时不发送这两个字段，旧内容原样保留（{角色标签} 占位符仍可用）。
+// 角色库：一个连续的角色编辑页面——名称 → LoRA → 基础 Prompt → 服装。
+// 角色标签、角色负面 Prompt、LoRA 权重、服装负面 / 备注不再显示；保存时不发送这些字段，旧内容原样保留。
+// 触发词不再作为隐藏的额外 Prompt 拼接：通过「导入触发词」在确认后写入可编辑的基础 Prompt / 新服装。
 
 import { useEffect, useMemo, useState } from 'react'
 import { AlertTriangle, ChevronDown, ChevronRight, ChevronsUpDown, Copy, GripVertical, Plus, Shirt, Trash2, Unlink, Users, X } from 'lucide-react'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { Command, CommandEmpty, CommandInput, CommandItem, CommandList } from '@/components/ui/command'
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { Avatar, EmptyState, FieldLabel, PromptField, SearchBox, TextInput } from '@/components/common'
 import { SortableArea, useSortableItem } from '@/components/sortable'
@@ -14,6 +16,7 @@ import { hueOf, matches, useDraft } from '@/lib/hooks'
 import { confirm, reloadLib, useLib } from '@/lib/stores'
 import { cn } from '@/lib/utils'
 import { LoraThumb, loraTitle } from '@/pages/LorasPage'
+import { prependTags, promptTags } from '@shared/prompt'
 import type { Character, Lora, LoraResource, Outfit } from '@shared/types'
 
 // ---------------------------------------------------------------- LoRA 资源（复用 LoRA Manager 的数据接口）
@@ -93,39 +96,13 @@ function LoraPicker({ resources, onPick, children }: { resources: LoraResource[]
   )
 }
 
-function WeightInput({ value, onChange }: { value: number; onChange: (v: number) => void }) {
-  return (
-    <label className="flex items-center gap-2 text-[11px] text-muted-foreground">
-      权重
-      <input
-        type="number"
-        step={0.05}
-        value={value}
-        aria-label="LoRA 权重"
-        onChange={(e) => onChange(parseFloat(e.target.value) || 0)}
-        className="h-8 w-20 rounded-lg bg-white/[0.04] px-2 text-center text-[13px] text-foreground tabular-nums ring-1 ring-white/[0.07] outline-none focus:ring-primary/50"
-      />
-    </label>
-  )
-}
-
 /** 角色的 LoRA：最多关联一个；旧版多 LoRA 数据保持原样并明确提示 */
-function LoraSection({ loras, resources, onChange, onResourceChanged }: { loras: Lora[]; resources: LoraResource[]; onChange: (v: Lora[]) => void; onResourceChanged: () => void }) {
+function LoraSection({ loras, resources, onChange, onResourceChanged, onImport }: { loras: Lora[]; resources: LoraResource[]; onChange: (v: Lora[]) => void; onResourceChanged: () => void; onImport: (r: LoraResource) => void }) {
   const byId = (id?: string) => (id ? resources.find((r) => r.id === id) : undefined)
+  // 生成权重沿用 LoRA 的推荐权重（strength 字段保留给生成器使用，之后可由任务级设置覆盖）
   const pick = (r: LoraResource) => {
     const old = loras[0]
-    const meta = r.sidecar?.triggerWords ?? []
-    const custom = old?.custom_triggers ?? []
-    onChange([
-      {
-        resource_id: r.id,
-        name: r.comfyName || r.name,
-        strength: r.recommendedWeight,
-        custom_triggers: custom,
-        // 只保留在新 LoRA 中仍然存在的已启用触发词（以及自定义触发词）
-        trigger_words: (old?.trigger_words ?? []).filter((w) => meta.includes(w) || custom.includes(w)),
-      },
-    ])
+    onChange([{ ...(old ?? {}), resource_id: r.id, name: r.comfyName || r.name, strength: r.recommendedWeight }])
   }
 
   if (loras.length > 1)
@@ -209,7 +186,11 @@ function LoraSection({ loras, resources, onChange, onResourceChanged }: { loras:
           </button>
         )}
       </div>
-      <WeightInput value={l.strength} onChange={(v) => onChange([{ ...l, strength: v }])} />
+      {r?.sidecar?.triggerWords?.length ? (
+        <Button variant="ghost" size="sm" onClick={() => onImport(r)}>
+          导入触发词
+        </Button>
+      ) : null}
       <LoraPicker resources={resources} onPick={pick}>
         <Button variant="ghost" size="sm">
           更换
@@ -218,84 +199,6 @@ function LoraSection({ loras, resources, onChange, onResourceChanged }: { loras:
       <Button variant="ghost" size="icon-sm" className="text-muted-foreground hover:text-destructive" onClick={() => onChange([])} aria-label="取消关联 LoRA">
         <X />
       </Button>
-    </div>
-  )
-}
-
-/** 触发词：来自 LoRA metadata 的建议 + 自定义；由用户勾选参与生成，默认不启用 */
-function TriggerSection({ lora, resource, onChange }: { lora: Lora; resource?: LoraResource; onChange: (l: Lora) => void }) {
-  const [text, setText] = useState('')
-  const enabled = lora.trigger_words ?? []
-  const custom = lora.custom_triggers ?? []
-  const meta = resource?.sidecar?.triggerWords ?? []
-  const all = [...meta, ...custom.filter((w) => !meta.includes(w))]
-  const toggle = (w: string) => onChange({ ...lora, trigger_words: enabled.includes(w) ? enabled.filter((x) => x !== w) : [...enabled, w] })
-  const add = () => {
-    const w = text.trim()
-    if (!w) return
-    setText('')
-    if (all.includes(w)) {
-      if (!enabled.includes(w)) toggle(w)
-      return
-    }
-    onChange({ ...lora, custom_triggers: [...custom, w], trigger_words: [...enabled, w] })
-  }
-  return (
-    <div className="space-y-2">
-      <div className="flex flex-wrap gap-1.5">
-        {all.map((w) => {
-          const on = enabled.includes(w)
-          const isCustom = !meta.includes(w)
-          return (
-            <span
-              key={w}
-              className={cn(
-                'inline-flex items-center rounded-full font-mono text-[11.5px] ring-1 transition',
-                on ? 'bg-primary/15 text-primary ring-primary/40' : 'bg-white/[0.04] text-foreground/70 ring-white/[0.07] hover:bg-white/[0.08]',
-              )}
-            >
-              <button type="button" onClick={() => toggle(w)} className="px-2.5 py-1" aria-pressed={on} data-testid="trigger-chip">
-                {on ? '✓ ' : ''}
-                {w}
-              </button>
-              {isCustom && (
-                <button
-                  type="button"
-                  className="-ml-1 pr-2 opacity-60 hover:opacity-100"
-                  aria-label={`移除自定义触发词 ${w}`}
-                  onClick={() => onChange({ ...lora, custom_triggers: custom.filter((x) => x !== w), trigger_words: enabled.filter((x) => x !== w) })}
-                >
-                  <X className="size-3" />
-                </button>
-              )}
-            </span>
-          )
-        })}
-        <input
-          value={text}
-          onChange={(e) => setText(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter') {
-              e.preventDefault()
-              add()
-            }
-          }}
-          onBlur={add}
-          placeholder="+ 自定义触发词"
-          className="h-7 w-32 rounded-full bg-transparent px-2.5 font-mono text-[11.5px] ring-1 ring-white/[0.07] outline-none placeholder:font-sans placeholder:text-muted-foreground/60 focus:ring-primary/50"
-        />
-      </div>
-      <div className="text-[11px] text-muted-foreground">
-        {enabled.length ? (
-          <>
-            生成时加在基础 Prompt 前：<span className="font-mono text-foreground/80">{enabled.join(', ')}</span>
-          </>
-        ) : meta.length ? (
-          '点击触发词启用；默认不启用。启用的触发词会随角色保存，不修改 LoRA 的 metadata.json。'
-        ) : (
-          '这个 LoRA 的 metadata 中没有触发词，可以手动添加。'
-        )}
-      </div>
     </div>
   )
 }
@@ -328,12 +231,13 @@ function OutfitRow({ o, open, onToggle, onDeleted }: { o: Outfit; open: boolean;
 
 function OutfitEditor({ o, onDeleted }: { o: Outfit; onDeleted: () => void }) {
   const { draft, patch, flush } = useDraft<Outfit>(o, o.id, async (v) => {
-    await call(api['outfits.save']({ id: v.id, _revision: v._revision, name: v.name, positive: v.positive, negative: v.negative, note: v.note }))
+    // 只发送名称与 Positive：旧文件中的负面 Prompt 与备注保存时原样保留
+    await call(api['outfits.save']({ id: v.id, _revision: v._revision, name: v.name, positive: v.positive }))
     await reloadLib()
   })
   if (!draft) return null
   return (
-    <div className="space-y-3">
+    <div className="space-y-2">
       <div className="flex items-center gap-2">
         <TextInput value={draft.name} onChange={(v) => patch({ name: v })} className="font-medium" />
         <Button
@@ -364,9 +268,7 @@ function OutfitEditor({ o, onDeleted }: { o: Outfit; onDeleted: () => void }) {
           <Trash2 />
         </Button>
       </div>
-      <PromptField label="正面 Prompt" value={draft.positive} onChange={(v) => patch({ positive: v })} placeholder="服装 / 穿着状态（原样保存）" minRows={3} copy />
-      <PromptField label="负面 Prompt" value={draft.negative} onChange={(v) => patch({ negative: v })} placeholder="可留空" minRows={1} />
-      <TextInput value={draft.note} onChange={(v) => patch({ note: v })} placeholder="备注（可选）" />
+      <PromptField value={draft.positive} onChange={(v) => patch({ positive: v })} placeholder="服装 / 穿着状态 Prompt（原样保存）" minRows={2} />
     </div>
   )
 }
@@ -393,16 +295,22 @@ function Section({ title, hint, right, children }: { title: string; hint?: strin
 function CharacterDetail({ c, resources, refreshResources, onDeleted }: { c: Character; resources: LoraResource[]; refreshResources: () => void; onDeleted: () => void }) {
   const lib = useLib((s) => s.lib)
   const [openOutfit, setOpenOutfit] = useState<number | null>(null)
+  const [importing, setImporting] = useState<LoraResource | null>(null)
   // 只发送这里可编辑的字段：tag / negative 等隐藏字段不发送，保存时原样保留
   const { draft, patch, flush } = useDraft<Character>(c, c.id, async (v) => {
-    await call(api['characters.save']({ id: v.id, _revision: v._revision, name: v.name, positive: v.positive, loras: v.loras, note: v.note }))
+    await call(api['characters.save']({ id: v.id, _revision: v._revision, name: v.name, positive: v.positive, loras: v.loras }))
     await reloadLib()
   })
   const outfits = (lib?.outfits ?? []).filter((o) => o.character_id === c.id)
   if (!draft) return null
   const loras = draft.loras ?? []
-  const single = loras.length === 1 ? loras[0] : null
-  const resource = single?.resource_id ? resources.find((r) => r.id === single.resource_id) : undefined
+  // 旧版本中已启用的触发词：新版不再自动拼接，由用户确认后合并到基础 Prompt（只执行一次）
+  const legacyTriggers = loras.flatMap((l) => l.trigger_words ?? []).filter((w) => w && w.trim())
+  const mergeLegacy = () => {
+    const { text, added, skipped } = prependTags(draft.positive, legacyTriggers)
+    patch({ positive: text, loras: loras.map((l) => ({ ...l, trigger_words: [] })) })
+    toast.success(added.length ? `已合并 ${added.length} 个触发词到基础 Prompt` : '这些触发词已在基础 Prompt 中', { description: skipped.length ? `已存在、未重复添加：${skipped.join(', ')}` : undefined })
+  }
   return (
     <div className="flex h-full flex-col">
       <div className="flex items-center gap-3 px-6 pt-5 pb-4">
@@ -445,23 +353,24 @@ function CharacterDetail({ c, resources, refreshResources, onDeleted }: { c: Cha
 
       <div className="min-h-0 flex-1 overflow-y-auto px-6 pb-8">
         <div className="max-w-3xl space-y-6">
-          <div className="grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)] gap-3">
-            <Section title="名称">
-              <TextInput value={draft.name} onChange={(v) => patch({ name: v })} />
-            </Section>
-            <Section title="备注">
-              <TextInput value={draft.note} onChange={(v) => patch({ note: v })} placeholder="可选" />
-            </Section>
-          </div>
-
-          <Section title="LoRA" hint="最多关联一个；名称与权重写入工作流中映射的 LoRA 节点">
-            <LoraSection loras={loras} resources={resources} onChange={(v) => patch({ loras: v })} onResourceChanged={refreshResources} />
+          <Section title="名称">
+            <TextInput value={draft.name} onChange={(v) => patch({ name: v })} />
           </Section>
 
-          {single && (
-            <Section title="触发词" hint="勾选的触发词会加在基础 Prompt 前参与生成">
-              <TriggerSection lora={single} resource={resource} onChange={(l) => patch({ loras: [l] })} />
-            </Section>
+          <Section title="LoRA" hint="最多关联一个；模型名称写入工作流中映射的 LoRA 节点">
+            <LoraSection loras={loras} resources={resources} onChange={(v) => patch({ loras: v })} onResourceChanged={refreshResources} onImport={setImporting} />
+          </Section>
+
+          {legacyTriggers.length > 0 && (
+            <div className="flex items-start gap-3 rounded-xl bg-warning/[0.07] p-3 ring-1 ring-warning/25" data-testid="legacy-triggers">
+              <AlertTriangle className="mt-0.5 size-4 shrink-0 text-warning" />
+              <div className="min-w-0 flex-1 text-xs leading-relaxed text-warning">
+                之前启用的触发词 <span className="font-mono">{legacyTriggers.join(', ')}</span> 不再自动加入生成。可以合并到基础 Prompt 开头（已存在的不会重复添加），合并前不会修改任何内容。
+              </div>
+              <Button size="sm" variant="secondary" onClick={mergeLegacy}>
+                合并到基础 Prompt
+              </Button>
+            </div>
           )}
 
           <PromptField label="基础 Prompt" value={draft.positive} onChange={(v) => patch({ positive: v })} placeholder="角色外观、固定特征（原样保存）" minRows={2} copy />
@@ -503,7 +412,98 @@ function CharacterDetail({ c, resources, refreshResources, onDeleted }: { c: Cha
           </Section>
         </div>
       </div>
+      {importing && (
+        <ImportTriggersDialog
+          resource={importing}
+          base={draft.positive}
+          onClose={() => setImporting(null)}
+          onConfirm={async (text, drafts) => {
+            patch({ positive: text }) // 由自动保存写入角色文件
+            let n = 0
+            for (const o of drafts) if ((await call(api['outfits.save']({ character_id: c.id, name: o.name, positive: o.positive }))) !== undefined) n++
+            await reloadLib()
+            setImporting(null)
+            toast.success('已导入触发词', { description: n ? `新建 ${n} 套服装` : undefined })
+          }}
+        />
+      )}
     </div>
+  )
+}
+
+/**
+ * 导入触发词：读取 LoRA Manager 已解析的触发词，用户在确认前编辑内容。
+ * 默认作为基础 Prompt 的候选文本；可以手动整理出新的服装。metadata 没有服装分组信息，因此不自动拆分。
+ * 只写入角色基础 Prompt（加在开头，不覆盖原文）和新建的服装文件，不修改原 metadata.json。
+ */
+function ImportTriggersDialog({ resource, base, onClose, onConfirm }: { resource: LoraResource; base: string; onClose: () => void; onConfirm: (text: string, outfits: { name: string; positive: string }[]) => void }) {
+  const words = resource.sidecar?.triggerWords ?? []
+  const existing = new Set(promptTags(base))
+  const fresh = words.filter((w) => !existing.has(w.trim().toLowerCase()))
+  const [text, setText] = useState(fresh.join(', '))
+  const [outfits, setOutfits] = useState<{ name: string; positive: string }[]>([])
+  const [target, setTarget] = useState(-1) // -1 = 基础 Prompt，>=0 = 第 n 套新服装
+  const append = (cur: string, w: string) => (cur.trim() ? `${cur.replace(/[,\s]+$/, '')}, ${w}` : w)
+  const add = (w: string) => {
+    if (target < 0) setText((t) => append(t, w))
+    else setOutfits((os) => os.map((o, i) => (i === target ? { ...o, positive: append(o.positive, w) } : o)))
+  }
+  const result = prependTags(base, text.split(',').map((x) => x.trim()))
+  const valid = outfits.filter((o) => o.name.trim() && o.positive.trim())
+  return (
+    <Dialog open onOpenChange={(o) => !o && onClose()}>
+      <DialogContent className="sm:max-w-2xl">
+        <DialogHeader>
+          <DialogTitle>导入触发词</DialogTitle>
+          <DialogDescription>来自「{loraTitle(resource)}」的 metadata。确认前可以编辑；不会修改 LoRA 的 metadata.json。</DialogDescription>
+        </DialogHeader>
+        <div className="space-y-4">
+          <div>
+            <FieldLabel hint="点击插入到下方选中的位置">触发词</FieldLabel>
+            <div className="flex flex-wrap gap-1.5">
+              {words.map((w) => (
+                <button key={w} type="button" onClick={() => add(w)} className={cn('rounded-full px-2.5 py-1 font-mono text-[11.5px] ring-1', existing.has(w.trim().toLowerCase()) ? 'bg-white/[0.03] text-muted-foreground ring-white/[0.06]' : 'bg-primary/10 text-primary ring-primary/25 hover:bg-primary/20')} title={existing.has(w.trim().toLowerCase()) ? '已在基础 Prompt 中' : '点击插入'}>
+                  {w}
+                </button>
+              ))}
+            </div>
+          </div>
+          <div className={cn('rounded-xl p-3 ring-1', target < 0 ? 'ring-primary/50' : 'ring-white/[0.06]')} onClick={() => setTarget(-1)}>
+            <FieldLabel hint="加在基础 Prompt 开头，已存在的标签不会重复">加入基础 Prompt</FieldLabel>
+            <PromptField value={text} onChange={setText} minRows={2} placeholder="（不加入基础 Prompt）" />
+            {result.skipped.length > 0 && <div className="mt-1 text-[11px] text-muted-foreground">已存在、将跳过：{result.skipped.join(', ')}</div>}
+          </div>
+          {outfits.map((o, i) => (
+            <div key={i} className={cn('space-y-2 rounded-xl p-3 ring-1', target === i ? 'ring-primary/50' : 'ring-white/[0.06]')} onClick={() => setTarget(i)}>
+              <div className="flex items-center gap-2">
+                <Shirt className="size-3.5 text-muted-foreground" />
+                <TextInput value={o.name} onChange={(v) => setOutfits((os) => os.map((x, j) => (j === i ? { ...x, name: v } : x)))} placeholder="服装名称" />
+                <Button variant="ghost" size="icon-sm" aria-label="移除这套服装" onClick={(e) => { e.stopPropagation(); setOutfits((os) => os.filter((_, j) => j !== i)); setTarget(-1) }}>
+                  <X />
+                </Button>
+              </div>
+              <PromptField value={o.positive} onChange={(v) => setOutfits((os) => os.map((x, j) => (j === i ? { ...x, positive: v } : x)))} minRows={2} placeholder="服装 Prompt" />
+            </div>
+          ))}
+          <Button variant="ghost" size="sm" onClick={() => { setOutfits((os) => [...os, { name: `新服装${os.length + 1}`, positive: '' }]); setTarget(outfits.length) }}>
+            <Plus /> 整理为新服装
+          </Button>
+          <div className="rounded-xl bg-black/25 p-3">
+            <FieldLabel>导入后的基础 Prompt</FieldLabel>
+            <pre className="font-mono text-[12px] whitespace-pre-wrap text-foreground/85" data-testid="import-preview">{result.text || '（空）'}</pre>
+            {valid.length > 0 && <div className="mt-2 text-[11px] text-muted-foreground">将新建服装：{valid.map((o) => o.name).join('、')}（不会修改已有服装）</div>}
+          </div>
+        </div>
+        <DialogFooter>
+          <Button variant="ghost" onClick={onClose}>
+            取消
+          </Button>
+          <Button disabled={!result.added.length && !valid.length} onClick={() => onConfirm(result.text, valid)}>
+            确认导入
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   )
 }
 

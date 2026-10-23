@@ -4,6 +4,7 @@ import { readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { newItem, newTaskData } from '@shared/planner'
+import { prependTags, promptTags } from '@shared/prompt'
 import { decode } from '../src/main/file-library'
 import { LoraManager } from '../src/main/lora-manager'
 import { enqueueTask, planForTask } from '../src/main/plan'
@@ -86,63 +87,86 @@ describe('角色库兼容性', () => {
   })
 })
 
-describe('LoRA 触发词', () => {
-  it('启用的触发词加在基础 Prompt 前，原样保留语法，不自动去重；未启用的不加入', async () => {
+describe('触发词与服装（简化后）', () => {
+  it('旧角色已启用的触发词不再自动拼接；预览给出未合并提示，不修改任何数据', async () => {
     const { root, s, lib, task } = vault()
-    const { r } = await managedLora(root, ['char_a', '(red hair:1.2)', 'unused'])
-    s.save('characters', {
-      id: lib.charA,
-      loras: [{ resource_id: r.id, name: r.name, strength: 0.7, trigger_words: ['(red hair:1.2)', 'char_a'], custom_triggers: ['my_custom'] }],
-    })
+    const { r } = await managedLora(root)
+    s.save('characters', { id: lib.charA, loras: [{ resource_id: r.id, name: r.name, strength: 0.7, trigger_words: ['char_a', '(red hair:1.2)'] }] })
+    const before = s.get('characters', lib.charA)!
     const p = planForTask(s, task())
     expect(p.errors).toEqual([])
-    expect(p.units[0].modules.character[0]).toBe('(red hair:1.2), char_a, 1girl, char_a, red hair')
-    expect(p.units[0].positive).toContain('(red hair:1.2), char_a, 1girl')
-    expect(p.units[0].positive).not.toContain('unused')
-    expect(p.units[0].positive).not.toContain('my_custom')
-    // 基础 Prompt 本身没有被改写
-    expect(s.get('characters', lib.charA)!.positive).toBe('1girl, char_a, red hair')
+    expect(p.units[0].modules.character).toEqual(['1girl, char_a, red hair', ''])
+    expect(p.warnings.some((w) => w.includes('尚未合并到基础 Prompt') && w.includes('(red hair:1.2)'))).toBe(true)
+    expect(s.get('characters', lib.charA)).toEqual(before) // 生成计划不会静默修改角色
     s.close()
   })
 
-  it('触发词进入预览、实际写入的节点值和执行快照；LoRA 名称与强度正确映射', async () => {
+  it('合并辅助：加在开头，逐个标签去重，原文与特殊语法保持不变', () => {
+    expect(prependTags('1girl, Char_A,\n(red hair:1.2)', ['char_a', '(red hair:1.2)', 'blue eyes', ' blue eyes ', ''])).toEqual({
+      text: 'blue eyes, 1girl, Char_A,\n(red hair:1.2)',
+      added: ['blue eyes'],
+      skipped: ['char_a', '(red hair:1.2)', 'blue eyes'],
+    })
+    expect(prependTags('', ['a', 'b']).text).toBe('a, b')
+    expect(prependTags('x, y', ['x']).text).toBe('x, y') // 不重复追加
+    expect(promptTags('a,\nb ,  c')).toEqual(['a', 'b', 'c'])
+  })
+
+  it('用户确认合并后：触发词只通过基础 Prompt 进入预览、节点值与执行快照；已入队任务不受影响', async () => {
     const { root, s, lib, task } = vault()
     const { r } = await managedLora(root)
-    s.save('characters', { id: lib.charA, loras: [{ resource_id: r.id, name: r.name, strength: 0.65, trigger_words: ['char_a'] }] })
+    s.save('characters', { id: lib.charA, loras: [{ resource_id: r.id, name: r.name, strength: 0.65, trigger_words: ['char_trigger'] }] })
+    const old = enqueueTask(s, task()).runId!
+    const oldSnapshot = s.listUnits(old)
+    // 角色库中的「合并到基础 Prompt」：基础 Prompt 加入触发词，并清空旧的启用列表
+    const ch = s.get('characters', lib.charA)!
+    s.save('characters', { id: lib.charA, positive: prependTags(ch.positive, ['char_trigger']).text, loras: ch.loras.map((l) => ({ ...l, trigger_words: [] })) })
     const t = task()
-    const preview = planForTask(s, t)
-    const inputs = Object.fromEntries(preview.units[0].inputs!.map((x) => [x.source, x.value]))
-    expect(inputs.positive).toBe(preview.units[0].positive)
-    expect(String(inputs.positive)).toContain('char_a, 1girl')
-    expect([inputs.lora1_name, inputs.lora1_strength]).toEqual(['chars\\A.safetensors', 0.65])
-    const runId = enqueueTask(s, t).runId!
-    const unit = s.listUnits(runId)[0]
-    expect(unit.positive).toBe(preview.units[0].positive)
-    expect(unit.inputs.find((x) => x.source === 'positive')?.value).toBe(preview.units[0].positive)
+    const p = planForTask(s, t)
+    expect(p.warnings.some((w) => w.includes('尚未合并'))).toBe(false)
+    expect(p.units[0].modules.character[0]).toBe('char_trigger, 1girl, char_a, red hair')
+    const v = Object.fromEntries(p.units[0].inputs!.map((x) => [x.source, x.value]))
+    expect(v.positive).toBe(p.units[0].positive)
+    expect([v.lora1_name, v.lora1_strength]).toEqual(['chars\\A.safetensors', 0.65]) // 默认权重行为保留
+    const run = enqueueTask(s, t).runId!
+    expect(s.listUnits(run)[0].positive).toBe(p.units[0].positive)
+    expect(s.listUnits(old)).toEqual(oldSnapshot)
+    expect(oldSnapshot[0].positive).not.toContain('char_trigger')
     s.close()
   })
 
-  it('已加入队列的任务不受之后的触发词修改影响', async () => {
-    const { root, s, lib, task } = vault()
-    const { r } = await managedLora(root)
-    s.save('characters', { id: lib.charA, loras: [{ resource_id: r.id, name: r.name, strength: 1, trigger_words: [] }] })
-    const runId = enqueueTask(s, task()).runId!
-    const snapshot = s.listUnits(runId)
-    s.save('characters', { id: lib.charA, loras: [{ resource_id: r.id, name: r.name, strength: 1, trigger_words: ['char_a', 'red hair'] }] })
-    expect(s.listUnits(runId)).toEqual(snapshot)
-    expect(snapshot[0].positive).not.toContain('char_a, red hair, 1girl')
+  it('服装只保存名称与 Positive 时，旧的负面 Prompt 与备注保留', () => {
+    const { s, lib } = vault()
+    const oid = lib.outfitsA[0]
+    s.save('outfits', { id: oid, negative: 'old neg', note: 'old note' })
+    s.save('outfits', { id: oid, name: '改名', positive: 'new outfit' })
+    const o = s.get('outfits', oid)!
+    expect([o.name, o.positive, o.negative, o.note]).toEqual(['改名', 'new outfit', 'old neg', 'old note'])
+    const row = decode(readFileSync(s.files!.entries.get(`outfits:${oid}`)!.path, 'utf8'))
+    expect([row.negative, row.note]).toEqual(['old neg', 'old note'])
     s.close()
   })
 
-  it('触发词保存在 Vault 的角色文件中，不修改 LoRA 的 metadata.json 与模型文件', async () => {
+  it('角色保存不发送备注与权重时，旧值保留', () => {
+    const { s, lib } = vault()
+    s.save('characters', { id: lib.charA, note: '旧备注' })
+    const ch = s.get('characters', lib.charA)!
+    s.save('characters', { id: lib.charA, name: 'A2', positive: ch.positive, loras: ch.loras })
+    const after = s.get('characters', lib.charA)!
+    expect([after.note, after.loras[0].strength]).toEqual(['旧备注', 0.8])
+    s.close()
+  })
+
+  it('导入触发词只写入角色文件与新服装文件，不修改 metadata.json 与模型文件', async () => {
     const { root, s, lib } = vault()
-    const { models, r } = await managedLora(root)
+    const { models } = await managedLora(root)
     const meta = readFileSync(join(models, 'A.metadata.json'))
     const model = readFileSync(join(models, 'A.safetensors'))
-    s.save('characters', { id: lib.charA, loras: [{ resource_id: r.id, name: r.name, strength: 1, trigger_words: ['red hair'], custom_triggers: ['extra'] }] })
-    const row = decode(readFileSync(s.files!.entries.get(`characters:${lib.charA}`)!.path, 'utf8'))
-    expect(row.loras[0].trigger_words).toEqual(['red hair'])
-    expect(row.loras[0].custom_triggers).toEqual(['extra'])
+    const ch = s.get('characters', lib.charA)!
+    s.save('characters', { id: lib.charA, positive: prependTags(ch.positive, ['char_a', 'red hair', 'new_tag']).text })
+    s.save('outfits', { character_id: lib.charA, name: '导入的服装', positive: 'school uniform' })
+    expect(s.get('characters', lib.charA)!.positive).toBe('new_tag, 1girl, char_a, red hair')
+    expect(s.listOutfits(lib.charA)).toHaveLength(6)
     expect(readFileSync(join(models, 'A.metadata.json'))).toEqual(meta)
     expect(readFileSync(join(models, 'A.safetensors'))).toEqual(model)
     s.close()

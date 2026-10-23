@@ -261,19 +261,20 @@ try {
   check('无封面时显示统一占位', await win.locator('text=没有封面').isVisible())
   await shot('l04-no-cover')
 
-  // ---------------- 角色库：LoRA 选择器、触发词、头像、服装
+  // ---------------- 角色库：LoRA 选择器、导入触发词、旧触发词合并、头像、服装
   const lib0 = await win.evaluate(() => window.api['library.load']())
   const charB = lib0.characters.find((c) => c.name === '角色B')
   const charA = lib0.characters.find((c) => c.name === '角色A')
-  // 隐藏字段与旧版多 LoRA 数据（通过真实 IPC 写入）
+  // 隐藏字段、旧版多 LoRA 与旧版已启用触发词（通过真实 IPC 写入）
   await win.evaluate(([b, a]) => Promise.all([
-    window.api['characters.save']({ id: b.id, tag: 'hidden_tag_b', negative: 'hidden_neg_b' }),
-    window.api['characters.save']({ id: a.id, loras: [{ name: 'charA.safetensors', strength: 0.8 }, { name: 'style.safetensors', strength: 0.4 }] }),
+    window.api['characters.save']({ id: b.id, tag: 'hidden_tag_b', negative: 'hidden_neg_b', note: 'hidden_note_b' }),
+    window.api['characters.save']({ id: a.id, loras: [{ name: 'charA.safetensors', strength: 0.8, trigger_words: ['legacy_t', 'char_a'] }, { name: 'style.safetensors', strength: 0.4 }] }),
   ]), [charB, charA])
   await win.locator('nav button', { hasText: '角色库' }).click()
   await win.waitForTimeout(600)
   await win.locator('main button', { hasText: '角色B' }).first().click()
   await win.waitForTimeout(400)
+  check('角色页面只有名称、LoRA、基础 Prompt、服装', (await win.getByPlaceholder('可选').count()) === 0 && (await win.locator('[data-testid=trigger-chip]').count()) === 0)
   await win.locator('[data-testid=lora-picker-open]').click()
   const pickerItems = win.locator('[data-testid=lora-picker-item]')
   await win.waitForTimeout(400)
@@ -292,50 +293,68 @@ try {
   await pickerItems.first().click()
   await win.waitForTimeout(500)
   const card = win.locator('[data-testid=character-lora]')
-  check('选中后显示 LoRA 卡片，权重取自推荐权重', (await card.innerText()).includes('Alice - Illustrious') && (await card.getByLabel('LoRA 权重').inputValue()) === '0.85')
+  check('选中后显示 LoRA 卡片，没有权重输入框', (await card.innerText()).includes('Alice - Illustrious') && (await win.getByLabel('LoRA 权重').count()) === 0)
   if (await card.getByText('尚未设置 ComfyUI 模型名称').count()) {
     await card.getByText('尚未设置 ComfyUI 模型名称').click()
     await win.waitForTimeout(500)
   }
   check('可一键设置 ComfyUI 模型名称', (await card.getByText('尚未设置 ComfyUI 模型名称').count()) === 0)
-  const chips = win.locator('[data-testid=trigger-chip]')
-  check('显示 metadata 触发词，默认都不启用', (await chips.count()) === 3 && (await win.locator('[data-testid=trigger-chip][aria-pressed=true]').count()) === 0)
-  await chips.filter({ hasText: 'blonde hair' }).click()
-  await win.getByPlaceholder('+ 自定义触发词').fill('my_tag')
-  await win.getByPlaceholder('+ 自定义触发词').press('Enter')
-  await card.getByLabel('LoRA 权重').fill('0.7')
-  await win.waitForTimeout(1200)
-  await shot('c02-character')
+
+  // 导入触发词：确认前可编辑，可整理出新服装
+  await card.getByRole('button', { name: '导入触发词' }).click()
+  await win.waitForSelector('text=导入后的基础 Prompt')
+  const preview = win.locator('[data-testid=import-preview]')
+  check('导入前预览：触发词加在原基础 Prompt 前', (await preview.innerText()) === 'alice_ce, blonde hair, blue eyes, 1girl, char_b', await preview.innerText())
+  const dlg = win.locator('[role=dialog]')
+  await dlg.getByRole('button', { name: '整理为新服装' }).click()
+  await dlg.getByPlaceholder('服装名称').fill('金发造型')
+  await dlg.getByRole('button', { name: 'blonde hair' }).click()
+  await dlg.locator('textarea').first().fill('alice_ce, blue eyes')
+  await win.waitForTimeout(200)
+  await shot('c02-import-triggers')
+  check('编辑后的预览', (await preview.innerText()) === 'alice_ce, blue eyes, 1girl, char_b')
+  await dlg.getByRole('button', { name: '确认导入' }).click()
+  await win.waitForTimeout(1500)
   const lib1 = await win.evaluate(() => window.api['library.load']())
   const b1 = lib1.characters.find((c) => c.id === charB.id)
-  check('触发词、权重随角色保存', JSON.stringify(b1.loras.map((l) => [l.strength, l.trigger_words, l.custom_triggers])) === JSON.stringify([[0.7, ['blonde hair', 'my_tag'], ['my_tag']]]), JSON.stringify(b1.loras))
-  check('隐藏字段（角色标签、负面 Prompt）保存后保留', b1.tag === 'hidden_tag_b' && b1.negative === 'hidden_neg_b')
+  const newOutfit = lib1.outfits.find((o) => o.character_id === charB.id && o.name === '金发造型')
+  check('确认后写入基础 Prompt 并新建服装', b1.positive === 'alice_ce, blue eyes, 1girl, char_b' && newOutfit?.positive === 'blonde hair', `${b1.positive} | ${newOutfit?.positive}`)
+  check('LoRA 关联保存，沿用默认权重（推荐权重）', b1.loras.length === 1 && b1.loras[0].strength === 0.85)
+  check('隐藏字段（角色标签、负面 Prompt、备注）保存后保留', b1.tag === 'hidden_tag_b' && b1.negative === 'hidden_neg_b' && b1.note === 'hidden_note_b')
   check('角色列表头像使用 LoRA 封面', (await win.locator('main button', { hasText: '角色B' }).first().locator('img').count()) === 1)
-  const plan = await win.evaluate(async (cid) => {
-    const t = await window.api['tasks.create']('触发词测试', { character_id: cid, story_id: null, story_outfit_id: null, global_id: null, male_base_id: null, workflow_id: null, seed_base: 1, items: [] })
+  const planB = await win.evaluate(async (cid) => {
     const lib = await window.api['library.load']()
     const pose = lib.templates.find((x) => x.kind === 'pose')
-    await window.api['tasks.save']({ id: t.id, data: { character_id: cid, story_id: null, story_outfit_id: null, global_id: null, male_base_id: null, workflow_id: null, seed_base: 1, items: [{ pose_id: pose.id, outfit_id: null, expression_ids: [], count: 1, camera_id: null, male_enabled: false, male_ids: [], male_extra: '', extra_positive: '', extra_negative: '' }] } })
+    const data = { character_id: cid, story_id: null, story_outfit_id: null, global_id: null, male_base_id: null, workflow_id: null, seed_base: 1, items: [{ pose_id: pose.id, outfit_id: null, expression_ids: [], count: 1, camera_id: null, male_enabled: false, male_ids: [], male_extra: '', extra_positive: '', extra_negative: '' }] }
+    const t = await window.api['tasks.create']('触发词测试', data)
     return window.api['plan.forTask'](t.id)
   }, charB.id)
-  const u0 = plan.units[0]
+  const u0 = planB.units[0]
   const v0 = Object.fromEntries((u0.inputs ?? []).map((x) => [x.source, x.value]))
-  check('启用的触发词进入 Prompt 预览与写入节点的值', u0.modules.character[0] === ['blonde hair', 'my_tag', '1girl, char_b'].join(lib1.settings.pos_separator.replaceAll('\\n', '\n')) && v0.positive === u0.positive, u0.modules.character[0])
-  check('LoRA 名称与强度映射到工作流', v0.lora1_name === 'characters\\Alice.safetensors' && v0.lora1_strength === 0.7, `${v0.lora1_name} ${v0.lora1_strength}`)
+  check('角色 Prompt 只来自基础 Prompt（预览与写入节点的值一致）', u0.modules.character[0] === 'alice_ce, blue eyes, 1girl, char_b' && v0.positive === u0.positive, u0.modules.character[0])
+  check('LoRA 名称与强度映射到工作流', v0.lora1_name === 'characters\\Alice.safetensors' && v0.lora1_strength === 0.85, `${v0.lora1_name} ${v0.lora1_strength}`)
 
-  // 旧版多 LoRA：明确提示，编辑其他字段不覆盖
+  // 旧版：多 LoRA 与已启用的触发词
   await win.locator('main button', { hasText: '角色A' }).first().click()
   await win.waitForTimeout(400)
   check('旧版多 LoRA 配置显示提示', await win.locator('[data-testid=legacy-loras]').isVisible())
-  await shot('c03-legacy-loras')
-  await win.locator('main input').nth(1).fill('角色A')
-  await win.waitForTimeout(800)
+  check('旧版已启用触发词显示合并提示', await win.locator('[data-testid=legacy-triggers]').isVisible())
+  await shot('c03-legacy')
+  const planA = await win.evaluate(async (cid) => {
+    const t = await window.api['tasks.create']('旧触发词', { character_id: cid, story_id: null, story_outfit_id: null, global_id: null, male_base_id: null, workflow_id: null, seed_base: 1, items: [] })
+    return window.api['plan.forTask'](t.id)
+  }, charA.id)
+  check('未合并前：预览给出提示且不自动拼接', planA.warnings.some((w) => w.includes('legacy_t')))
+  await win.getByRole('button', { name: '合并到基础 Prompt' }).click()
+  await win.waitForTimeout(1200)
   const a1 = (await win.evaluate(() => window.api['library.load']())).characters.find((c) => c.id === charA.id)
-  check('编辑旧角色不会覆盖多 LoRA 数据', a1.loras.length === 2 && a1.loras[1].name === 'style.safetensors')
+  check('合并后：只加入缺少的触发词，不重复', a1.positive.startsWith('legacy_t, ') && a1.positive.split('char_a').length === 2, a1.positive)
+  check('合并后不再提示，多 LoRA 数据保留', (await win.locator('[data-testid=legacy-triggers]').count()) === 0 && a1.loras.length === 2 && a1.loras[1].name === 'style.safetensors')
   await win.locator('[data-testid=outfit-row] button', { hasText: 'A服装2' }).click()
   await win.locator('[data-testid=outfit-row] button', { hasText: 'A服装3' }).click()
   await win.waitForTimeout(300)
-  check('服装一次只展开一个编辑区', (await win.getByText('正面 Prompt', { exact: true }).count()) === 1)
+  check('服装一次只展开一个编辑区，只有名称与 Positive', (await win.getByPlaceholder('服装 / 穿着状态 Prompt（原样保存）').count()) === 1)
+  await shot('c04-outfits')
 
   // 缺失文件：只在测试临时目录中删除 / 移动，验证界面行为
   await win.locator('nav button', { hasText: 'LoRA' }).click()

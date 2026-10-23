@@ -51,6 +51,33 @@ export function joinParts(parts: (string | null | undefined)[], sep: string, tri
   return out.join(sep)
 }
 
+/** Prompt 中以逗号或换行分隔的标签（用于判断是否已经存在，不改写原文） */
+export function promptTags(text: string): string[] {
+  return (text ?? '').split(/[,\n]/).map((t) => t.trim().toLowerCase()).filter(Boolean)
+}
+
+/**
+ * 把若干标签加到 Prompt 开头：已存在（逐个标签比较）的跳过，原有文本保持原样。
+ * 返回新文本以及实际加入 / 跳过的标签。
+ */
+export function prependTags(base: string, words: string[], sep = ', '): { text: string; added: string[]; skipped: string[] } {
+  const have = new Set(promptTags(base))
+  const added: string[] = []
+  const skipped: string[] = []
+  for (const raw of words) {
+    const w = (raw ?? '').trim()
+    if (!w) continue
+    const key = w.toLowerCase()
+    if (have.has(key)) skipped.push(w)
+    else {
+      added.push(w)
+      have.add(key)
+    }
+  }
+  if (!added.length) return { text: base, added, skipped }
+  return { text: (base ?? '').trim() ? `${added.join(sep)}${sep}${base}` : added.join(sep), added, skipped }
+}
+
 export function normalizedOrder(order: string[] | null | undefined): string[] {
   const valid = (order ?? []).filter((m) => m in MODULE_LABELS)
   return [...valid, ...MODULE_KEYS.filter((m) => !valid.includes(m))]

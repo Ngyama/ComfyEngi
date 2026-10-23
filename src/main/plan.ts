@@ -41,6 +41,10 @@ export function planForTask(store: Store, task: Task, settings?: Settings, dateS
       } catch(e) { errors.push(`LoRA ${l.name}: ${(e as Error).message}`) }
     }
   }
+  const ch = data.character_id ? store.get('characters', data.character_id) : null
+  const legacyTriggers = (ch?.loras ?? []).flatMap((l) => l.trigger_words ?? []).filter((w) => typeof w === 'string' && w.trim())
+  if (legacyTriggers.length)
+    warnings.push(`角色「${ch!.name}」有之前启用的触发词（${legacyTriggers.join(', ')}）尚未合并到基础 Prompt；新版不再自动加入，可在角色库中一键合并`)
   const wf = resolveWorkflow(store, data.workflow_id)
   if (!wf) {
     warnings.push('尚未选择 ComfyUI 工作流：可以预览 Prompt，但不能加入执行队列')

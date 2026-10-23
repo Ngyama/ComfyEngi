@@ -159,7 +159,7 @@ try {
   check('角色页面为连续布局（无标签页，不显示角色标签 / 负面输入）', (await win.locator('[role=tab]').count()) === 0 && (await win.getByText('角色标签', { exact: true }).count()) === 0)
   await win.locator('[data-testid=outfit-row] button', { hasText: 'A服装1' }).click()
   await win.waitForTimeout(300)
-  check('点击服装在当前页面展开编辑', (await win.locator('[data-testid=outfit-row]').filter({ has: win.getByText('正面 Prompt') }).count()) === 1)
+  check('点击服装在当前页面展开编辑（只有名称与 Positive）', (await win.getByPlaceholder('服装 / 穿着状态 Prompt（原样保存）').count()) === 1 && (await win.getByPlaceholder('可留空').count()) === 0)
   await shot('11-character-outfits')
   await nav('剧情库')
   await win.locator('main button', { hasText: '剧情1' }).first().click()
