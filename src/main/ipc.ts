@@ -84,6 +84,7 @@ function settingValue(key: string, value: unknown): unknown {
   if (!(key in DEFAULT_SETTINGS)) throw new BadArg(`未知的设置项 ${key}`)
   const def = DEFAULT_SETTINGS[key as keyof Settings]
   if (key === 'default_workflow_id' || key === 'last_task_id') return value === null ? null : int(value, key)
+  if (key === 'lora_display_name') { if (value !== 'model' && value !== 'file') throw new BadArg('无效的显示名称选项'); return value }
   if (Array.isArray(def)) {
     if (!Array.isArray(value)) throw new BadArg(`${key} 必须是数组`)
     return value.map((x) => str(x))
@@ -163,6 +164,8 @@ export function registerIpc(ctx: IpcContext) {
       const w=Math.max(64,Math.min(1600,width==null?400:int(width,'width')))
       const src=await loras().imageSource(str(id),w)
       if(!src) return null
+      // 视频封面：只返回页面抽帧后缓存的静态帧；完整视频通过 comfyengi-media:// 协议按需读取，不经过 IPC
+      if(src.video) return existsSync(src.cache) ? `data:image/jpeg;base64,${(await readFile(src.cache)).toString('base64')}` : null
       // 缩略图缓存在工作区 .comfyengi/cache 中；源图片变化（修改时间 / 大小）后自动失效
       if(existsSync(src.cache)) return `data:image/jpeg;base64,${(await readFile(src.cache)).toString('base64')}`
       const img=nativeImage.createFromPath(src.source)
@@ -177,6 +180,11 @@ export function registerIpc(ctx: IpcContext) {
       const ext=extname(src.source).toLowerCase().replace('.','')
       const mime=ext==='webp'?'image/webp':ext==='png'?'image/png':'image/jpeg'
       return `data:${mime};base64,${(await readFile(src.source)).toString('base64')}`
+    },
+    'loras.saveFrame': async(id, data) => {
+      const m=/^data:image\/jpeg;base64,([A-Za-z0-9+/=]+)$/.exec(str(data,'data'))
+      if(!m) throw new BadArg('封面帧必须是 JPEG')
+      await loras().saveFrame(str(id),Buffer.from(m[1],'base64'))
     },
     'loras.open': async(id) => { const r=(await loras().list()).find(r=>r.id===str(id)); if(r) shell.showItemInFolder(r.path) },
     'library.load':  () => { store.files?.scan(); return libraryOf(store) },

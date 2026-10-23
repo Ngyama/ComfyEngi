@@ -36,6 +36,7 @@ export interface Api {
   'loras.preview'(id:string): void
   'loras.clearPreview'(id:string): void
   'loras.image'(id:string, width?:number): string|null
+  'loras.saveFrame'(id:string, jpegDataUrl:string): void
   'loras.open'(id:string): void
 
   'library.load'(): Library
@@ -104,7 +105,7 @@ export type ApiMethod = keyof Api
 
 /** Preload 暴露的方法白名单 */
 export const API_METHODS: ApiMethod[] = [
-  'vault.info', 'vault.choose', 'loras.list', 'loras.roots', 'loras.addRoot', 'loras.removeRoot', 'loras.scan', 'loras.save', 'loras.preview', 'loras.clearPreview', 'loras.image', 'loras.open',
+  'vault.info', 'vault.choose', 'loras.list', 'loras.roots', 'loras.addRoot', 'loras.removeRoot', 'loras.scan', 'loras.save', 'loras.preview', 'loras.clearPreview', 'loras.image', 'loras.saveFrame', 'loras.open',
   'library.load', 'settings.set',
   'templates.save', 'templates.remove', 'templates.duplicate', 'templates.reorder',
   'characters.save', 'characters.remove', 'characters.duplicate',

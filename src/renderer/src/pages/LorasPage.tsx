@@ -13,6 +13,7 @@ import {
   ImageIcon,
   ImageOff,
   Layers,
+  Play,
   RefreshCw,
   RotateCcw,
   Star,
@@ -25,13 +26,20 @@ import { Button } from '@/components/ui/button'
 import { Chip, CopyButton, Disclosure, EmptyState, FieldLabel, IconButton, SearchBox, TextInput } from '@/components/common'
 import { api, call } from '@/lib/api'
 import { useDraft } from '@/lib/hooks'
-import { confirm, useLib } from '@/lib/stores'
+import { confirm, reloadLib, useLib } from '@/lib/stores'
 import { cn } from '@/lib/utils'
 import type { LoraResource } from '@shared/types'
 
 // ---------------------------------------------------------------- 工具
 
-export const loraTitle = (r: LoraResource) => r.sidecar?.modelName || r.name.replace(/\.safetensors$/i, '')
+export type NameMode = 'model' | 'file'
+const fileStem = (r: LoraResource) => r.name.replace(/\.safetensors$/i, '')
+/** 显示名称：model = metadata 中的模型名称（没有时退回文件名），file = 本地文件名（不含扩展名） */
+export const loraTitle = (r: LoraResource, mode: NameMode = 'model') => (mode === 'file' ? fileStem(r) : r.sidecar?.modelName || fileStem(r))
+const useNameMode = (): NameMode => (useLib((s) => s.lib?.settings.lora_display_name) === 'file' ? 'file' : 'model')
+/** 自动识别的视频封面（手动封面始终是图片） */
+const hasVideo = (r: LoraResource) => !r.preview && /\.mp4$/i.test(r.cover)
+const mediaUrl = (r: LoraResource) => `comfyengi-media://lora/${r.id}?v=${encodeURIComponent(r.cover)}`
 const baseName = (p: string) => p.replace(/[\\/]+$/, '').split(/[\\/]/).pop() || p
 const sameRoot = (a: string, b: string) => a.replace(/[\\/]+$/, '').toLowerCase() === b.replace(/[\\/]+$/, '').toLowerCase()
 const fmtSize = (n: number) => (n >= 1 << 30 ? `${(n / (1 << 30)).toFixed(2)} GB` : `${(n / (1 << 20)).toFixed(1)} MB`)
@@ -40,6 +48,58 @@ const words = (s: string) => s.split(/[,，\s]+/).map((x) => x.trim()).filter(Bo
 /** 缩略图缓存（主进程另有磁盘缓存） */
 const imageCache = new Map<string, string | null>()
 const imageKey = (r: LoraResource, w: number) => `${r.id}|${w}|${r.preview}|${r.cover}`
+
+// 视频抽帧：最多同时处理 2 个，只针对进入可视区域的卡片；结果写入主进程缓存，下次直接读取
+let grabbing = 0
+const grabQueue: (() => void)[] = []
+async function limited<T>(fn: () => Promise<T>): Promise<T> {
+  if (grabbing >= 2) await new Promise<void>((r) => grabQueue.push(r))
+  grabbing++
+  try {
+    return await fn()
+  } finally {
+    grabbing--
+    grabQueue.shift()?.()
+  }
+}
+
+function grabFrame(url: string): Promise<string | null> {
+  return new Promise((resolve) => {
+    const v = document.createElement('video')
+    let done = false
+    const finish = (x: string | null) => {
+      if (done) return
+      done = true
+      clearTimeout(timer)
+      v.removeAttribute('src')
+      v.load()
+      resolve(x)
+    }
+    const timer = setTimeout(() => finish(null), 15000)
+    v.muted = true
+    v.preload = 'auto'
+    v.crossOrigin = 'anonymous'
+    v.playsInline = true
+    v.onloadedmetadata = () => {
+      v.currentTime = Math.min(0.5, (Number.isFinite(v.duration) && v.duration > 0 ? v.duration : 1) * 0.1)
+    }
+    v.onseeked = () => {
+      try {
+        const w = Math.min(480, v.videoWidth || 480)
+        const h = Math.round((w / (v.videoWidth || 1)) * (v.videoHeight || 1)) || Math.round((w * 4) / 3)
+        const c = document.createElement('canvas')
+        c.width = w
+        c.height = h
+        c.getContext('2d')!.drawImage(v, 0, 0, w, h)
+        finish(c.toDataURL('image/jpeg', 0.85))
+      } catch {
+        finish(null)
+      }
+    }
+    v.onerror = () => finish(null)
+    v.src = url
+  })
+}
 
 function useLoraImage(r: LoraResource | null, width: number, enabled = true) {
   const key = r ? imageKey(r, width) : ''
@@ -59,6 +119,13 @@ function useLoraImage(r: LoraResource | null, width: number, enabled = true) {
     setSrc(undefined)
     void api['loras.image'](r.id, width)
       .catch(() => null)
+      .then(async (v) => {
+        if (!v && hasVideo(r)) {
+          v = await limited(() => grabFrame(mediaUrl(r)))
+          if (v) void api['loras.saveFrame'](r.id, v).catch(() => {})
+        }
+        return v
+      })
       .then((v) => {
         imageCache.set(key, v)
         if (alive) setSrc(v)
@@ -198,9 +265,14 @@ function TreeRow({ node, depth, roots, onRemoveRoot }: { node: Node; depth: numb
 
 // ---------------------------------------------------------------- 卡片
 
-const LoraCard = memo(function LoraCard({ r, selected, characterName, onClick }: { r: LoraResource; selected: boolean; characterName?: string; onClick: () => void }) {
+const LoraCard = memo(function LoraCard({ r, selected, characterName, nameMode, onClick }: { r: LoraResource; selected: boolean; characterName?: string; nameMode: NameMode; onClick: () => void }) {
   const ref = useRef<HTMLButtonElement>(null)
   const [visible, setVisible] = useState(false)
+  // 视频只在悬停时挂载并静音循环播放，移开即卸载（停止并释放），同一时间最多一个
+  const video = hasVideo(r)
+  const [hover, setHover] = useState(false)
+  const hoverTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
+  useEffect(() => () => clearTimeout(hoverTimer.current), [])
   useEffect(() => {
     const el = ref.current
     if (!el) return
@@ -214,6 +286,13 @@ const LoraCard = memo(function LoraCard({ r, selected, characterName, onClick }:
       ref={ref}
       type="button"
       onClick={onClick}
+      onMouseEnter={() => {
+        if (video) hoverTimer.current = setTimeout(() => setHover(true), 160)
+      }}
+      onMouseLeave={() => {
+        clearTimeout(hoverTimer.current)
+        setHover(false)
+      }}
       data-testid="lora-card"
       className={cn(
         'group overflow-hidden rounded-xl bg-card text-left ring-1 ring-white/[0.05] transition hover:-translate-y-0.5 hover:ring-white/[0.14]',
@@ -223,6 +302,12 @@ const LoraCard = memo(function LoraCard({ r, selected, characterName, onClick }:
     >
       <div className="relative aspect-[3/4] overflow-hidden bg-black/30">
         {src ? <img src={src} alt="" draggable={false} className="absolute inset-0 size-full object-cover transition duration-300 group-hover:scale-[1.03]" /> : src === null || (!r.preview && !r.cover) ? <Placeholder r={r} /> : <div className="absolute inset-0 animate-pulse bg-white/[0.03]" />}
+        {video && hover && <video data-testid="lora-hover-video" src={mediaUrl(r)} autoPlay muted loop playsInline className="absolute inset-0 size-full object-cover" />}
+        {video && !hover && (
+          <span className="absolute right-2 bottom-2 grid size-6 place-items-center rounded-full bg-black/60 text-white/90 backdrop-blur-sm" title="视频封面：悬停播放">
+            <Play className="size-3 fill-current" />
+          </span>
+        )}
         <div className="absolute inset-x-0 top-0 flex items-start gap-1 p-2">
           {r.sidecar?.baseModel && <span className="max-w-[70%] truncate rounded-md bg-black/60 px-1.5 py-0.5 text-[10px] text-white/85 backdrop-blur-sm">{r.sidecar.baseModel}</span>}
           <span className="flex-1" />
@@ -237,8 +322,8 @@ const LoraCard = memo(function LoraCard({ r, selected, characterName, onClick }:
         )}
       </div>
       <div className="px-2.5 py-2">
-        <div className="truncate text-[12.5px] font-medium" title={loraTitle(r)}>
-          {loraTitle(r)}
+        <div className="truncate text-[12.5px] font-medium" title={loraTitle(r, nameMode)}>
+          {loraTitle(r, nameMode)}
         </div>
         <div className="truncate text-[10.5px] text-muted-foreground" title={r.relativePath}>
           {r.folder || baseName(r.root) || r.name}
@@ -262,6 +347,9 @@ function Section({ title, right, children }: { title: string; right?: React.Reac
 function Detail({ r, onClose, onChanged }: { r: LoraResource; onClose: () => void; onChanged: (row?: LoraResource) => void }) {
   const lib = useLib((s) => s.lib)
   const src = useLoraImage(r, 1200)
+  const nameMode = useNameMode()
+  const video = hasVideo(r)
+  const [playing, setPlaying] = useState(false)
   const [descOpen, setDescOpen] = useState(false)
   const { draft, patch } = useDraft<LoraResource>(r, r.id, async (v) => {
     try {
@@ -297,9 +385,24 @@ function Detail({ r, onClose, onChanged }: { r: LoraResource; onClose: () => voi
         {/* 大预览 */}
         <div className="group relative overflow-hidden rounded-xl bg-black/30">
           <div className="relative mx-auto aspect-[3/4] max-h-[44vh] w-full">
-            {src ? <img src={src} alt="" className="absolute inset-0 size-full object-contain" /> : src === null || (!r.preview && !r.cover) ? <Placeholder r={r} large /> : <div className="absolute inset-0 animate-pulse bg-white/[0.03]" />}
+            {video && playing ? (
+              <video data-testid="lora-detail-video" src={mediaUrl(r)} poster={src ?? undefined} controls autoPlay muted loop playsInline className="absolute inset-0 size-full bg-black object-contain" />
+            ) : src ? (
+              <img src={src} alt="" className="absolute inset-0 size-full object-contain" />
+            ) : src === null || (!r.preview && !r.cover) ? (
+              <Placeholder r={r} large />
+            ) : (
+              <div className="absolute inset-0 animate-pulse bg-white/[0.03]" />
+            )}
+            {video && !playing && (
+              <button type="button" onClick={() => setPlaying(true)} className="absolute inset-0 grid place-items-center" aria-label="播放视频封面">
+                <span className="grid size-14 place-items-center rounded-full bg-black/55 text-white ring-1 ring-white/20 backdrop-blur-sm transition hover:scale-105 hover:bg-black/70">
+                  <Play className="ml-0.5 size-6 fill-current" />
+                </span>
+              </button>
+            )}
           </div>
-          <div className="absolute right-2 bottom-2 flex gap-1.5 opacity-0 transition group-hover:opacity-100">
+          <div className={cn('absolute right-2 flex gap-1.5 opacity-0 transition group-hover:opacity-100', playing ? 'top-2' : 'bottom-2')}>
             <Button
               size="xs"
               variant="secondary"
@@ -329,11 +432,11 @@ function Detail({ r, onClose, onChanged }: { r: LoraResource; onClose: () => voi
         {/* 标题 */}
         <div>
           <div className="flex items-start gap-2">
-            <h2 className="min-w-0 flex-1 text-[16px] leading-snug font-semibold break-words">{loraTitle(r)}</h2>
+            <h2 className="min-w-0 flex-1 text-[16px] leading-snug font-semibold break-words">{loraTitle(r, nameMode)}</h2>
             {sc?.favorite && <Star className="mt-1 size-4 shrink-0 fill-warning text-warning" />}
           </div>
-          <div className="mt-0.5 truncate font-mono text-[11px] text-muted-foreground" title={r.name}>
-            {r.name}
+          <div className="mt-0.5 truncate text-[11px] text-muted-foreground" title={r.name}>
+            {nameMode === 'file' && sc?.modelName ? sc.modelName : <span className="font-mono">{r.name}</span>}
           </div>
           {badges.length > 0 && (
             <div className="mt-2 flex flex-wrap gap-1.5">
@@ -485,7 +588,7 @@ function Detail({ r, onClose, onChanged }: { r: LoraResource; onClose: () => voi
                 ['路径', r.path],
                 ['大小', fmtSize(r.size)],
                 ['修改时间', new Date(r.mtime).toLocaleString('zh-CN')],
-                ['封面', r.preview ? '手动指定（保存在工作区）' : r.cover || '—'],
+                ['封面', r.preview ? '手动指定（保存在工作区）' : r.cover ? `${r.cover}${video ? '（视频）' : ''}` : '—'],
                 ['元数据', r.sidecarPath || '—'],
                 ...(sc?.sha256 ? [['SHA256', sc.sha256]] : []),
                 ...(sc?.civitaiModelId ? [['Civitai', `模型 ${sc.civitaiModelId}${sc.civitaiVersionId ? ` · 版本 ${sc.civitaiVersionId}` : ''}`]] : []),
@@ -580,6 +683,11 @@ export default function LorasPage() {
     if (!fresh.length) return
     v.set({ open: new Set([...v.open, ...fresh.map((n) => n.key)]), seenRoots: new Set([...v.seenRoots, ...fresh.map((n) => n.key)]) })
   }, [tree]) // eslint-disable-line react-hooks/exhaustive-deps
+  const nameMode = useNameMode()
+  const setNameMode = async (m: NameMode) => {
+    await call(api['settings.set']('lora_display_name', m))
+    await reloadLib()
+  }
   const charName = useMemo(() => new Map((lib?.characters ?? []).map((c) => [c.id, c.name])), [lib])
   const bases = useMemo(() => [...new Set(all.map((r) => r.sidecar?.baseModel).filter(Boolean) as string[])].sort(), [all])
 
@@ -599,12 +707,12 @@ export default function LorasPage() {
       return q.every((w) => hay.includes(w))
     })
     const cmp: Record<SortKey, (a: LoraResource, b: LoraResource) => number> = {
-      name: (a, b) => loraTitle(a).localeCompare(loraTitle(b), 'zh'),
+      name: (a, b) => loraTitle(a, nameMode).localeCompare(loraTitle(b, nameMode), 'zh'),
       mtime: (a, b) => b.mtime - a.mtime,
       size: (a, b) => b.size - a.size,
     }
     return out.sort(cmp[v.sort])
-  }, [all, v.place, v.q, v.base, v.link, v.sort, charName]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [all, v.place, v.q, v.base, v.link, v.sort, charName, nameMode]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // 当前文件夹的直接子文件夹，方便在网格中逐级进入
   const subfolders = useMemo(() => {
@@ -682,6 +790,24 @@ export default function LorasPage() {
             <span className="ml-1 shrink-0 text-xs font-normal text-muted-foreground">{list.length} 个</span>
           </div>
           <SearchBox value={v.q} onChange={(q) => v.set({ q })} placeholder="搜索名称、标签、触发词…" className="w-72" />
+          <div className="flex rounded-lg bg-white/[0.045] p-0.5 ring-1 ring-white/[0.06]" role="group" aria-label="显示名称">
+            {(
+              [
+                ['model', '模型名称'],
+                ['file', '文件名称'],
+              ] as const
+            ).map(([k, l]) => (
+              <button
+                key={k}
+                type="button"
+                onClick={() => void setNameMode(k)}
+                data-active={nameMode === k || undefined}
+                className="h-7 rounded-md px-2.5 text-[12px] text-muted-foreground hover:text-foreground data-[active]:bg-white/[0.1] data-[active]:text-foreground"
+              >
+                {l}
+              </button>
+            ))}
+          </div>
           <select
             value={v.sort}
             onChange={(e) => v.set({ sort: e.target.value as SortKey })}
@@ -745,7 +871,7 @@ export default function LorasPage() {
           {rows === null ? null : list.length ? (
             <div className="grid grid-cols-[repeat(auto-fill,minmax(168px,1fr))] gap-3">
               {list.map((r) => (
-                <LoraCard key={r.id} r={r} selected={v.sel === r.id} characterName={r.characterId !== null ? charName.get(r.characterId) : undefined} onClick={() => v.set({ sel: v.sel === r.id ? null : r.id })} />
+                <LoraCard key={r.id} r={r} selected={v.sel === r.id} characterName={r.characterId !== null ? charName.get(r.characterId) : undefined} nameMode={nameMode} onClick={() => v.set({ sel: v.sel === r.id ? null : r.id })} />
               ))}
             </div>
           ) : (

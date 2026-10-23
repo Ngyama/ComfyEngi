@@ -125,6 +125,8 @@ export interface Task extends Timestamps {
 
 export interface Settings {
   lora_roots: string[]
+  /** LoRA 管理页显示名称：model = metadata 中的模型名称，file = 本地文件名 */
+  lora_display_name: string
   comfy_url: string
   comfy_output_dir: string
   compose_order: string[]
@@ -141,6 +143,7 @@ export interface Settings {
 
 export const DEFAULT_SETTINGS: Settings = {
   lora_roots: [],
+  lora_display_name: 'model',
   comfy_url: 'http://127.0.0.1:8188',
   comfy_output_dir: '',
   compose_order: ['global', 'character', 'outfit', 'content', 'expression', 'male', 'camera', 'extra'],

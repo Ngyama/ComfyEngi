@@ -3,12 +3,19 @@
 // ComfyEngi 自己的标签、备注、角色关联、手动封面等保存在 Vault 的 loras/ 目录中。
 
 import { createHash, randomUUID } from 'node:crypto'
-import { copyFile, mkdir, open, readdir, readFile, rm, stat } from 'node:fs/promises'
+import { createReadStream } from 'node:fs'
+import { copyFile, mkdir, open, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises'
+import { Readable } from 'node:stream'
 import { dirname, extname, join, relative, resolve, sep } from 'node:path'
 import { atomic } from './file-library'
 import type { LoraResource, LoraSidecar } from '@shared/types'
 
-export const COVER_EXTS = ['.jpeg', '.jpg', '.png', '.webp']
+export const IMAGE_EXTS = ['.jpeg', '.jpg', '.png', '.webp']
+export const VIDEO_EXTS = ['.mp4']
+/** 图片优先于视频：同名同时存在时使用图片 */
+export const COVER_EXTS = [...IMAGE_EXTS, ...VIDEO_EXTS]
+export const isVideo = (p: string) => VIDEO_EXTS.includes(extname(p).toLowerCase())
+const ID_RE = /^[a-f0-9-]{36}$/i
 
 /** Windows 路径不区分大小写：用于比较 / 去重的键 */
 export const pathKey = (p: string) => {
@@ -142,6 +149,16 @@ export class LoraManager {
         rows.push(r)
       }
     return rows
+  }
+
+  /** 按 ID 直接读取单条记录（视频分段请求较频繁，避免每次读取全部记录） */
+  async get(id: string): Promise<LoraResource | null> {
+    if (!ID_RE.test(id)) return null
+    try {
+      return { ...DEFAULTS, ...(JSON.parse(await readFile(join(this.metaDir, `${id}.json`), 'utf8')) as LoraResource), missing: false }
+    } catch {
+      return null
+    }
   }
 
   async save(r: LoraResource) {
@@ -325,9 +342,9 @@ export class LoraManager {
     this.write({ ...r, preview: '' })
   }
 
-  /** 封面来源：手动封面优先，其次自动识别的同名图片。返回缩略图缓存路径与源文件信息 */
+  /** 封面来源：手动封面优先，其次自动识别的同名图片 / 视频。返回缩略图缓存路径与源文件信息 */
   async imageSource(id: string, width: number) {
-    const r = (await this.list()).find((x) => x.id === id)
+    const r = await this.get(id)
     if (!r) return null
     let source = ''
     if (r.preview && /^loras[\\/]previews[\\/][a-f0-9-]+\.image$/i.test(r.preview)) source = join(this.root, r.preview)
@@ -335,7 +352,39 @@ export class LoraManager {
     if (!source) return null
     const s = await stat(source).catch(() => null)
     if (!s) return null
-    const key = createHash('sha1').update(`${pathKey(source)}|${s.mtimeMs}|${s.size}|${width}`).digest('hex')
-    return { source, size: s.size, cache: join(this.root, '.comfyengi', 'cache', 'lora-thumbs', `${key}.jpg`) }
+    const video = isVideo(source)
+    // 视频只缓存一张静态帧（由页面抽帧后写入），与请求的宽度无关
+    const key = createHash('sha1').update(`${pathKey(source)}|${s.mtimeMs}|${s.size}|${video ? 'frame' : width}`).digest('hex')
+    return { source, size: s.size, video, cache: join(this.root, '.comfyengi', 'cache', 'lora-thumbs', `${key}.jpg`) }
+  }
+
+  /** 保存页面从视频中抽取的静态帧（JPEG），作为卡片封面缓存 */
+  async saveFrame(id: string, jpeg: Buffer) {
+    if (jpeg.length < 4 || jpeg.length > 2 * 1024 * 1024 || jpeg[0] !== 0xff || jpeg[1] !== 0xd8) throw new Error('无效的封面帧')
+    const src = await this.imageSource(id, 0)
+    if (!src?.video) throw new Error('该 LoRA 没有视频封面')
+    await mkdir(dirname(src.cache), { recursive: true })
+    await writeFile(src.cache, jpeg)
+  }
+
+  /** 以流的方式提供视频封面（支持 Range，供 <video> 播放与拖动），只允许记录中已识别的视频文件 */
+  async serveCover(id: string, range: string | null): Promise<Response> {
+    const r = await this.get(id)
+    const src = r?.cover && !r.preview && isVideo(r.cover) ? r.cover : ''
+    const s = src ? await stat(src).catch(() => null) : null
+    if (!s) return new Response('not found', { status: 404 })
+    const headers: Record<string, string> = { 'Content-Type': 'video/mp4', 'Accept-Ranges': 'bytes', 'Access-Control-Allow-Origin': '*', 'Cache-Control': 'no-cache' }
+    const stream = (start: number, end: number) => Readable.toWeb(createReadStream(src, { start, end })) as unknown as ReadableStream
+    const m = /^bytes=(\d*)-(\d*)$/.exec(range ?? '')
+    if (m && (m[1] || m[2])) {
+      let start = m[1] ? Number(m[1]) : Math.max(0, s.size - Number(m[2]))
+      let end = m[1] && m[2] ? Math.min(Number(m[2]), s.size - 1) : s.size - 1
+      if (!m[1]) end = s.size - 1
+      if (start >= s.size || start > end) return new Response(null, { status: 416, headers: { ...headers, 'Content-Range': `bytes */${s.size}` } })
+      start = Math.max(0, start)
+      return new Response(stream(start, end), { status: 206, headers: { ...headers, 'Content-Range': `bytes ${start}-${end}/${s.size}`, 'Content-Length': String(end - start + 1) } })
+    }
+    if (s.size === 0) return new Response(new Uint8Array(0), { status: 200, headers: { ...headers, 'Content-Length': '0' } })
+    return new Response(stream(0, s.size - 1), { status: 200, headers: { ...headers, 'Content-Length': String(s.size) } })
   }
 }

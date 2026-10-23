@@ -251,3 +251,58 @@ describe('LoRA Manager 本地浏览', () => {
     expect(a.sidecar?.modelName).toBe('Character A')
   })
 })
+
+describe('LoRA 视频封面', () => {
+  async function setupVideo() {
+    const loras = tempDir()
+    mkdirSync(join(loras, 'chars'), { recursive: true })
+    writeFileSync(join(loras, 'chars/V.safetensors'), safetensors())
+    writeFileSync(join(loras, 'chars/V.mp4'), Buffer.from(Array.from({ length: 1000 }, (_, i) => i % 256)))
+    writeFileSync(join(loras, 'chars/Both.safetensors'), safetensors())
+    writeFileSync(join(loras, 'chars/Both.mp4'), 'video')
+    writeFileSync(join(loras, 'chars/Both.png'), 'image')
+    const m = newManager()
+    await m.scan([loras])
+    const rows = await m.list()
+    return { loras, m, v: rows.find((r) => r.name === 'V.safetensors')!, both: rows.find((r) => r.name === 'Both.safetensors')! }
+  }
+
+  it('自动识别同名 .mp4；同时存在图片时优先使用图片', async () => {
+    const { loras, v, both } = await setupVideo()
+    expect(v.cover).toBe(join(loras, 'chars/V.mp4'))
+    expect(both.cover).toBe(join(loras, 'chars/Both.png'))
+  })
+
+  it('以流方式提供视频（支持 Range），只允许记录中的视频封面', async () => {
+    const { m, v, both } = await setupVideo()
+    const full = await m.serveCover(v.id, null)
+    expect(full.status).toBe(200)
+    expect(full.headers.get('content-type')).toBe('video/mp4')
+    expect(Buffer.from(await full.arrayBuffer())).toHaveLength(1000)
+    const part = await m.serveCover(v.id, 'bytes=100-199')
+    expect(part.status).toBe(206)
+    expect(part.headers.get('content-range')).toBe('bytes 100-199/1000')
+    expect([...Buffer.from(await part.arrayBuffer())]).toEqual(Array.from({ length: 100 }, (_, i) => (100 + i) % 256))
+    const open = await m.serveCover(v.id, 'bytes=990-')
+    expect(open.headers.get('content-range')).toBe('bytes 990-999/1000')
+    const suffix = await m.serveCover(v.id, 'bytes=-10')
+    expect(suffix.headers.get('content-range')).toBe('bytes 990-999/1000')
+    expect((await m.serveCover(v.id, 'bytes=5000-')).status).toBe(416)
+    expect((await m.serveCover(both.id, null)).status).toBe(404) // 图片封面不经过视频协议
+    expect((await m.serveCover('../../etc', null)).status).toBe(404)
+  })
+
+  it('抽帧缓存：只接受 JPEG，写入工作区缓存；视频变化后缓存失效', async () => {
+    const { loras, m, v, both } = await setupVideo()
+    const src = await m.imageSource(v.id, 360)
+    expect(src?.video).toBe(true)
+    expect((await m.imageSource(v.id, 1200))?.cache).toBe(src?.cache) // 静态帧与宽度无关
+    await expect(m.saveFrame(v.id, Buffer.from('not a jpeg'))).rejects.toThrow()
+    await expect(m.saveFrame(both.id, Buffer.from([0xff, 0xd8, 0xff, 0xd9]))).rejects.toThrow('没有视频封面')
+    await m.saveFrame(v.id, Buffer.from([0xff, 0xd8, 0xff, 0xd9]))
+    expect(readFileSync(src!.cache)).toEqual(Buffer.from([0xff, 0xd8, 0xff, 0xd9]))
+    expect(src!.cache.startsWith(m.root)).toBe(true)
+    writeFileSync(join(loras, 'chars/V.mp4'), 'changed video bytes')
+    expect((await m.imageSource(v.id, 360))?.cache).not.toBe(src?.cache)
+  })
+})

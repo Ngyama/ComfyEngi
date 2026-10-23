@@ -107,6 +107,44 @@ try {
   mkdirSync(lorasB, { recursive: true })
   writeFileSync(join(lorasB, 'Extra.safetensors'), safetensors())
   await write(join(lorasB, 'Extra.preview.png'), 'Extra', 30, 'image/png')
+  const mp4 = await win.evaluate(async () => {
+    const type = ['video/mp4;codecs=avc1', 'video/mp4'].find((t) => MediaRecorder.isTypeSupported(t))
+    if (!type) return null
+    const c = document.createElement('canvas')
+    c.width = 360
+    c.height = 480
+    const g = c.getContext('2d')
+    const rec = new MediaRecorder(c.captureStream(30), { mimeType: type })
+    const chunks = []
+    rec.ondataavailable = (e) => chunks.push(e.data)
+    rec.start()
+    const t0 = performance.now()
+    await new Promise((resolve) => {
+      const draw = () => {
+        const t = (performance.now() - t0) / 1000
+        g.fillStyle = `hsl(${(t * 200) % 360} 60% 45%)`
+        g.fillRect(0, 0, 360, 480)
+        g.fillStyle = 'white'
+        g.font = 'bold 48px sans-serif'
+        g.fillText('Dance', 100, 260)
+        if (t < 1.5) requestAnimationFrame(draw)
+        else resolve()
+      }
+      draw()
+    })
+    rec.stop()
+    await new Promise((r) => (rec.onstop = r))
+    const buf = await new Blob(chunks, { type }).arrayBuffer()
+    let bin = ''
+    const bytes = new Uint8Array(buf)
+    for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode(...bytes.subarray(i, i + 0x8000))
+    return btoa(bin)
+  })
+  check('Chromium 可以录制测试用 MP4', !!mp4)
+  mkdirSync(join(lorasA, 'motion'), { recursive: true })
+  writeFileSync(join(lorasA, 'motion', 'Dance.safetensors'), safetensors())
+  writeFileSync(join(lorasA, 'motion', 'Dance.metadata.json'), meta({ model_name: 'Dance Motion', base_model: 'Illustrious' }))
+  writeFileSync(join(lorasA, 'motion', 'Dance.mp4'), Buffer.from(mp4 ?? '', 'base64'))
   const before = { ...snapshot(lorasA), ...snapshot(lorasB) }
 
   // 文件夹选择对话框：直接返回两个根目录
@@ -119,12 +157,52 @@ try {
   await shot('l00-empty')
   await win.locator('button', { hasText: '添加 LoRA 目录' }).last().click()
   const cards = win.locator('[data-testid=lora-card]')
-  await win.waitForFunction(() => document.querySelectorAll('[data-testid=lora-card]').length === 7, null, { timeout: 15000 })
-  check('两个根目录共扫描到 7 个 LoRA', (await cards.count()) === 7)
-  await win.waitForTimeout(1200)
+  await win.waitForFunction(() => document.querySelectorAll('[data-testid=lora-card]').length === 8, null, { timeout: 15000 })
+  check('两个根目录共扫描到 8 个 LoRA', (await cards.count()) === 8)
+  await win.waitForFunction(() => document.querySelectorAll('[data-testid=lora-card] img').length === 6, null, { timeout: 20000 }).catch(() => {})
   await shot('l01-all')
   const coverCount = await win.locator('[data-testid=lora-card] img').count()
-  check('有封面的 LoRA 显示封面（JPEG / PNG / WebP / .preview.png）', coverCount === 5, `${coverCount} 张封面`)
+  check('有封面的 LoRA 显示封面（JPEG / PNG / WebP / .preview.png / MP4 静态帧）', coverCount === 6, `${coverCount} 张封面`)
+  check('默认不播放任何视频', (await win.locator('video').count()) === 0)
+  const thumbs = () => {
+    try {
+      return readdirSync(join(dataDir, 'vault', '.comfyengi', 'cache', 'lora-thumbs')).length
+    } catch {
+      return 0
+    }
+  }
+  check('MP4 静态帧已缓存到工作区', thumbs() > 0, `${thumbs()} 个缓存文件`)
+
+  // 悬停播放 / 移开停止
+  const dance = win.locator('[data-testid=lora-card]', { hasText: 'Dance' })
+  await dance.hover()
+  await win.waitForSelector('[data-testid=lora-hover-video]', { timeout: 5000 }).catch(() => {})
+  await win.waitForTimeout(800)
+  const playing = await win.evaluate(() => {
+    const v = document.querySelector('[data-testid=lora-hover-video]')
+    return v ? { paused: v.paused, muted: v.muted, loop: v.loop, t: v.currentTime } : null
+  })
+  check('悬停时静音循环播放视频', !!playing && !playing.paused && playing.muted && playing.loop && playing.t > 0, JSON.stringify(playing))
+  await shot('l01b-hover-video')
+  await win.mouse.move(5, 500)
+  await win.waitForTimeout(300)
+  check('移开后停止并恢复静态封面', (await win.locator('video').count()) === 0 && (await dance.locator('img').count()) === 1)
+  await win.locator('[data-testid=lora-card]', { hasText: 'Alice' }).hover()
+  await win.waitForTimeout(500)
+  check('悬停图片封面不会加载视频', (await win.locator('video').count()) === 0)
+
+  // 详情中播放视频
+  await dance.click()
+  await win.getByRole('button', { name: '播放视频封面' }).click()
+  await win.waitForFunction(() => (document.querySelector('[data-testid=lora-detail-video]')?.readyState ?? 0) >= 2, null, { timeout: 8000 }).catch(() => {})
+  const detailVideo = await win.evaluate(() => {
+    const v = document.querySelector('[data-testid=lora-detail-video]')
+    return v ? { ready: v.readyState, controls: v.controls, w: v.videoWidth } : null
+  })
+  check('详情面板可以播放视频（带控件）', !!detailVideo && detailVideo.ready >= 2 && detailVideo.controls && detailVideo.w === 360, JSON.stringify(detailVideo))
+  await shot('l01c-detail-video')
+  await win.getByRole('button', { name: '关闭' }).last().click()
+  await win.waitForTimeout(300)
 
   // 文件夹导航
   await win.locator('button', { hasText: /^characters/ }).first().click()
@@ -189,6 +267,27 @@ try {
   const opts = await win.locator('select option').allInnerTexts()
   check('角色库可以从 LoRA Manager 添加资源', opts.some((o) => o.includes('Alice')))
 
+  // 显示名称切换
+  await win.locator('nav button', { hasText: 'LoRA' }).click()
+  await win.waitForTimeout(500)
+  const titles = async () => (await cards.locator('div.truncate.font-medium').allInnerTexts()).join(',')
+  check('默认显示模型名称', (await titles()).includes('Alice - Illustrious'))
+  await win.getByRole('button', { name: '文件名称', exact: true }).click()
+  await win.waitForTimeout(500)
+  check('切换为文件名称（不含扩展名）', (await titles()).includes('Alice') && !(await titles()).includes('Alice - Illustrious') && !(await titles()).includes('.safetensors'), await titles())
+  check('名称排序随显示名称切换', (await titles()).split(',')[0] === 'Alice', await titles())
+  await win.locator('input[placeholder="搜索名称、标签、触发词…"]').fill('Night City')
+  await win.waitForTimeout(300)
+  const byModel = await cards.count()
+  await win.locator('input[placeholder="搜索名称、标签、触发词…"]').fill('Dance Motion')
+  await win.waitForTimeout(300)
+  check('文件名称模式下仍可按模型名称搜索', byModel === 1 && (await cards.count()) === 1)
+  await win.locator('input[placeholder="搜索名称、标签、触发词…"]').fill('')
+  await win.locator('[data-testid=lora-card]', { hasText: 'Alice' }).click()
+  await win.waitForTimeout(400)
+  check('详情标题同步切换', (await win.locator('h2').last().innerText()) === 'Alice')
+  await shot('l06-file-names')
+
   await setSize(1280, 760)
   await win.locator('nav button', { hasText: 'LoRA' }).click()
   await win.locator('[data-testid=lora-card]', { hasText: 'Alice' }).click()
@@ -200,6 +299,21 @@ try {
   check('脚本执行', false, String(e).slice(0, 300))
 } finally {
   await app.close().catch(() => {})
+}
+
+// 重启后显示名称选择保持（保存在工作区）
+try {
+  const app2 = await electron.launch({ args: [root], cwd: root, env: { ...env, COMFYENGI_IMPORT_LEGACY: '' } })
+  const w2 = await app2.firstWindow()
+  await w2.waitForSelector('nav')
+  await w2.locator('nav button', { hasText: 'LoRA' }).click()
+  await w2.waitForSelector('[data-testid=lora-card]', { timeout: 15000 })
+  const active = await w2.getByRole('button', { name: '文件名称', exact: true }).getAttribute('data-active')
+  const t2 = (await w2.locator('[data-testid=lora-card] div.truncate.font-medium').allInnerTexts()).join(',')
+  check('重启后保持「文件名称」选择', active !== null && t2.includes('Alice') && !t2.includes('Alice - Illustrious'), t2)
+  await app2.close()
+} catch (e) {
+  check('重启检查', false, String(e).slice(0, 200))
 }
 console.log(`\n截图：${shots}`)
 const failed = results.filter((x) => !x).length

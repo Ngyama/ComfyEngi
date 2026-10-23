@@ -5,7 +5,8 @@ import { createVault, openVault } from './vault'
 
 import { appendFileSync, mkdirSync } from 'node:fs'
 import { join } from 'node:path'
-import { app, BrowserWindow, dialog, shell } from 'electron'
+import { app, BrowserWindow, dialog, protocol, shell } from 'electron'
+import { LoraManager } from './lora-manager'
 import { RUNNER_EVENT_CHANNEL } from '@shared/api'
 import type { RunnerEvent } from '@shared/types'
 import { registerIpc } from './ipc'
@@ -34,6 +35,9 @@ const logError = (e: unknown) => {
 }
 process.on('uncaughtException', logError)
 process.on('unhandledRejection', logError)
+
+// LoRA 视频封面：以流方式按需读取（支持 Range），避免通过 IPC 传输完整视频
+protocol.registerSchemesAsPrivileged([{ scheme: 'comfyengi-media', privileges: { standard: true, secure: true, supportFetchAPI: true, stream: true, corsEnabled: true } }])
 
 if (!app.requestSingleInstanceLock()) {
   app.quit()
@@ -120,6 +124,12 @@ if (!app.requestSingleInstanceLock()) {
       store = new Store(':memory:')
     }
     runner = new Runner(store, { onEvent: send })
+    protocol.handle('comfyengi-media', (req) => {
+      const u = new URL(req.url)
+      const id = decodeURIComponent(u.pathname.replace(/^\//, ''))
+      if (u.host !== 'lora' || !store.files) return new Response('not found', { status: 404 })
+      return new LoraManager(store.files.root).serveCover(id, req.headers.get('range'))
+    })
     registerIpc({ store, runner, dataDir: vaultRoot || dataDir, backupDir, logs, window: () => win,
       chooseVault: async (create,migrate) => {
         const r=await dialog.showOpenDialog(win!,{title:create?'创建工作区（选择空目录）':'打开工作区',properties:['openDirectory','createDirectory']})
