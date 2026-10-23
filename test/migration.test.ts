@@ -9,6 +9,7 @@ import { planForTask } from '../src/main/plan'
 import { SCHEMA_VERSION, Store } from '../src/main/store'
 import { tempDir } from './helpers'
 import { normalizedOrder } from '@shared/prompt'
+import { DEFAULT_SETTINGS } from '@shared/types'
 
 const FIX = join(__dirname, 'fixtures')
 const expected = JSON.parse(readFileSync(join(FIX, 'legacy-v0.expected.json'), 'utf8'))
@@ -59,7 +60,8 @@ describe('旧数据库迁移', () => {
 
   it('设置、执行队列与运行记录原样读取', () => {
     const { store } = openLegacy()
-    expect(store.settings()).toEqual({ lora_roots: [], lora_display_name: 'model', ...expected.settings, compose_order: normalizedOrder(expected.settings.compose_order) })
+    expect(store.settings()).toEqual({ lora_roots: [], lora_display_name: 'model', ...expected.settings, compose_order: DEFAULT_SETTINGS.compose_order }) // 旧版默认顺序（未自定义）升级为新默认顺序
+    expect(normalizedOrder(expected.settings.compose_order)).not.toEqual(DEFAULT_SETTINGS.compose_order)
     const runs = store.listRuns(true)
     expect(runs.map((r) => [r.id, r.name, r.status, r.counts])).toEqual(expected.runs.map((r: { id: number; name: string; status: string; counts: unknown }) => [r.id, r.name, r.status, r.counts]))
     expect(store.listUnits(runs[0].id)).toEqual(expected.units)
@@ -72,7 +74,8 @@ describe('旧数据库迁移', () => {
   it('新版对旧任务计算出的生成计划与旧版完全一致（Prompt、Seed、写入节点的值）', () => {
     const { store } = openLegacy()
     for (const [tid, exp] of Object.entries(expected.plans) as [string, { errors: string[]; warnings: string[]; units: Record<string, unknown>[] }][]) {
-      const plan = planForTask(store, store.get('tasks', Number(tid))!, undefined, '20260101')
+      // 组合顺序按需求改为新的默认顺序；这里用旧版顺序计算，验证内容（各模块、Seed、写入值）与旧版完全一致
+      const plan = planForTask(store, store.get('tasks', Number(tid))!, { ...store.settings(), compose_order: expected.settings.compose_order }, '20260101')
       expect(plan.errors).toEqual(exp.errors)
       expect(plan.warnings).toEqual(exp.warnings)
       expect(plan.units.length).toBe(exp.units.length)

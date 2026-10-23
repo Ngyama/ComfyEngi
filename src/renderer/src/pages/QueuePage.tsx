@@ -36,7 +36,7 @@ const UNIT_STATUS: Record<string, [string, string]> = {
 
 function Bar({ value, max, className }: { value: number; max: number; className?: string }) {
   return (
-    <div className={cn('h-1.5 overflow-hidden rounded-full bg-white/[0.06]', className)}>
+    <div className={cn('h-1.5 overflow-hidden rounded-full bg-tint/[0.06]', className)}>
       <div className="h-full rounded-full bg-primary transition-all duration-300" style={{ width: max ? `${Math.min(100, (value / max) * 100)}%` : '0%' }} />
     </div>
   )
@@ -56,7 +56,7 @@ function StatusCard({ runs, onStart }: { runs: Run[]; onStart: () => void }) {
   const cur = status.current
   const p = status.progress
   return (
-    <div className="mx-6 rounded-2xl bg-card p-5 ring-1 ring-white/[0.05]">
+    <div className="mx-6 rounded-2xl bg-card p-5 ring-1 ring-tint/[0.08]">
       <div className="flex items-start gap-4">
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2">
@@ -168,7 +168,7 @@ function RunCard({ run, expanded, onToggle, onChanged }: { run: Run; expanded: b
   const total = c.total - (c.skipped ?? 0)
   const statusText = { queued: c.done || c.failed ? '执行中' : '排队中', done: '已完成', removed: '已移出' }[run.status]
   return (
-    <div ref={s.setNodeRef} style={s.style} className={cn('rounded-xl bg-card ring-1 ring-white/[0.05]', s.isDragging && 'shadow-2xl shadow-black/50')}>
+    <div ref={s.setNodeRef} style={s.style} className={cn('rounded-xl bg-card ring-1 ring-tint/[0.08]', s.isDragging && 'shadow-2xl shadow-tint/15')}>
       <div className="flex items-center gap-3 px-3 py-3">
         <button type="button" {...s.attributes} {...s.listeners} className="cursor-grab text-muted-foreground/50 hover:text-muted-foreground" aria-label="拖动排序">
           <GripVertical className="size-4" />
@@ -235,12 +235,12 @@ function RunCard({ run, expanded, onToggle, onChanged }: { run: Run; expanded: b
         </DropdownMenu>
       </div>
       {expanded && (
-        <div className="max-h-80 overflow-y-auto border-t border-white/[0.05] px-3 py-2">
+        <div className="max-h-80 overflow-y-auto border-t border-tint/[0.08] px-3 py-2">
           {units.map((u) => {
             const [t, cls] = UNIT_STATUS[u.status] ?? [u.status, '']
             const files = u.outputs?.filter((o) => o.type === 'output').map((o) => o.filename).join(', ')
             return (
-              <div key={u.id} className="flex items-center gap-3 rounded-md px-2 py-1.5 text-xs hover:bg-white/[0.03]">
+              <div key={u.id} className="flex items-center gap-3 rounded-md px-2 py-1.5 text-xs hover:bg-tint/[0.03]">
                 <span className="w-10 shrink-0 text-muted-foreground tabular-nums">#{u.idx + 1}</span>
                 <span className="w-40 shrink-0 truncate">
                   {u.item_label}
@@ -276,7 +276,7 @@ function AddTasksDialog({ open, onOpenChange, onDone }: { open: boolean; onOpenC
         </DialogHeader>
         <div className="max-h-80 space-y-1 overflow-y-auto">
           {tasks.map((t) => (
-            <label key={t.id} className="flex cursor-pointer items-center gap-3 rounded-lg px-2.5 py-2 hover:bg-white/[0.04]">
+            <label key={t.id} className="flex cursor-pointer items-center gap-3 rounded-lg px-2.5 py-2 hover:bg-tint/[0.04]">
               <Checkbox checked={picked.includes(t.id)} onCheckedChange={(v) => setPicked((p) => (v ? [...p, t.id] : p.filter((x) => x !== t.id)))} />
               <span className="text-[13px]">{t.name}</span>
               {picked.includes(t.id) && <span className="ml-auto text-[11px] text-muted-foreground">第 {picked.indexOf(t.id) + 1} 个</span>}
@@ -389,14 +389,14 @@ export default function QueuePage() {
           <EmptyState icon={<ListPlus />} title="队列是空的" description="在「套图任务」中点击「加入队列」或「开始生成」，或者从已保存的任务中添加。" action={<Button variant="secondary" onClick={() => setAdding(true)}>添加任务</Button>} />
         )}
       </div>
-      <div className="border-t border-white/[0.05]">
+      <div className="border-t border-tint/[0.08]">
         <button type="button" onClick={() => setLogOpen(!logOpen)} className="flex w-full items-center gap-2 px-6 py-2.5 text-xs text-muted-foreground hover:text-foreground">
           <Terminal className="size-3.5" /> 运行日志
           <span className="truncate opacity-70">{logs[logs.length - 1] ?? ''}</span>
           <span className="ml-auto">{logOpen ? <ChevronDown className="size-3.5" /> : <ChevronRight className="size-3.5" />}</span>
         </button>
         {logOpen && (
-          <pre className="mx-6 mb-3 max-h-56 overflow-y-auto rounded-xl bg-black/30 p-3 font-mono text-[11.5px] leading-relaxed whitespace-pre-wrap text-muted-foreground select-text">
+          <pre className="mx-6 mb-3 max-h-56 overflow-y-auto rounded-xl bg-inset p-3 font-mono text-[11.5px] leading-relaxed whitespace-pre-wrap text-muted-foreground select-text">
             {logs.length ? logs.join('\n') : '暂无日志'}
           </pre>
         )}

@@ -34,7 +34,7 @@ export function Select({ value, onChange, options, className }: { value: string;
     <select
       value={value}
       onChange={(e) => onChange(e.target.value)}
-      className={cn('h-8 min-w-0 rounded-lg bg-white/[0.045] px-2 text-[12.5px] ring-1 ring-white/[0.07] outline-none focus:ring-primary/50', className)}
+      className={cn('h-8 min-w-0 rounded-lg bg-tint/[0.045] px-2 text-[12.5px] ring-1 ring-tint/[0.112] outline-none focus:ring-primary/50', className)}
     >
       {options.map(([v, l]) => (
         <option key={v} value={v} className="bg-popover">
@@ -57,7 +57,7 @@ function SuggestDialog({ open, onOpenChange, suggestions, onApply }: { open: boo
         </DialogHeader>
         <div className="max-h-96 space-y-1 overflow-y-auto">
           {suggestions.map((s, i) => (
-            <label key={i} className="flex cursor-pointer items-start gap-3 rounded-lg px-2.5 py-2 hover:bg-white/[0.04]">
+            <label key={i} className="flex cursor-pointer items-start gap-3 rounded-lg px-2.5 py-2 hover:bg-tint/[0.04]">
               <Checkbox className="mt-0.5" checked={!!checked[i]} onCheckedChange={(v) => setChecked((c) => c.map((x, j) => (j === i ? !!v : x)))} />
               <div className="min-w-0 text-[13px]">
                 <div>
@@ -96,14 +96,14 @@ function ModulesPicker({ value, onChange }: { value: string[]; onChange: (v: str
   return (
     <Popover>
       <PopoverTrigger asChild>
-        <button type="button" className="h-8 min-w-0 truncate rounded-lg bg-white/[0.045] px-2.5 text-left text-[12px] ring-1 ring-white/[0.07] hover:bg-white/[0.07]">
+        <button type="button" className="h-8 min-w-0 truncate rounded-lg bg-tint/[0.045] px-2.5 text-left text-[12px] ring-1 ring-tint/[0.112] hover:bg-tint/[0.07]">
           {value.length ? value.map((m) => MODULE_LABELS[m] ?? m).join('、') : '完整 Prompt（全部模块）'}
         </button>
       </PopoverTrigger>
       <PopoverContent className="w-64 space-y-1 p-2" align="start">
         <div className="px-1.5 pb-1.5 text-[11px] leading-relaxed text-muted-foreground">只把勾选的模块拼接到这个输入（按组合顺序）。全部不勾选 = 完整 Prompt。</div>
         {MODULES.map(([k, l]) => (
-          <label key={k} className="flex cursor-pointer items-center gap-2.5 rounded-md px-1.5 py-1.5 text-[13px] hover:bg-white/[0.05]">
+          <label key={k} className="flex cursor-pointer items-center gap-2.5 rounded-md px-1.5 py-1.5 text-[13px] hover:bg-tint/[0.05]">
             <Checkbox checked={value.includes(k)} onCheckedChange={(v) => onChange(v ? [...value, k] : value.filter((x) => x !== k))} />
             {l}
           </label>
@@ -171,7 +171,7 @@ export function WorkflowEditor({ id, onDeleted }: { id: number; onDeleted: () =>
             await call(api['workflows.save']({ id: wf.id, _revision: wf._revision, name: wf.name.trim() || '未命名工作流' }))
             await reloadLib()
           }}
-          className="min-w-0 flex-1 rounded-md bg-transparent text-[15px] font-semibold outline-none hover:bg-white/[0.03] focus:bg-white/[0.05]"
+          className="min-w-0 flex-1 rounded-md bg-transparent text-[15px] font-semibold outline-none hover:bg-tint/[0.03] focus:bg-tint/[0.05]"
         />
         <span className="text-xs text-muted-foreground">{ids.length} 个节点</span>
         <Button
@@ -254,7 +254,7 @@ export function WorkflowEditor({ id, onDeleted }: { id: number; onDeleted: () =>
               if (!e.input) inputs.unshift(['', '选择输入'])
               const nodeOpts = e.node && !node ? [...nodeOptions, [e.node, `${e.node}（不存在）`] as [string, string]] : nodeOptions
               return (
-                <div key={i} className="rounded-xl bg-white/[0.03] p-2.5 ring-1 ring-white/[0.05]">
+                <div key={i} className="rounded-xl bg-tint/[0.03] p-2.5 ring-1 ring-tint/[0.08]">
                   <div className="grid grid-cols-[150px_minmax(0,1fr)_140px_28px] items-center gap-2">
                     <Select value={e.source} onChange={(v) => setEntry(i, { source: v })} options={SOURCES} />
                     <Select value={e.node} onChange={(v) => setEntry(i, { node: v })} options={nodeOpts} />
@@ -288,12 +288,12 @@ export function WorkflowEditor({ id, onDeleted }: { id: number; onDeleted: () =>
               )
             })}
             {!mapping.length && (
-              <div className="rounded-xl border border-dashed border-white/[0.1] p-6 text-center text-xs leading-relaxed text-muted-foreground">
+              <div className="rounded-xl border border-dashed border-tint/[0.16] p-6 text-center text-xs leading-relaxed text-muted-foreground">
                 还没有映射。点击「自动识别」查看候选，或在右侧节点列表中点击某个输入添加。
               </div>
             )}
           </div>
-          <div className="mt-3 max-h-40 space-y-1 overflow-y-auto rounded-xl bg-black/20 p-3 text-xs">
+          <div className="mt-3 max-h-40 space-y-1 overflow-y-auto rounded-xl bg-inset p-3 text-xs">
             {!allMsgs.length ? (
               <div className="flex items-center gap-1.5 text-success">
                 <CheckCircle2 className="size-3.5" /> {online ? '联网校验通过：节点类型均已安装，所有角色的 LoRA 名称都存在' : '映射有效'}
@@ -313,7 +313,7 @@ export function WorkflowEditor({ id, onDeleted }: { id: number; onDeleted: () =>
         <div className="flex w-[300px] shrink-0 flex-col">
           <FieldLabel hint="点击输入添加为映射">工作流节点</FieldLabel>
           <SearchBox value={q} onChange={setQ} placeholder="搜索节点 ID、类型或输入…" className="mb-2" />
-          <div className="min-h-0 flex-1 overflow-y-auto rounded-xl bg-white/[0.02] p-1 ring-1 ring-white/[0.05]">
+          <div className="min-h-0 flex-1 overflow-y-auto rounded-xl bg-tint/[0.02] p-1 ring-1 ring-tint/[0.08]">
             {shownIds.map((nid) => {
               const n = api_json[nid]
               const open = openNodes.has(nid) || !!q
@@ -323,7 +323,7 @@ export function WorkflowEditor({ id, onDeleted }: { id: number; onDeleted: () =>
                   <button
                     type="button"
                     onClick={() => setOpenNodes((s) => (s.has(nid) ? new Set([...s].filter((x) => x !== nid)) : new Set([...s, nid])))}
-                    className="flex w-full items-center gap-1.5 rounded-md px-2 py-1.5 text-left text-xs hover:bg-white/[0.04]"
+                    className="flex w-full items-center gap-1.5 rounded-md px-2 py-1.5 text-left text-xs hover:bg-tint/[0.04]"
                   >
                     {open ? <ChevronDown className="size-3 text-muted-foreground" /> : <ChevronRight className="size-3 text-muted-foreground" />}
                     <span className="w-7 shrink-0 font-mono text-muted-foreground">{nid}</span>

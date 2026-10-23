@@ -1,32 +1,49 @@
-// 主界面使用的快捷选择器：角色、剧情、姿态。
+// 主界面使用的快捷选择器：角色（主角色 / 第二角色）、剧情、动作。
 
 import { useEffect, useMemo, useState } from 'react'
 import { BookOpen, Check, Dices, Plus, Shirt, Sparkles, Users } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Avatar, Chip, EmptyState, FieldLabel, SearchBox } from '@/components/common'
-import { hueOf, matches } from '@/lib/hooks'
+import { hueOf, matchesName } from '@/lib/hooks'
 import { templatesOf, useLib, useNav } from '@/lib/stores'
 import { cn } from '@/lib/utils'
 import { pickRandomStory } from '@shared/planner'
 import type { Story } from '@shared/types'
 
 // ---------------------------------------------------------------- 角色
-export function CharacterPicker({ open, onOpenChange, value, onPick }: { open: boolean; onOpenChange: (o: boolean) => void; value: number | null; onPick: (id: number) => void }) {
+export function CharacterPicker({
+  open,
+  onOpenChange,
+  value,
+  onPick,
+  title = '选择角色',
+  description = '角色的基础 Prompt、LoRA 和服装模板会自动载入。',
+  onClear,
+}: {
+  open: boolean
+  onOpenChange: (o: boolean) => void
+  value: number | null
+  onPick: (id: number) => void
+  title?: string
+  description?: string
+  /** 提供时显示「不使用」按钮（第二角色可不选择） */
+  onClear?: () => void
+}) {
   const lib = useLib((s) => s.lib)
   const go = useNav((s) => s.go)
   const [q, setQ] = useState('')
   useEffect(() => setQ(''), [open])
-  const chars = (lib?.characters ?? []).filter((c) => !q || matches(c as never, q))
+  const chars = (lib?.characters ?? []).filter((c) => matchesName(c, q))
   const outfitCount = (id: number) => (lib?.outfits ?? []).filter((o) => o.character_id === id).length
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="flex max-h-[80vh] flex-col gap-4 sm:max-w-2xl">
         <DialogHeader>
-          <DialogTitle>选择角色</DialogTitle>
-          <DialogDescription>角色的基础 Prompt、LoRA 和服装模板会自动载入。</DialogDescription>
+          <DialogTitle>{title}</DialogTitle>
+          <DialogDescription>{description}</DialogDescription>
         </DialogHeader>
-        <SearchBox value={q} onChange={setQ} placeholder="搜索角色名称、标签或 Prompt…" autoFocus />
+        <SearchBox value={q} onChange={setQ} placeholder="搜索角色名称…" autoFocus />
         <div className="-mx-1 grid min-h-0 flex-1 grid-cols-2 gap-2 overflow-y-auto px-1 pb-1">
           {chars.map((c) => (
             <button
@@ -37,7 +54,7 @@ export function CharacterPicker({ open, onOpenChange, value, onPick }: { open: b
                 onOpenChange(false)
               }}
               className={cn(
-                'flex items-center gap-3 rounded-xl bg-card p-3 text-left ring-1 ring-white/[0.05] transition hover:bg-accent',
+                'flex items-center gap-3 rounded-xl bg-card p-3 text-left ring-1 ring-tint/[0.08] transition hover:bg-accent',
                 value === c.id && 'ring-primary/60',
               )}
             >
@@ -61,6 +78,11 @@ export function CharacterPicker({ open, onOpenChange, value, onPick }: { open: b
           <Button variant="ghost" onClick={() => (onOpenChange(false), go('characters'))}>
             <Users /> 管理角色库
           </Button>
+          {onClear && value !== null && (
+            <Button variant="secondary" onClick={() => (onClear(), onOpenChange(false))}>
+              不使用第二角色
+            </Button>
+          )}
         </DialogFooter>
       </DialogContent>
     </Dialog>
@@ -115,7 +137,7 @@ export function StoryPicker({
                 type="button"
                 onClick={() => setGenre(g)}
                 data-active={genre === g || undefined}
-                className="flex h-8 items-center justify-between rounded-lg px-2.5 text-[13px] text-muted-foreground hover:bg-white/[0.05] data-[active]:bg-white/[0.08] data-[active]:text-foreground"
+                className="flex h-8 items-center justify-between rounded-lg px-2.5 text-[13px] text-muted-foreground hover:bg-tint/[0.05] data-[active]:bg-tint/[0.08] data-[active]:text-foreground"
               >
                 <span className="truncate">{g || '未分类'}</span>
                 <span className="text-[11px] opacity-60">{stories.filter((s) => (s.genre ?? '') === g).length}</span>
@@ -144,7 +166,7 @@ export function StoryPicker({
               <button
                 type="button"
                 onClick={() => onPick(null)}
-                className={cn('flex flex-col justify-center gap-1 rounded-xl border border-dashed border-white/[0.1] p-3 text-left hover:bg-white/[0.03]', !storyId && 'border-primary/60 text-primary')}
+                className={cn('flex flex-col justify-center gap-1 rounded-xl border border-dashed border-tint/[0.16] p-3 text-left hover:bg-tint/[0.03]', !storyId && 'border-primary/60 text-primary')}
               >
                 <div className="text-[13px]">不使用剧情</div>
                 <span className="text-[11px] text-muted-foreground">直接从动作序列开始</span>
@@ -154,7 +176,7 @@ export function StoryPicker({
                   key={s.id}
                   type="button"
                   onClick={() => onPick(s.id)}
-                  className={cn('rounded-xl bg-card p-3 text-left ring-1 ring-white/[0.05] hover:bg-accent', storyId === s.id && 'ring-primary/60')}
+                  className={cn('rounded-xl bg-card p-3 text-left ring-1 ring-tint/[0.08] hover:bg-accent', storyId === s.id && 'ring-primary/60')}
                 >
                   <div className="flex items-center gap-2">
                     <BookOpen className="size-3.5 text-muted-foreground" />
@@ -166,7 +188,7 @@ export function StoryPicker({
                   </div>
                   <div className="mt-2 flex flex-wrap gap-1">
                     {(s.scenes ?? []).slice(0, 6).map((sc, i) => (
-                      <span key={i} className="rounded-md bg-white/[0.05] px-1.5 py-0.5 text-[10.5px] text-muted-foreground">
+                      <span key={i} className="rounded-md bg-tint/[0.05] px-1.5 py-0.5 text-[10.5px] text-muted-foreground">
                         {i + 1}. {sc.name}
                       </span>
                     ))}
@@ -176,7 +198,7 @@ export function StoryPicker({
               ))}
             </div>
             {storyId && (
-              <div className="rounded-xl bg-white/[0.025] p-3 ring-1 ring-white/[0.05]">
+              <div className="rounded-xl bg-tint/[0.025] p-3 ring-1 ring-tint/[0.08]">
                 <FieldLabel hint="剧情场景统一使用的服装（可不选）">
                   <span className="inline-flex items-center gap-1">
                     <Shirt className="size-3" /> 剧情服装
@@ -215,13 +237,11 @@ export type NewAction = { pose_id: number } | { position_id: number; subposition
 export function PosePicker({ open, onOpenChange, onAdd, insertAfter }: { open: boolean; onOpenChange: (o: boolean) => void; onAdd: (items: NewAction[]) => void; insertAfter: number | null }) {
   const lib = useLib((s) => s.lib)
   const go = useNav((s) => s.go)
-  const poses = templatesOf(lib, 'pose').filter((p) => (p.target ?? 'any') !== 'male')
+  const poses = templatesOf(lib, 'pose')
   const positions = templatesOf(lib, 'position')
   const subs = templatesOf(lib, 'subposition')
   const [mode, setMode] = useState<'single' | 'duo'>('single')
-  const cats = useMemo(() => [...new Set(poses.map((p) => p.category).filter(Boolean))].sort(), [poses])
   const [q, setQ] = useState('')
-  const [cat, setCat] = useState<string | null>(null)
   const [picked, setPicked] = useState<string[]>([])
   useEffect(() => {
     if (open) {
@@ -229,8 +249,8 @@ export function PosePicker({ open, onOpenChange, onAdd, insertAfter }: { open: b
       setPicked([])
     }
   }, [open])
-  const list = poses.filter((p) => (!cat || p.category === cat) && (!q || matches(p as never, q)))
-  const posList = positions.filter((p) => !q || matches(p as never, q) || subs.some((s) => s.parent_id === p.id && matches(s as never, q)))
+  const list = poses.filter((p) => matchesName(p, q))
+  const posList = positions.filter((p) => matchesName(p, q) || subs.some((s) => s.parent_id === p.id && matchesName(s, q)))
   const toggle = (key: string) => setPicked((p) => (p.includes(key) ? p.filter((x) => x !== key) : [...p, key]))
   const toAction = (key: string): NewAction => {
     const [k, a, b] = key.split(':')
@@ -260,32 +280,20 @@ export function PosePicker({ open, onOpenChange, onAdd, insertAfter }: { open: b
           </DialogDescription>
         </DialogHeader>
         <div className="flex items-center gap-3">
-          <div className="flex rounded-xl bg-white/[0.04] p-1">
+          <div className="flex rounded-xl bg-tint/[0.04] p-1">
             {(
               [
                 ['single', '单人动作'],
                 ['duo', '双人互动'],
               ] as const
             ).map(([k, l]) => (
-              <button key={k} type="button" onClick={() => setMode(k)} data-active={mode === k || undefined} className="h-7 rounded-lg px-3 text-[12.5px] text-muted-foreground data-[active]:bg-white/[0.09] data-[active]:text-foreground">
+              <button key={k} type="button" onClick={() => setMode(k)} data-active={mode === k || undefined} className="h-7 rounded-lg px-3 text-[12.5px] text-muted-foreground data-[active]:bg-tint/[0.09] data-[active]:text-foreground">
                 {l}
               </button>
             ))}
           </div>
-          <SearchBox value={q} onChange={setQ} placeholder="搜索名称、标签或 Prompt…" autoFocus className="flex-1" />
+          <SearchBox value={q} onChange={setQ} placeholder="搜索名称…" autoFocus className="flex-1" />
         </div>
-        {mode === 'single' && cats.length > 0 && (
-          <div className="flex flex-wrap gap-1.5">
-            <Chip active={!cat} onClick={() => setCat(null)}>
-              全部
-            </Chip>
-            {cats.map((c) => (
-              <Chip key={c} active={cat === c} onClick={() => setCat(cat === c ? null : c)}>
-                {c}
-              </Chip>
-            ))}
-          </div>
-        )}
         <div className="grid min-h-0 flex-1 auto-rows-min grid-cols-3 gap-2 overflow-y-auto pb-1">
           {mode === 'single' &&
             list.map((p) => (
@@ -294,19 +302,18 @@ export function PosePicker({ open, onOpenChange, onAdd, insertAfter }: { open: b
                 type="button"
                 onClick={() => toggle(`p:${p.id}`)}
                 onDoubleClick={() => commit([`p:${p.id}`])}
-                className={cn('relative rounded-xl bg-card p-3 text-left ring-1 ring-white/[0.05] transition hover:bg-accent', picked.includes(`p:${p.id}`) && 'bg-primary/10 ring-primary/50')}
+                className={cn('relative rounded-xl bg-card p-3 text-left ring-1 ring-tint/[0.08] transition hover:bg-accent', picked.includes(`p:${p.id}`) && 'bg-primary/10 ring-primary/50')}
               >
                 <Badge k={`p:${p.id}`} />
                 <div className="truncate pr-6 text-[13px] font-medium">{p.name || '（未命名）'}</div>
                 <div className="mt-1 line-clamp-2 font-mono text-[11px] leading-snug text-muted-foreground">{p.positive || '—'}</div>
-                <div className="mt-2 text-[10.5px] text-muted-foreground/80">{p.category || '待分类'}</div>
               </button>
             ))}
           {mode === 'duo' &&
             posList.map((p) => {
               const kids = subs.filter((s) => s.parent_id === p.id)
               return (
-                <div key={p.id} className={cn('relative rounded-xl bg-card p-3 ring-1 ring-white/[0.05]', picked.includes(`d:${p.id}`) && 'bg-primary/10 ring-primary/50')}>
+                <div key={p.id} className={cn('relative rounded-xl bg-card p-3 ring-1 ring-tint/[0.08]', picked.includes(`d:${p.id}`) && 'bg-primary/10 ring-primary/50')}>
                   <Badge k={`d:${p.id}`} />
                   <button type="button" className="block w-full text-left" onClick={() => toggle(`d:${p.id}`)} onDoubleClick={() => commit([`d:${p.id}`])}>
                     <div className="truncate pr-6 text-[13px] font-medium">{p.name || '（未命名）'}</div>

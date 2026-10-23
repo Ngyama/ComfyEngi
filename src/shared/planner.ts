@@ -1,5 +1,6 @@
-// 任务计划：把一套图（剧情场景 + 姿态序列）展开为确定的逐张生成单元，并分配 Seed。
-// 执行顺序固定：剧情模板中的场景（按模板顺序）→ 用户排列的姿态序列（按用户顺序）。
+// 任务计划：把一套图（剧情场景 + 动作序列）展开为确定的逐张生成单元，并分配 Seed。
+// 执行顺序固定：剧情模板中的场景（按模板顺序）→ 用户排列的动作序列（按用户顺序）。
+// 主角色（character_id）与可选的第二角色（second_character_id）来自同一个角色库；第二角色按动作启用。
 // 多表情时按选择顺序依次生成，每个表情张数相同；不能整除时报错，由用户修改张数。
 
 import { compose, fillPlaceholders, joinParts, unescapeSeparator } from './prompt'
@@ -36,12 +37,16 @@ export function newItem(poseId: number | null = null, outfitId: number | null = 
     male_pose_ids: [],
     male_expression_ids: [],
     scene_id: null,
+    second_enabled: false,
+    second_outfit_id: null,
+    second_pose_id: null,
+    second_expression_id: null,
   }
 }
 
-/** 双人互动条目：主体位（可带子体位） */
-export function newInteractionItem(positionId: number, subpositionId: number | null = null, outfitId: number | null = null): TaskItem {
-  return { ...newItem(null, outfitId), position_id: positionId, subposition_id: subpositionId }
+/** 双人互动条目：主体位（可带子体位）；secondEnabled 为 true 时第二角色同时出场 */
+export function newInteractionItem(positionId: number, subpositionId: number | null = null, outfitId: number | null = null, secondEnabled = false): TaskItem {
+  return { ...newItem(null, outfitId), position_id: positionId, subposition_id: subpositionId, second_enabled: secondEnabled }
 }
 
 export function randomSeed(): number {
@@ -141,16 +146,19 @@ export function expandTask(data: TaskData, lib: PlanLibrary, settings: Settings,
   if (data.global_id && !g) errors.push('所选全局 Prompt 已被删除')
   const maleBase = (data.male_base_id != null && lib.templates.get(data.male_base_id)) || null
   if (data.male_base_id && !maleBase) errors.push('所选男性基础模板已被删除')
+  const char2 = (data.second_character_id != null && lib.characters.get(data.second_character_id)) || null
+  if (data.second_character_id && !char2) errors.push('所选第二角色已被删除')
+  const loras2 = char2 ? (char2.loras ?? []).filter((l) => l.name) : []
 
-  const checkOutfit = (oid: number | null | undefined, where: string): Outfit | null => {
+  const checkOutfit = (oid: number | null | undefined, where: string, owner: Character | null = char): Outfit | null => {
     if (!oid) return null
     const o = lib.outfits.get(oid)
     if (!o) {
       errors.push(`${where}：所选服装已被删除`)
       return null
     }
-    if (char && o.character_id !== char.id) {
-      errors.push(`${where}：服装「${o.name}」不属于当前角色「${char.name}」`)
+    if (owner && o.character_id !== owner.id) {
+      errors.push(`${where}：服装「${o.name}」不属于角色「${owner.name}」`)
       return null
     }
     return o
@@ -172,9 +180,10 @@ export function expandTask(data: TaskData, lib: PlanLibrary, settings: Settings,
     sub: number,
     modules: Modules,
     meta: UnitMeta,
+    withSecond = false,
   ) => {
     const [positive, negative] = compose(modules, settings)
-    units.push({
+    const u: PlanUnit = {
       section,
       item_index: itemIndex,
       item_label: label,
@@ -186,7 +195,10 @@ export function expandTask(data: TaskData, lib: PlanLibrary, settings: Settings,
       meta,
       index: 0,
       seed: 0,
-    })
+    }
+    // 第二角色的 LoRA 只在其出场时加入；字段只在有内容时写入，旧任务的计划结构不变
+    if (withSecond && loras2.length) u.loras2 = loras2
+    units.push(u)
   }
 
   // ---- 剧情场景 ----
@@ -204,10 +216,14 @@ export function expandTask(data: TaskData, lib: PlanLibrary, settings: Settings,
         const m = baseModules(sOutfit)
         m.content = filled(sc, char)
         m.expression = ['', '']
-        m.male = sc.with_male ? maleModule(maleBase, [], '', settings, char) : ['', '']
+        // 剧情场景的「男性出场」：任务选择了第二角色时由第二角色出场（基础 Prompt + LoRA），
+        // 否则沿用旧版男性基础描述（没有第二角色的旧任务结果不变）
+        const second = !!sc.with_male && !!char2
+        m.male = sc.with_male && !second ? maleModule(maleBase, [], '', settings, char) : ['', '']
         m.camera = ['', '']
         m.extra = ['', '']
-        add('story', si, label, k, m, {
+        if (second) m.character2 = pair(char2)
+        const meta: UnitMeta = {
           task: taskName,
           character: charName,
           story: story!.name ?? '',
@@ -222,7 +238,9 @@ export function expandTask(data: TaskData, lib: PlanLibrary, settings: Settings,
           male_templates: [],
           n: k + 1,
           of: count,
-        })
+        }
+        if (second) meta.character2 = char2!.name
+        add('story', si, label, k, m, meta, second)
       }
     })
   }
@@ -260,6 +278,15 @@ export function expandTask(data: TaskData, lib: PlanLibrary, settings: Settings,
     const scene = it.scene_id ? tpl(it.scene_id) : defaultScene
     if (it.scene_id && !scene) errors.push(`${where}：所选场景已被删除`)
     const maleOn = !!it.male_enabled
+    // 第二角色：本动作启用且任务选择了第二角色时出场；动作、表情由用户在任务中分配
+    const secondOn = !!it.second_enabled
+    if (secondOn && !data.second_character_id) errors.push(`${where}：已启用第二角色，但任务还没有选择第二角色`)
+    const second = secondOn && !!char2
+    const outfit2 = second ? checkOutfit(it.second_outfit_id, `${where}（第二角色）`, char2) : null
+    const pose2 = second ? tpl(it.second_pose_id) : null
+    if (second && it.second_pose_id && !pose2) errors.push(`${where}：第二角色的动作模板已被删除`)
+    const expr2 = second ? tpl(it.second_expression_id) : null
+    if (second && it.second_expression_id && !expr2) errors.push(`${where}：第二角色的表情模板已被删除`)
     const maleTs = (it.male_ids ?? []).map((x) => tpl(x)).filter((t): t is Template => !!t)
     const malePoses = (it.male_pose_ids ?? []).map((x) => tpl(x)).filter((t): t is Template => !!t)
     const maleExprs = (it.male_expression_ids ?? []).map((x) => tpl(x)).filter((t): t is Template => !!t)
@@ -298,6 +325,12 @@ export function expandTask(data: TaskData, lib: PlanLibrary, settings: Settings,
         // 新模块只在有内容时写入，旧任务的计划与快照结构保持不变
         if (interaction[0] || interaction[1]) m.interaction = interaction
         if (scene) m.scene = filled(scene, char)
+        if (second) {
+          m.character2 = pair(char2)
+          m.outfit2 = pair(outfit2)
+          m.content2 = filled(pose2, char2)
+          m.expression2 = filled(expr2, char2)
+        }
         const meta: UnitMeta = {
           task: taskName,
           character: charName,
@@ -320,7 +353,13 @@ export function expandTask(data: TaskData, lib: PlanLibrary, settings: Settings,
         if (position) meta.position = position.name
         if (sub) meta.subposition = sub.name
         if (acts.length) meta.acts = acts.map((a) => a.name)
-        add('pose', pi, label, k, m, meta)
+        if (second) {
+          meta.character2 = char2!.name
+          if (outfit2) meta.outfit2 = outfit2.name
+          if (pose2) meta.action2 = pose2.name
+          if (expr2) meta.expression2 = expr2.name
+        }
+        add('pose', pi, label, k, m, meta, second)
         k++
       }
     }

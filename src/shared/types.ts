@@ -2,10 +2,10 @@
 
 /**
  * 素材类型（kind）。旧类型全部保留：
- * - pose：单人动作（旧「姿态」模板原样归入这里，没有分类的显示为「待分类」）
+ * - pose：单人动作（旧「姿态」模板原样归入这里）；在任务中分配给主角色或第二角色
  * - position / subposition / act：双人互动的主体位 / 子体位（parent_id 指向主体位）/ 可复用的行为
  * - scene：场景（环境、地点、背景）
- * - male / camera：兼容素材（男性描述、镜头），不再作为素材库一级分类
+ * - male / camera：兼容素材（旧版男性描述、镜头），不在素材库中显示；镜头在套图任务中选择和新建
  */
 export type TemplateKind = 'global' | 'scene' | 'pose' | 'position' | 'subposition' | 'act' | 'expression' | 'male' | 'camera'
 
@@ -21,7 +21,7 @@ export const TEMPLATE_KINDS: Record<TemplateKind, string> = {
   camera: '镜头',
 }
 
-/** 适用对象：用于筛选和分组，不是严格限制。通用素材可分配给女性或男性 */
+/** 旧版的适用对象字段：不再在界面中设置或筛选，只为保留旧文件中的值 */
 export type Target = 'any' | 'female' | 'male'
 export const TARGETS: Record<Target, string> = { any: '通用', female: '女性', male: '男性' }
 
@@ -41,7 +41,7 @@ export interface Template extends Timestamps {
   tags: string
   note: string
   sort: number
-  /** 适用对象（动作、表情）；旧数据没有此字段时视为通用 */
+  /** 旧版适用对象（保留原值，不再使用） */
   target?: Target
   /** 子体位所属的主体位 ID */
   parent_id?: number | null
@@ -130,9 +130,14 @@ export interface TaskItem {
   position_id?: number | null
   subposition_id?: number | null
   act_ids?: number[]
-  /** 男性出场时男性自己的动作与表情（单人动作 / 表情素材，只在启用男性时拼入男性模块） */
+  /** 旧版：男性出场时的男性动作与表情（只在 male_enabled 时拼入旧版男性模块） */
   male_pose_ids?: number[]
   male_expression_ids?: number[]
+  /** 第二角色是否在本动作中出场（任务需选择 second_character_id）；以及第二角色的服装、动作、表情 */
+  second_enabled?: boolean
+  second_outfit_id?: number | null
+  second_pose_id?: number | null
+  second_expression_id?: number | null
   /** 场景：null 时沿用任务的默认场景 */
   scene_id?: number | null
 }
@@ -146,8 +151,10 @@ export interface TaskData {
   workflow_id: number | null
   seed_base: number
   items: TaskItem[]
-  /** 默认场景：应用到姿态序列中没有单独指定场景的动作（不用于剧情场景） */
+  /** 默认场景：应用到动作序列中没有单独指定场景的动作（不用于剧情场景） */
   scene_id?: number | null
+  /** 第二角色（与主角色来自同一个角色库，可不选择）。character_id 即主角色 */
+  second_character_id?: number | null
 }
 
 export interface Task extends Timestamps {
@@ -180,7 +187,7 @@ export const DEFAULT_SETTINGS: Settings = {
   lora_display_name: 'model',
   comfy_url: 'http://127.0.0.1:8188',
   comfy_output_dir: '',
-  compose_order: ['global', 'character', 'outfit', 'content', 'expression', 'male', 'interaction', 'scene', 'camera', 'extra'],
+  compose_order: ['global', 'scene', 'camera', 'character', 'outfit', 'content', 'expression', 'interaction', 'male', 'character2', 'outfit2', 'content2', 'expression2', 'extra'],
   pos_separator: ', ',
   neg_separator: ', ',
   trim_modules: true,
@@ -214,6 +221,11 @@ export interface UnitMeta {
   position?: string
   subposition?: string
   acts?: string[]
+  /** 第二角色出场时：角色名、服装、动作、表情 */
+  character2?: string
+  outfit2?: string
+  action2?: string
+  expression2?: string
   n: number
   of: number
   index?: number
@@ -237,6 +249,8 @@ export interface PlanUnit {
   positive: string
   negative: string
   loras: Lora[]
+  /** 第二角色出场时的 LoRA（映射到「第二角色 LoRA n」） */
+  loras2?: Lora[]
   meta: UnitMeta
   index: number
   seed: number

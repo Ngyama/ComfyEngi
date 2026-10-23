@@ -106,7 +106,7 @@ describe('Prompt 组合', () => {
     expect(u.modules.interaction).toEqual(['missionary, (on back:1.2), legs up, hug, {embrace|cuddle}, kiss', ''])
     expect(u.modules.content[0]).toBe('sleeping, lying')
     expect(u.modules.scene).toEqual(['bedroom, indoors', ''])
-    expect(u.positive).toBe('masterpiece, best quality, 1girl, char_a, red hair, sleeping, lying, missionary, (on back:1.2), legs up, hug, {embrace|cuddle}, kiss, bedroom, indoors')
+    expect(u.positive).toBe('masterpiece, best quality, bedroom, indoors, 1girl, char_a, red hair, sleeping, lying, missionary, (on back:1.2), legs up, hug, {embrace|cuddle}, kiss')
     expect(u.meta).toMatchObject({ position: '正常位', subposition: '抬腿', acts: ['拥抱', '接吻'], scene: '卧室', section: '动作' })
   })
 
@@ -153,7 +153,7 @@ describe('Prompt 组合', () => {
     const { units, errors } = expandTask(data, loadPlanLibrary(s), s.settings())
     expect(errors).toEqual([])
     expect(Object.keys(units[0].modules).sort()).toEqual(['camera', 'character', 'content', 'expression', 'extra', 'global', 'male', 'outfit'])
-    expect(units[0].positive).toBe('masterpiece, best quality, 1girl, char_a, red hair, outfit_a1, sleeping, lying, expr1, 1boy, MALE_BASE_TAG, MALE_ACTION, pov')
+    expect(units[0].positive).toBe('masterpiece, best quality, pov, 1girl, char_a, red hair, outfit_a1, sleeping, lying, expr1, 1boy, MALE_BASE_TAG, MALE_ACTION')
   })
 
   it('预览与实际提交一致；已入队的快照不受之后的素材修改影响', () => {
@@ -176,10 +176,9 @@ describe('Prompt 组合', () => {
   })
 
   it('自定义组合顺序缺少新模块时插在相邻模块之后', () => {
-    expect(normalizedOrder(['global', 'character', 'outfit', 'content', 'expression', 'male', 'camera', 'extra'])).toEqual(DEFAULT_SETTINGS.compose_order)
-    expect(normalizedOrder(['camera', 'male', 'global'])).toEqual(['camera', 'extra', 'male', 'interaction', 'scene', 'global', 'character', 'outfit', 'content', 'expression'])
+    expect(normalizedOrder(['camera', 'male', 'global'])).toEqual(['camera', 'character', 'outfit', 'content', 'expression', 'interaction', 'male', 'character2', 'outfit2', 'content2', 'expression2', 'extra', 'global', 'scene'])
     const mods = { male: ['M', ''], interaction: ['I', ''], scene: ['S', ''], content: ['C', ''] } as Record<string, [string, string]>
-    expect(compose(mods, { ...DEFAULT_SETTINGS })[0]).toBe('C, M, I, S')
+    expect(compose(mods, { ...DEFAULT_SETTINGS })[0]).toBe('S, C, I, M')
   })
 
   it('PlanLibrary 在界面中构造的结果与主进程一致（新素材类型）', () => {

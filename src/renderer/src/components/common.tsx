@@ -40,7 +40,7 @@ export function Chip({ active, onClick, children, className, title, order }: { a
       data-active={active || undefined}
       className={cn(
         'inline-flex h-7 max-w-full items-center gap-1.5 rounded-full px-3 text-xs text-foreground/80 transition-colors',
-        'bg-white/[0.045] hover:bg-white/[0.08] hover:text-foreground',
+        'bg-tint/[0.045] hover:bg-tint/[0.08] hover:text-foreground',
         'data-[active]:bg-primary/15 data-[active]:text-primary data-[active]:ring-1 data-[active]:ring-primary/35',
         className,
       )}
@@ -71,7 +71,7 @@ export function TextInput({ value, onChange, placeholder, className, autoFocus, 
       onBlur={onBlur}
       spellCheck={false}
       className={cn(
-        'h-9 w-full rounded-lg bg-white/[0.04] px-3 text-[13px] ring-1 ring-white/[0.07] outline-none placeholder:text-muted-foreground/60 focus:bg-white/[0.06] focus:ring-primary/50',
+        'h-9 w-full rounded-lg bg-tint/[0.04] px-3 text-[13px] ring-1 ring-tint/[0.112] outline-none placeholder:text-muted-foreground/60 focus:bg-tint/[0.06] focus:ring-primary/50',
         mono && 'font-mono text-[12.5px]',
         className,
       )}
@@ -100,8 +100,8 @@ export function PromptField({ label, value, onChange, placeholder, minRows = 3, 
         spellCheck={false}
         onChange={(e) => onChange?.(e.target.value)}
         className={cn(
-          'block w-full resize-none rounded-lg bg-white/[0.035] px-3 py-2.5 font-mono text-[12.5px] leading-relaxed ring-1 ring-white/[0.07] outline-none placeholder:font-sans placeholder:text-muted-foreground/55 focus:bg-white/[0.05] focus:ring-primary/50',
-          readOnly && 'bg-black/20 text-foreground/85',
+          'block w-full resize-none rounded-lg bg-tint/[0.035] px-3 py-2.5 font-mono text-[12.5px] leading-relaxed ring-1 ring-tint/[0.112] outline-none placeholder:font-sans placeholder:text-muted-foreground/55 focus:bg-tint/[0.05] focus:ring-primary/50',
+          readOnly && 'bg-inset text-foreground/85',
         )}
       />
     </div>
@@ -113,7 +113,7 @@ export function CopyButton({ text, label = '复制' }: { text: string; label?: s
   return (
     <button
       type="button"
-      className="inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[11px] text-muted-foreground hover:bg-white/[0.06] hover:text-foreground"
+      className="inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[11px] text-muted-foreground hover:bg-tint/[0.06] hover:text-foreground"
       onClick={() => {
         void navigator.clipboard.writeText(text ?? '')
         setDone(true)
@@ -136,7 +136,7 @@ export function SearchBox({ value, onChange, placeholder = '搜索…', classNam
         onChange={(e) => onChange(e.target.value)}
         placeholder={placeholder}
         spellCheck={false}
-        className="h-8 w-full rounded-lg bg-white/[0.045] pr-7 pl-8 text-[13px] ring-1 ring-white/[0.06] outline-none placeholder:text-muted-foreground/60 focus:ring-primary/50"
+        className="h-8 w-full rounded-lg bg-tint/[0.045] pr-7 pl-8 text-[13px] ring-1 ring-tint/[0.096] outline-none placeholder:text-muted-foreground/60 focus:ring-primary/50"
       />
       {value && (
         <button type="button" onClick={() => onChange('')} className="absolute top-1/2 right-2 -translate-y-1/2 text-muted-foreground hover:text-foreground">
@@ -152,7 +152,7 @@ export function NumberStepper({ value, onChange, min = 1, max = 9999, step = 1 }
   useEffect(() => setText(String(value)), [value])
   const commit = (v: number) => onChange(Math.max(min, Math.min(max, Math.round(v))))
   return (
-    <div className="inline-flex h-9 items-center rounded-lg bg-white/[0.04] ring-1 ring-white/[0.07] focus-within:ring-primary/50">
+    <div className="inline-flex h-9 items-center rounded-lg bg-tint/[0.04] ring-1 ring-tint/[0.112] focus-within:ring-primary/50">
       <button type="button" className="grid h-full w-8 place-items-center text-muted-foreground hover:text-foreground" onClick={() => commit(value - step)}>
         <Minus className="size-3.5" />
       </button>
@@ -178,7 +178,7 @@ export function Disclosure({ title, summary, open: openProp, defaultOpen = false
   const [open, setOpen] = useState(defaultOpen)
   const isOpen = openProp ?? open
   return (
-    <div className="rounded-xl bg-white/[0.025] ring-1 ring-white/[0.05]">
+    <div className="rounded-xl bg-tint/[0.025] ring-1 ring-tint/[0.08]">
       <div className="flex items-center gap-2 px-3">
         <button type="button" className="flex h-10 min-w-0 flex-1 items-center gap-2 text-left text-[13px]" onClick={() => setOpen(!isOpen)}>
           {isOpen ? <ChevronDown className="size-4 text-muted-foreground" /> : <ChevronRight className="size-4 text-muted-foreground" />}
@@ -195,7 +195,7 @@ export function Disclosure({ title, summary, open: openProp, defaultOpen = false
 export function EmptyState({ icon, title, description, action }: { icon?: ReactNode; title: ReactNode; description?: ReactNode; action?: ReactNode }) {
   return (
     <div className="flex flex-col items-center justify-center gap-3 px-6 py-16 text-center">
-      {icon && <div className="grid size-12 place-items-center rounded-2xl bg-white/[0.04] text-muted-foreground [&_svg]:size-5">{icon}</div>}
+      {icon && <div className="grid size-12 place-items-center rounded-2xl bg-tint/[0.04] text-muted-foreground [&_svg]:size-5">{icon}</div>}
       <div>
         <div className="text-sm font-medium">{title}</div>
         {description && <div className="mt-1 max-w-sm text-xs leading-relaxed text-muted-foreground">{description}</div>}
@@ -235,7 +235,7 @@ export function Avatar({ name, hue, className }: { name: string; hue: number; cl
   return (
     <div
       className={cn('grid size-9 shrink-0 place-items-center rounded-xl text-sm font-semibold', className)}
-      style={{ background: `oklch(0.42 0.09 ${hue})`, color: `oklch(0.94 0.04 ${hue})` }}
+      style={{ background: `oklch(0.92 0.05 ${hue})`, color: `oklch(0.42 0.1 ${hue})` }}
     >
       {[...(name || '?')][0]}
     </div>

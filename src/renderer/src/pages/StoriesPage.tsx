@@ -19,16 +19,16 @@ const newScene = (n: number): Scene => ({ name: `场景${n}`, positive: '', nega
 function SceneCard({ id, i, sc, open, onToggle, onChange, onDuplicate, onDelete }: { id: string; i: number; sc: Scene; open: boolean; onToggle: () => void; onChange: (p: Partial<Scene>) => void; onDuplicate: () => void; onDelete: () => void }) {
   const s = useSortableItem(id)
   return (
-    <div ref={s.setNodeRef} style={s.style} className={cn('rounded-xl bg-card ring-1 ring-white/[0.05]', open && 'ring-white/[0.1]', s.isDragging && 'shadow-2xl shadow-black/50')}>
+    <div ref={s.setNodeRef} style={s.style} className={cn('rounded-xl bg-card ring-1 ring-tint/[0.08]', open && 'ring-tint/[0.16]', s.isDragging && 'shadow-2xl shadow-tint/15')}>
       <div className="flex items-center gap-3 px-3 py-2.5">
         <button type="button" {...s.attributes} {...s.listeners} className="cursor-grab text-muted-foreground/50 hover:text-muted-foreground" aria-label="拖动排序">
           <GripVertical className="size-4" />
         </button>
-        <span className="grid size-6 shrink-0 place-items-center rounded-md bg-white/[0.06] text-[11px] font-semibold text-muted-foreground tabular-nums">{i + 1}</span>
+        <span className="grid size-6 shrink-0 place-items-center rounded-md bg-tint/[0.06] text-[11px] font-semibold text-muted-foreground tabular-nums">{i + 1}</span>
         <input
           value={sc.name}
           onChange={(e) => onChange({ name: e.target.value })}
-          className="h-8 min-w-0 flex-1 rounded-md bg-transparent px-2 text-[13.5px] font-medium outline-none hover:bg-white/[0.04] focus:bg-white/[0.06]"
+          className="h-8 min-w-0 flex-1 rounded-md bg-transparent px-2 text-[13.5px] font-medium outline-none hover:bg-tint/[0.04] focus:bg-tint/[0.06]"
         />
         <label className="flex shrink-0 items-center gap-2 text-xs text-muted-foreground" title="勾选后该场景会加入任务中选择的男性基础 Prompt">
           <Switch checked={sc.with_male} onCheckedChange={(v) => onChange({ with_male: v })} /> 男性
@@ -77,7 +77,7 @@ function StoryDetail({ st, onDeleted }: { st: Story; onDeleted: () => void }) {
     <div className="flex h-full max-w-[1080px] flex-col">
       <div className="flex items-center gap-3 px-6 pt-5 pb-4">
         <div className="min-w-0 flex-1">
-          <input value={draft.name} onChange={(e) => patch({ name: e.target.value })} className="w-full rounded-md bg-transparent text-[16px] font-semibold outline-none hover:bg-white/[0.03] focus:bg-white/[0.05]" />
+          <input value={draft.name} onChange={(e) => patch({ name: e.target.value })} className="w-full rounded-md bg-transparent text-[16px] font-semibold outline-none hover:bg-tint/[0.03] focus:bg-tint/[0.05]" />
           <div className="text-xs text-muted-foreground">
             {scenes.length} 个场景 · 共 {total} 张 · 按顺序生成，先于姿态序列
           </div>
@@ -157,7 +157,7 @@ function StoryDetail({ st, onDeleted }: { st: Story; onDeleted: () => void }) {
               setScenes([...scenes, newScene(scenes.length + 1)], [...keys, k])
               setOpen(k)
             }}
-            className="flex w-full items-center justify-center gap-2 rounded-xl border border-dashed border-white/[0.1] py-3 text-xs text-muted-foreground hover:border-primary/40 hover:text-primary"
+            className="flex w-full items-center justify-center gap-2 rounded-xl border border-dashed border-tint/[0.16] py-3 text-xs text-muted-foreground hover:border-primary/40 hover:text-primary"
           >
             <Plus className="size-3.5" /> 添加场景
           </button>
@@ -180,7 +180,7 @@ export default function StoriesPage() {
   const cur = lib?.stories.find((s) => s.id === sel)
   return (
     <div className="flex h-full">
-      <div className="flex w-[260px] shrink-0 flex-col border-r border-white/[0.05]">
+      <div className="flex w-[260px] shrink-0 flex-col border-r border-tint/[0.08]">
         <div className="flex items-center justify-between px-4 pt-5 pb-3">
           <h1 className="text-[15px] font-semibold">剧情库</h1>
           <Button
@@ -210,7 +210,7 @@ export default function StoriesPage() {
                   type="button"
                   onClick={() => setSel(s.id)}
                   data-active={sel === s.id || undefined}
-                  className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left hover:bg-white/[0.04] data-[active]:bg-white/[0.07]"
+                  className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left hover:bg-tint/[0.04] data-[active]:bg-tint/[0.07]"
                 >
                   <BookOpen className="size-3.5 shrink-0 text-muted-foreground" />
                   <span className="truncate text-[13px]">{s.name || '（未命名）'}</span>

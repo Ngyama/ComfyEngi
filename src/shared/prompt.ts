@@ -2,16 +2,21 @@
 
 import type { Character, Modules, Settings } from './types'
 
+// 默认顺序：全局 → 场景 → 镜头 → 主角色（外貌、服装、动作、表情）→ 双人互动 → 第二角色（外貌、服装、动作、表情）
 export const MODULES: [string, string][] = [
-  ['global', '全局'],
-  ['character', '角色（女性）'],
-  ['outfit', '服装（女性）'],
-  ['content', '剧情场景 / 动作（女性）'],
-  ['expression', '表情（女性）'],
-  ['male', '男性（基础 / 动作 / 表情）'],
-  ['interaction', '双人互动（主体位 / 子体位 / 行为）'],
+  ['global', '全局（画质 / 画风）'],
   ['scene', '场景'],
   ['camera', '镜头'],
+  ['character', '主角色'],
+  ['outfit', '主角色服装'],
+  ['content', '主角色动作 / 剧情场景'],
+  ['expression', '主角色表情'],
+  ['interaction', '双人互动（主体位 / 子体位 / 行为）'],
+  ['male', '旧版男性描述'],
+  ['character2', '第二角色'],
+  ['outfit2', '第二角色服装'],
+  ['content2', '第二角色动作'],
+  ['expression2', '第二角色表情'],
   ['extra', '附加'],
 ]
 export const MODULE_LABELS: Record<string, string> = Object.fromEntries(MODULES)
@@ -78,6 +83,16 @@ export function prependTags(base: string, words: string[], sep = ', '): { text: 
   }
   if (!added.length) return { text: base, added, skipped }
   return { text: (base ?? '').trim() ? `${added.join(sep)}${sep}${base}` : added.join(sep), added, skipped }
+}
+
+/** 以前版本的默认顺序：设置中仍是这些顺序（用户没有自定义过）时升级为新的默认顺序 */
+export const LEGACY_DEFAULT_ORDERS: string[][] = [
+  ['global', 'character', 'outfit', 'content', 'expression', 'male', 'camera', 'extra'],
+  ['global', 'character', 'outfit', 'content', 'expression', 'male', 'interaction', 'scene', 'camera', 'extra'],
+]
+
+export function isLegacyDefaultOrder(order: unknown): boolean {
+  return Array.isArray(order) && LEGACY_DEFAULT_ORDERS.some((o) => o.length === order.length && o.every((m, i) => order[i] === m))
 }
 
 /** 用户保存的顺序缺少新模块时，按默认顺序插到前一个模块之后（而不是全部追加到末尾） */

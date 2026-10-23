@@ -17,7 +17,7 @@ export function TaskSettingsDialog({ open, onOpenChange }: { open: boolean; onOp
   if (!task) return null
   const d = task.data
   const globals = templatesOf(lib, 'global')
-  const males = templatesOf(lib, 'male')
+  const maleBase = templatesOf(lib, 'male').find((m) => m.id === d.male_base_id)
   const wfs = lib?.workflows ?? []
   const defWf = wfs.find((w) => w.id === lib?.settings.default_workflow_id)
   return (
@@ -29,7 +29,7 @@ export function TaskSettingsDialog({ open, onOpenChange }: { open: boolean; onOp
         </DialogHeader>
         <div className="space-y-5">
           <section>
-            <FieldLabel hint="画质词、通用正负面">全局 Prompt</FieldLabel>
+            <FieldLabel hint="画质、画风与通用正负面">全局 Prompt</FieldLabel>
             <div className="flex flex-wrap gap-1.5">
               <Chip active={!d.global_id} onClick={() => update((x) => (x.global_id = null))}>
                 不使用
@@ -55,20 +55,20 @@ export function TaskSettingsDialog({ open, onOpenChange }: { open: boolean; onOp
               {!templatesOf(lib, 'scene').length && <span className="text-xs text-muted-foreground">场景库为空，可在「素材库 → 场景」中添加</span>}
             </div>
           </section>
-          <section>
-            <FieldLabel hint="只在动作或剧情场景启用「男性出场」时加入">男性基础描述</FieldLabel>
-            <div className="flex flex-wrap gap-1.5">
-              <Chip active={!d.male_base_id} onClick={() => update((x) => (x.male_base_id = null))}>
-                不使用
-              </Chip>
-              {males.map((m) => (
-                <Chip key={m.id} active={d.male_base_id === m.id} onClick={() => update((x) => (x.male_base_id = m.id))} title={m.positive}>
-                  {m.name}
-                  {m.category ? <span className="opacity-60"> · {m.category}</span> : null}
+          {/* 旧任务的男性基础描述：只在已设置时显示（可清除）；新任务在页面顶部选择第二角色 */}
+          {!!d.male_base_id && (
+            <section>
+              <FieldLabel hint="旧版设置：在动作的「旧版男性设置」或剧情场景启用男性时加入。新任务请使用第二角色">男性基础描述（旧版）</FieldLabel>
+              <div className="flex flex-wrap gap-1.5">
+                <Chip active={false} onClick={() => update((x) => (x.male_base_id = null))}>
+                  不再使用
                 </Chip>
-              ))}
-            </div>
-          </section>
+                <Chip active title={maleBase?.positive}>
+                  {maleBase?.name ?? '（已删除）'}
+                </Chip>
+              </div>
+            </section>
+          )}
           <section>
             <FieldLabel>ComfyUI 工作流</FieldLabel>
             <div className="flex flex-wrap gap-1.5">
@@ -144,7 +144,7 @@ export function PlanPreviewDialog({ open, onOpenChange, plan, onEnqueue }: { ope
           </DialogDescription>
         </DialogHeader>
         {plan && (plan.errors.length > 0 || plan.warnings.length > 0) && (
-          <div className="max-h-28 space-y-1 overflow-y-auto rounded-xl bg-white/[0.03] p-3 text-xs">
+          <div className="max-h-28 space-y-1 overflow-y-auto rounded-xl bg-tint/[0.03] p-3 text-xs">
             {plan.errors.map((e, i) => (
               <div key={`e${i}`} className="text-destructive">
                 × {e}
@@ -158,7 +158,7 @@ export function PlanPreviewDialog({ open, onOpenChange, plan, onEnqueue }: { ope
           </div>
         )}
         <div className="flex min-h-0 flex-1 gap-4">
-          <div className="w-[380px] shrink-0 overflow-y-auto rounded-xl bg-white/[0.02] p-1.5 ring-1 ring-white/[0.05]">
+          <div className="w-[380px] shrink-0 overflow-y-auto rounded-xl bg-tint/[0.02] p-1.5 ring-1 ring-tint/[0.08]">
             {groups.map((g) => {
               const isOpen = openG.has(g.key)
               const exprs = [...new Set(g.units.map((x) => x.meta.expression).filter(Boolean))]
@@ -166,7 +166,7 @@ export function PlanPreviewDialog({ open, onOpenChange, plan, onEnqueue }: { ope
                 <div key={g.key}>
                   <button
                     type="button"
-                    className="flex w-full items-center gap-2 rounded-lg px-2 py-2 text-left hover:bg-white/[0.04]"
+                    className="flex w-full items-center gap-2 rounded-lg px-2 py-2 text-left hover:bg-tint/[0.04]"
                     onClick={() => setOpenG((s) => (s.has(g.key) ? new Set([...s].filter((k) => k !== g.key)) : new Set([...s, g.key])))}
                   >
                     {isOpen ? <ChevronDown className="size-3.5 text-muted-foreground" /> : <ChevronRight className="size-3.5 text-muted-foreground" />}
@@ -183,7 +183,7 @@ export function PlanPreviewDialog({ open, onOpenChange, plan, onEnqueue }: { ope
                         key={x.index}
                         type="button"
                         onClick={() => setSel(x.index)}
-                        className={cn('flex w-full items-center gap-3 rounded-md py-1 pr-2 pl-8 text-left text-xs hover:bg-white/[0.04]', sel === x.index && 'bg-primary/15 text-primary')}
+                        className={cn('flex w-full items-center gap-3 rounded-md py-1 pr-2 pl-8 text-left text-xs hover:bg-tint/[0.04]', sel === x.index && 'bg-primary/15 text-primary')}
                       >
                         <span className="w-9 shrink-0 tabular-nums opacity-70">#{x.index + 1}</span>
                         <span className="truncate">{x.meta.expression || x.meta.outfit || x.item_label}</span>
@@ -204,23 +204,24 @@ export function PlanPreviewDialog({ open, onOpenChange, plan, onEnqueue }: { ope
                   {u.meta.outfit && <span>服装 {u.meta.outfit}</span>}
                   {u.meta.expression && <span>表情 {u.meta.expression}</span>}
                   {u.meta.camera && <span>镜头 {u.meta.camera}</span>}
+                  {u.meta.character2 && <span>第二角色 {u.meta.character2}</span>}
                   {u.meta.male && <span>男性出场</span>}
                   <span className="font-mono">Seed {u.seed}</span>
                 </div>
                 <div>
                   <FieldLabel right={<CopyButton text={u.positive} label="复制正面" />}>最终正面 Prompt</FieldLabel>
-                  <pre className="rounded-xl bg-black/25 p-3 font-mono text-[12px] leading-relaxed whitespace-pre-wrap select-text">{u.positive || '（空）'}</pre>
+                  <pre className="rounded-xl bg-inset p-3 font-mono text-[12px] leading-relaxed whitespace-pre-wrap select-text">{u.positive || '（空）'}</pre>
                 </div>
                 <div>
                   <FieldLabel right={<CopyButton text={u.negative} label="复制负面" />}>最终负面 Prompt</FieldLabel>
-                  <pre className="rounded-xl bg-black/25 p-3 font-mono text-[12px] leading-relaxed whitespace-pre-wrap select-text">{u.negative || '（空）'}</pre>
+                  <pre className="rounded-xl bg-inset p-3 font-mono text-[12px] leading-relaxed whitespace-pre-wrap select-text">{u.negative || '（空）'}</pre>
                 </div>
                 {u.inputs && (
                   <div>
                     <FieldLabel>实际写入工作流的值</FieldLabel>
-                    <div className="overflow-hidden rounded-xl ring-1 ring-white/[0.06]">
+                    <div className="overflow-hidden rounded-xl ring-1 ring-tint/[0.096]">
                       {u.inputs.map((x, i) => (
-                        <div key={i} className="flex gap-3 border-b border-white/[0.04] px-3 py-2 text-xs last:border-0">
+                        <div key={i} className="flex gap-3 border-b border-tint/[0.064] px-3 py-2 text-xs last:border-0">
                           <span className="w-32 shrink-0 font-mono text-muted-foreground">
                             {x.node}.{x.input}
                           </span>

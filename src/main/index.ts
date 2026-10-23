@@ -62,10 +62,10 @@ if (!app.requestSingleInstanceLock()) {
       minWidth: 1080,
       minHeight: 680,
       show: false,
-      backgroundColor: '#0e0f12',
+      backgroundColor: '#fceff1',
       title: 'ComfyEngi',
       titleBarStyle: 'hidden',
-      titleBarOverlay: { color: '#0e0f12', symbolColor: '#a1a3ad', height: 40 },
+      titleBarOverlay: { color: '#fceff1', symbolColor: '#74696a', height: 40 },
       autoHideMenuBar: true,
       webPreferences: {
         preload: join(__dirname, '../preload/index.js'),

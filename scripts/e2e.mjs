@@ -52,6 +52,45 @@ const shot = async (name) => {
 }
 const nav = (label) => win.locator('nav button', { hasText: label }).click()
 
+// 亮色主题检查：找出颜色很浅、且所在背景也很浅的文字（看不清）。颜色按 OKLCH / OKLab 的 L 或 sRGB 亮度近似
+const lightnessCheck = () =>
+  win.evaluate(() => {
+    const parse = (str) => {
+      const nums = (str.match(/-?[\d.]+%?/g) ?? []).map((x) => (x.endsWith('%') ? parseFloat(x) / 100 : parseFloat(x)))
+      const alpha = str.includes('/') || str.startsWith('rgba') ? nums[nums.length - 1] : 1
+      if (str.startsWith('oklch') || str.startsWith('oklab')) return { L: nums[0], a: alpha }
+      const [r, g, b] = str.startsWith('color(srgb') ? nums.slice(0, 3).map((v) => v * 255) : nums.slice(0, 3)
+      const lin = (v) => ((v /= 255) <= 0.04045 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4)
+      return { L: Math.cbrt(0.2126 * lin(r) + 0.7152 * lin(g) + 0.0722 * lin(b)), a: alpha }
+    }
+    const bgOf = (el) => {
+      for (let e = el; e; e = e.parentElement) {
+        const cs = getComputedStyle(e)
+        if (cs.backgroundImage !== 'none' || e.tagName === 'IMG' || e.tagName === 'VIDEO') return 0 // 图片 / 渐变上的文字不判断
+        const c = parse(cs.backgroundColor)
+        if (c.a > 0.5) return c.L
+      }
+      return 1
+    }
+    const bad = []
+    for (const el of document.querySelectorAll('body *')) {
+      if (![...el.childNodes].some((n) => n.nodeType === 3 && n.textContent.trim())) continue
+      const r = el.getBoundingClientRect()
+      if (!r.width || !r.height) continue
+      const cs = getComputedStyle(el)
+      if (cs.visibility === 'hidden' || parseFloat(cs.opacity) === 0) continue
+      const c = parse(cs.color)
+      if (c.L > 0.85 && c.a > 0.5 && bgOf(el) > 0.8) bad.push(el.textContent.trim().slice(0, 20))
+    }
+    const L = (el) => parse(getComputedStyle(el).backgroundColor).L
+    return { bad, body: L(document.body), main: L(document.querySelector('main > div') ?? document.body), text: parse(getComputedStyle(document.body).color).L }
+  })
+const themeCheck = async (page) => {
+  const r = await lightnessCheck()
+  check(`亮色主题：${page}没有看不清的浅色文字`, r.bad.length === 0, r.bad.slice(0, 5).join(' / '))
+  return r
+}
+
 try {
   await setSize(1920, 1040)
   await win.waitForSelector('text=动作序列', { timeout: 20000 })
@@ -60,6 +99,8 @@ try {
   const cards = win.locator('[aria-roledescription="sortable"]')
   check('旧任务的 2 个姿态以卡片显示', (await cards.count()) === 2, String(await cards.count()))
   await shot('01-plan')
+  const th = await themeCheck('套图任务')
+  check('亮色主题：外壳为浅粉、主容器接近白色、正文为深色', th.body > 0.9 && th.main > 0.95 && th.text < 0.45, `shell ${th.body.toFixed(3)} main ${th.main.toFixed(3)} text ${th.text.toFixed(3)}`)
 
   // 选择角色
   await win.locator('button', { hasText: '角色' }).filter({ hasText: '角色A' }).first().click()
@@ -134,6 +175,7 @@ try {
   await shot('05-queue-running')
   await win.waitForSelector('text=全部完成', { timeout: 120000 })
   await shot('06-queue-done')
+  await themeCheck('执行队列')
   const total = mock.submitted.length
   check('任务通过模拟 ComfyUI 执行完成', total > 0, `提交 ${total} 张`)
   // 预览中的 Prompt 与实际提交一致（第一张：剧情场景 1）
@@ -147,11 +189,13 @@ try {
   await win.locator('main button.group').first().click()
   await win.waitForTimeout(800)
   await shot('08-history-detail')
+  await themeCheck('运行记录')
 
   // 其他页面
   await nav('LoRA 管理')
   check('LoRA Manager 正常打开', await win.getByRole('button', { name: /全部 LoRA/ }).isVisible())
   await shot('09-loras')
+  await themeCheck('LoRA 管理')
   await nav('素材库')
   const tabs = (await win.locator('main button').allInnerTexts()).map((t) => t.replace(/\d+$/, ''))
   check('素材库一级分类为 全局 / 场景 / 动作 / 表情', JSON.stringify(tabs.slice(tabs.indexOf('全局'), tabs.indexOf('全局') + 5)) === JSON.stringify(['全局', '场景', '动作', '表情', '单人动作']), tabs.slice(0, 12).join(','))
@@ -160,6 +204,8 @@ try {
   check('旧姿态显示为单人动作', (await win.locator('[data-testid=template-card]', { hasText: '睡觉' }).count()) === 1)
   await win.locator('main .grid > div').first().click()
   await shot('09-library')
+  await themeCheck('素材库')
+  check('单人动作编辑只有名称与正面 Prompt（无分类、标签、适用对象、负面）', (await win.getByText('适用对象').count()) === 0 && (await win.getByText('分类', { exact: true }).count()) === 0 && (await win.getByText('负面 Prompt').count()) === 0)
   await win.locator('main button', { hasText: '双人互动' }).click()
   await win.locator('main button', { hasText: '新建主体位' }).click()
   await win.waitForTimeout(400)
@@ -184,8 +230,32 @@ try {
   await win.waitForTimeout(300)
   await shot('09c-plan-duo-detail')
   check('行为显示在卡片上', (await duoCard.innerText()).includes('新行为'), (await duoCard.innerText()).replace(/\n/g, ' | '))
+  // 第二角色：与主角色来自同一个角色库；首次选择时双人互动的动作自动启用第二角色
+  await win.locator('button', { hasText: '第二角色' }).filter({ hasText: '不使用' }).first().click()
+  await win.locator('[role=dialog] button', { hasText: '角色B' }).first().click()
+  await win.waitForTimeout(300)
+  check('选择第二角色后双人动作启用第二角色，单人动作保持单人', (await duoCard.innerText()).includes('+ 角色B') && !(await cards.nth(0).innerText()).includes('+ 角色B'), (await duoCard.innerText()).replace(/\n/g, ' | '))
+  await duoCard.click()
+  await win.locator('[data-testid=second-pose]').click()
+  await win.getByRole('option', { name: '动作B', exact: true }).last().click()
+  await win.locator('[data-testid=main-pose]').click()
+  await win.getByRole('option', { name: '动作A', exact: true }).last().click()
+  await win.waitForTimeout(1200)
+  await shot('09d-plan-second-role')
+  const roleUnit = await win.evaluate(async () => {
+    const lib = await window.api['library.load']()
+    const p = await window.api['plan.forTask'](lib.settings.last_task_id ?? lib.tasks[0].id)
+    return p.units.find((u) => u.section === 'pose' && u.item_label === '新主体位 · 新子体位')
+  })
+  const pos = roleUnit?.positive ?? ''
+  check(
+    '第二角色的动作分配后按「主角色 → 双人互动 → 第二角色」组合',
+    !!roleUnit && roleUnit.meta.action2 === '动作B' && pos.indexOf('action_a') >= 0 && pos.indexOf('action_a') < pos.indexOf('1girl, char_b') && pos.indexOf('1girl, char_b') < pos.indexOf('action_b'),
+    pos,
+  )
   await nav('角色库')
   await shot('10-characters')
+  await themeCheck('角色库')
   check('角色页面为连续布局（无标签页，不显示角色标签 / 负面输入）', (await win.locator('[role=tab]').count()) === 0 && (await win.getByText('角色标签', { exact: true }).count()) === 0)
   await win.locator('[data-testid=outfit-row] button', { hasText: 'A服装1' }).click()
   await win.waitForTimeout(300)
@@ -196,6 +266,7 @@ try {
   await shot('12-stories')
   await nav('设置')
   await shot('13-settings')
+  await themeCheck('设置')
   await win.locator('button', { hasText: '工作流与映射' }).click()
   await shot('14-workflow-mapping')
   await win.locator('button', { hasText: 'Prompt 组合' }).click()
@@ -212,6 +283,8 @@ try {
   await nav('套图任务')
   await win.locator('button', { hasText: '任务设置' }).click()
   await shot('18-task-settings')
+  await themeCheck('任务设置弹窗')
+  check('任务设置中不再提供「男性基础描述」（只为仍在使用的旧任务显示）', (await win.locator('[role=dialog]').getByText('男性基础描述').count()) === 0 || (await win.locator('[role=dialog]').getByText('男性基础描述（旧版）').count()) === 1)
   await win.keyboard.press('Escape')
   await win.locator('button', { hasText: '剧情' }).filter({ hasText: '剧情1' }).first().click()
   await shot('19-story-picker')

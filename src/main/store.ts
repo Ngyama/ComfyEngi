@@ -1,4 +1,5 @@
 import { FileLibrary, FILE_TABLES } from './file-library'
+import { isLegacyDefaultOrder } from '@shared/prompt'
 // SQLite 存储（Electron 内置 node:sqlite）。表结构与旧版 Python 程序完全相同，
 // 旧数据库可直接打开；所有 Prompt 文本以原始字符串写入 TEXT 列，读写不做转换。
 
@@ -131,6 +132,24 @@ export class Store {
       })
       if (existed) this.openInfo.migratedFrom = version
     }
+    this.upgradeComposeOrder()
+  }
+
+  /**
+   * Prompt 组合顺序改为「全局 → 场景 → 镜头 → 主角色 → 双人互动 → 第二角色」。
+   * 只在设置仍是旧版默认顺序（用户没有自定义过）时升级一次；自定义顺序保持不变，新模块按相邻位置补入。
+   */
+  private upgradeComposeOrder() {
+    if (this.one("SELECT 1 FROM settings WHERE key='compose_order_rev'")) return
+    const r = this.one("SELECT value FROM settings WHERE key='compose_order'")
+    let order: unknown = null
+    try {
+      order = r ? JSON.parse(String(r.value)) : null
+    } catch {
+      order = null
+    }
+    if (isLegacyDefaultOrder(order)) this.setSetting('compose_order', DEFAULT_SETTINGS.compose_order)
+    this.setSetting('compose_order_rev', 3)
   }
 
   close() {

@@ -3,30 +3,39 @@
 
 @custom-variant dark (&:is(.dark *));
 
-/* Soft Dark：外壳最暗 → 内嵌主容器 → 卡片 → 浮层，依靠明度层次而不是边框建立空间关系 */
+/*
+ * 淡粉 + 白色的明亮主题：外壳（App Shell）为极浅的暖粉色 → 内嵌主容器为暖白 → 卡片与浮层为纯白。
+ * 层次依靠浅色差、细边框与柔和阴影建立；强调色为柔和的粉色，正文为深灰色。
+ * --tint 是界面中所有半透明叠加（悬停、选中、细边框、分隔线）的基色，用 tint/[x] 代替原来的 white/[x]；
+ * --inset 用于代码 / Prompt 预览、图片占位等内凹区域；--overlay 用于弹窗遮罩。
+ */
 :root {
   --radius: 0.75rem;
-  --shell: #0e0f12;
-  --background: oklch(0.19 0.007 270);
-  --foreground: oklch(0.93 0.005 270);
-  --card: oklch(0.225 0.008 270);
-  --card-foreground: oklch(0.93 0.005 270);
-  --popover: oklch(0.235 0.009 270);
-  --popover-foreground: oklch(0.93 0.005 270);
-  --primary: oklch(0.74 0.12 278);
-  --primary-foreground: oklch(0.18 0.03 278);
-  --secondary: oklch(0.27 0.009 270);
-  --secondary-foreground: oklch(0.9 0.005 270);
-  --muted: oklch(0.255 0.008 270);
-  --muted-foreground: oklch(0.66 0.012 270);
-  --accent: oklch(0.285 0.012 270);
-  --accent-foreground: oklch(0.95 0.005 270);
-  --destructive: oklch(0.66 0.17 22);
-  --success: oklch(0.74 0.13 155);
-  --warning: oklch(0.8 0.13 80);
-  --border: oklch(1 0 0 / 7%);
-  --input: oklch(1 0 0 / 9%);
-  --ring: oklch(0.74 0.12 278 / 60%);
+  --shell: oklch(0.962 0.014 8);
+  --background: oklch(0.992 0.004 10);
+  --foreground: oklch(0.29 0.014 10);
+  --card: oklch(1 0 0);
+  --card-foreground: oklch(0.29 0.014 10);
+  --popover: oklch(1 0 0);
+  --popover-foreground: oklch(0.29 0.014 10);
+  --primary: oklch(0.66 0.12 4);
+  --primary-foreground: oklch(1 0 0);
+  --secondary: oklch(0.955 0.016 6);
+  --secondary-foreground: oklch(0.32 0.02 8);
+  --muted: oklch(0.965 0.009 10);
+  --muted-foreground: oklch(0.53 0.014 10);
+  --accent: oklch(0.962 0.016 6);
+  --accent-foreground: oklch(0.27 0.015 10);
+  --destructive: oklch(0.575 0.19 22);
+  --success: oklch(0.6 0.13 155);
+  --warning: oklch(0.63 0.14 62);
+  --border: oklch(0.42 0.04 8 / 11%);
+  --input: oklch(0.42 0.04 8 / 16%);
+  --ring: oklch(0.66 0.12 4 / 55%);
+  --tint: oklch(0.42 0.045 8);
+  --inset: oklch(0.972 0.009 8);
+  --overlay: oklch(0.3 0.03 8 / 28%);
+  --panel-shadow: 0 0 0 1px oklch(0.42 0.04 8 / 8%), 0 10px 36px -14px oklch(0.45 0.08 8 / 22%);
 }
 
 @theme inline {
@@ -51,6 +60,9 @@
   --color-border: var(--border);
   --color-input: var(--input);
   --color-ring: var(--ring);
+  --color-tint: var(--tint);
+  --color-inset: var(--inset);
+  --color-overlay: var(--overlay);
   --radius-sm: calc(var(--radius) - 4px);
   --radius-md: calc(var(--radius) - 2px);
   --radius-lg: var(--radius);
@@ -61,10 +73,13 @@
 
 @layer base {
   :root {
-    color-scheme: dark;
+    color-scheme: light;
   }
   * {
     @apply border-border outline-ring/50;
+  }
+  ::selection {
+    background: oklch(0.7 0.115 4 / 25%);
   }
   html,
   body,
@@ -87,13 +102,13 @@
     height: 10px;
   }
   ::-webkit-scrollbar-thumb {
-    background: oklch(1 0 0 / 9%);
+    background: oklch(0.42 0.04 8 / 16%);
     border-radius: 999px;
     border: 3px solid transparent;
     background-clip: content-box;
   }
   ::-webkit-scrollbar-thumb:hover {
-    background-color: oklch(1 0 0 / 16%);
+    background-color: oklch(0.42 0.04 8 / 28%);
   }
   ::-webkit-scrollbar-corner {
     background: transparent;

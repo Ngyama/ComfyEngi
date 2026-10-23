@@ -1,4 +1,4 @@
-// 套图生成计划编辑器（默认主页面）：剧情 → 角色 → 动作序列 → 每个动作的配置 → 检查 → 开始。
+// 套图生成计划编辑器（默认主页面）：剧情 → 主角色 / 第二角色 → 动作序列 → 每个动作的配置 → 检查 → 开始。
 
 import { useMemo, useState } from 'react'
 import {
@@ -20,6 +20,7 @@ import {
   Smile,
   Trash2,
   User,
+  UserPlus,
   Workflow as WorkflowIcon,
 } from 'lucide-react'
 import { toast } from 'sonner'
@@ -83,7 +84,7 @@ function TaskSwitcher() {
             setEditing(false)
           }
         }}
-        className="h-9 w-72 rounded-lg bg-white/[0.06] px-3 text-[15px] font-semibold ring-1 ring-primary/50 outline-none"
+        className="h-9 w-72 rounded-lg bg-tint/[0.06] px-3 text-[15px] font-semibold ring-1 ring-primary/50 outline-none"
       />
     )
 
@@ -91,7 +92,7 @@ function TaskSwitcher() {
     <div className="flex min-w-0 items-center gap-1">
       <Popover open={open} onOpenChange={setOpen}>
         <PopoverTrigger asChild>
-          <button type="button" className="flex min-w-0 items-center gap-2 rounded-lg px-2 py-1.5 hover:bg-white/[0.05]">
+          <button type="button" className="flex min-w-0 items-center gap-2 rounded-lg px-2 py-1.5 hover:bg-tint/[0.05]">
             <span className="truncate text-[16px] font-semibold tracking-tight">{task?.name ?? '无任务'}</span>
             <ChevronDown className="size-4 shrink-0 text-muted-foreground" />
           </button>
@@ -107,15 +108,15 @@ function TaskSwitcher() {
                   void load(t.id)
                   setOpen(false)
                 }}
-                className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-[13px] hover:bg-white/[0.05]"
+                className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-[13px] hover:bg-tint/[0.05]"
               >
                 <span className="truncate">{t.name}</span>
                 {t.id === task?.id && <Check className="ml-auto size-4 text-primary" />}
               </button>
             ))}
           </div>
-          <div className="mt-1 border-t border-white/[0.06] pt-1">
-            <button type="button" onClick={create} className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-[13px] text-primary hover:bg-white/[0.05]">
+          <div className="mt-1 border-t border-tint/[0.096] pt-1">
+            <button type="button" onClick={create} className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-[13px] text-primary hover:bg-tint/[0.05]">
               <Plus className="size-4" /> 新建套图任务
             </button>
           </div>
@@ -176,8 +177,8 @@ function ContextCard({ icon, label, title, sub, onClick, empty }: { icon: React.
       type="button"
       onClick={onClick}
       className={cn(
-        'group flex min-w-0 flex-1 items-center gap-3 rounded-xl bg-card p-3 text-left ring-1 ring-white/[0.05] transition hover:bg-accent hover:ring-white/[0.1]',
-        empty && 'border border-dashed border-white/[0.12] bg-transparent ring-0',
+        'group flex min-w-0 flex-1 items-center gap-3 rounded-xl bg-card p-3 text-left ring-1 ring-tint/[0.08] transition hover:bg-accent hover:ring-tint/[0.16]',
+        empty && 'border border-dashed border-tint/[0.192] bg-transparent ring-0',
       )}
     >
       {icon}
@@ -196,6 +197,7 @@ function PoseCard({
   id,
   index,
   item,
+  second,
   selected,
   error,
   onSelect,
@@ -205,6 +207,8 @@ function PoseCard({
   id: string
   index: number
   item: TaskItem
+  /** 第二角色名称（任务选择了第二角色时） */
+  second?: string
   selected: boolean
   error?: string
   onSelect: () => void
@@ -233,35 +237,40 @@ function PoseCard({
       {...s.listeners}
       onClick={onSelect}
       className={cn(
-        'group flex cursor-pointer items-center gap-3 rounded-xl bg-card px-3 py-3 ring-1 ring-white/[0.05] transition-[background,box-shadow] outline-none hover:bg-accent/70',
+        'group flex cursor-pointer items-center gap-3 rounded-xl bg-card px-3 py-3 ring-1 ring-tint/[0.08] transition-[background,box-shadow] outline-none hover:bg-accent/70',
         selected && 'bg-accent/80 ring-primary/60',
         error && !selected && 'ring-destructive/40',
-        s.isDragging && 'shadow-2xl shadow-black/50 ring-primary/40',
+        s.isDragging && 'shadow-2xl shadow-tint/15 ring-primary/40',
       )}
     >
       <GripVertical className="size-4 shrink-0 cursor-grab text-muted-foreground/40 group-hover:text-muted-foreground" />
-      <span className="grid size-7 shrink-0 place-items-center rounded-lg bg-white/[0.06] text-xs font-semibold text-muted-foreground tabular-nums">{index + 1}</span>
+      <span className="grid size-7 shrink-0 place-items-center rounded-lg bg-tint/[0.06] text-xs font-semibold text-muted-foreground tabular-nums">{index + 1}</span>
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-2">
           <span data-testid="pose-name" className={cn('truncate text-[14px] font-medium', missing && 'text-destructive')}>{label}</span>
           {item.position_id && pose && <span className="shrink-0 truncate text-[11px] text-muted-foreground">+ {pose.name}</span>}
           {acts.length > 0 && (
-            <span className="shrink-0 rounded-md bg-violet-400/10 px-1.5 py-0.5 text-[10.5px] text-violet-300" title="行为">
+            <span className="shrink-0 rounded-md bg-violet-500/10 px-1.5 py-0.5 text-[10.5px] text-violet-600" title="行为">
               {acts.join(' + ')}
             </span>
           )}
           {scene && (
-            <span className="shrink-0 rounded-md bg-emerald-400/10 px-1.5 py-0.5 text-[10.5px] text-emerald-300" title="场景">
+            <span className="shrink-0 rounded-md bg-emerald-500/10 px-1.5 py-0.5 text-[10.5px] text-emerald-600" title="场景">
               {scene.name}
             </span>
           )}
+          {item.second_enabled && (
+            <span className="shrink-0 truncate rounded-md bg-sky-500/10 px-1.5 py-0.5 text-[10.5px] text-sky-600" title="第二角色出场" data-testid="second-badge">
+              + {second ?? '（未选择第二角色）'}
+            </span>
+          )}
           {item.male_enabled && (
-            <span className="shrink-0 rounded-md bg-sky-400/10 px-1.5 py-0.5 text-[10.5px] text-sky-300" title="男性出场">
-              ♂ 男性
+            <span className="shrink-0 rounded-md bg-sky-500/10 px-1.5 py-0.5 text-[10.5px] text-sky-600" title="旧版男性设置">
+              ♂ 男性（旧版）
             </span>
           )}
           {camera && (
-            <span className="inline-flex shrink-0 items-center gap-1 rounded-md bg-white/[0.06] px-1.5 py-0.5 text-[10.5px] text-muted-foreground">
+            <span className="inline-flex shrink-0 items-center gap-1 rounded-md bg-tint/[0.06] px-1.5 py-0.5 text-[10.5px] text-muted-foreground">
               <Camera className="size-3" />
               {camera.name}
             </span>
@@ -307,7 +316,7 @@ export default function PlanPage() {
   const go = useNav((s) => s.go)
   const { task, update, selected, select, saving } = usePlan()
   const runner = useRunner((s) => s.status)
-  const [picker, setPicker] = useState<null | 'char' | 'story' | 'pose' | 'settings'>(null)
+  const [picker, setPicker] = useState<null | 'char' | 'char2' | 'story' | 'pose' | 'settings'>(null)
   const [plan, setPlan] = useState<Plan | null>(null)
   const [previewOpen, setPreviewOpen] = useState(false)
   // 卡片的稳定 key（拖拽需要），与 items 一一对应
@@ -348,6 +357,7 @@ export default function PlanPage() {
 
   const d = task.data
   const char = lib?.characters.find((c) => c.id === d.character_id)
+  const char2 = d.second_character_id ? lib?.characters.find((c) => c.id === d.second_character_id) : undefined
   const story = lib?.stories.find((s) => s.id === d.story_id)
   const storyOutfit = lib?.outfits.find((o) => o.id === d.story_outfit_id)
   const wfId = d.workflow_id ?? lib?.settings.default_workflow_id
@@ -358,7 +368,7 @@ export default function PlanPage() {
   const globalErrors = errors.filter((e) => !/^第 \d+ 个动作/.test(e))
   const nStory = units.filter((u) => u.section === 'story').length
   const firstUnitOf = (i: number): PlanUnit | null => units.find((u) => u.section === 'pose' && u.item_index === i) ?? null
-  const outfitCount = (lib?.outfits ?? []).filter((o) => o.character_id === d.character_id).length
+  const outfitsOf = (cid: number | null | undefined) => (lib?.outfits ?? []).filter((o) => o.character_id === cid).length
 
   const setKeysAfter = (fn: (k: string[]) => string[]) => setKeys(fn(itemKeys))
 
@@ -366,7 +376,10 @@ export default function PlanPage() {
     const at = selected !== null && selected < items.length ? selected + 1 : items.length
     const prev = at > 0 ? items[at - 1] : null
     // 服装默认继承上一个动作
-    update((x) => x.items.splice(at, 0, ...ids.map((a) => ('pose_id' in a ? newItem(a.pose_id, prev?.outfit_id ?? null) : newInteractionItem(a.position_id, a.subposition_id, prev?.outfit_id ?? null)))))
+    // 双人互动在选择了第二角色时默认让第二角色出场；单人动作默认是单人图片
+    update((x) =>
+      x.items.splice(at, 0, ...ids.map((a) => ('pose_id' in a ? newItem(a.pose_id, prev?.outfit_id ?? null) : newInteractionItem(a.position_id, a.subposition_id, prev?.outfit_id ?? null, !!x.second_character_id)))),
+    )
     setKeysAfter((k) => [...k.slice(0, at), ...ids.map(() => Math.random().toString(36).slice(2)), ...k.slice(at)])
     select(at + ids.length - 1)
   }
@@ -408,6 +421,27 @@ export default function PlanPage() {
       if (x.story_outfit_id) x.story_outfit_id = byName.get(old.get(x.story_outfit_id) ?? '\u0000') ?? null
     })
     if (lost) toast.warning(`已切换角色：${lost} 个动作的服装在新角色中没有同名服装，请重新选择`)
+  }
+
+  /** 第二角色：切换时按同名服装对应；首次选择时让双人互动的动作启用第二角色；取消时所有动作回到单人 */
+  const changeSecondCharacter = (cid: number | null) => {
+    const prevId = d.second_character_id ?? null
+    if (cid === prevId) return
+    const old = new Map((lib?.outfits ?? []).filter((o) => o.character_id === prevId).map((o) => [o.id, o.name]))
+    const byName = new Map((lib?.outfits ?? []).filter((o) => o.character_id === cid).map((o) => [o.name, o.id]))
+    let lost = 0
+    update((x) => {
+      x.second_character_id = cid
+      for (const it of x.items) {
+        if (cid === null) it.second_enabled = false
+        else if (prevId === null && it.position_id) it.second_enabled = true
+        if (!it.second_outfit_id) continue
+        const nid = cid === null ? null : (byName.get(old.get(it.second_outfit_id) ?? '\u0000') ?? null)
+        if (!nid && cid !== null) lost++
+        it.second_outfit_id = nid
+      }
+    })
+    if (lost) toast.warning(`已切换第二角色：${lost} 个动作的服装在新角色中没有同名服装，请重新选择`)
   }
 
   const openPreview = async () => {
@@ -456,7 +490,7 @@ export default function PlanPage() {
           <button
             type="button"
             onClick={() => (wf ? setPicker('settings') : go('settings'))}
-            className="flex items-center gap-2 rounded-lg px-2.5 py-1.5 text-xs text-muted-foreground hover:bg-white/[0.05] hover:text-foreground"
+            className="flex items-center gap-2 rounded-lg px-2.5 py-1.5 text-xs text-muted-foreground hover:bg-tint/[0.05] hover:text-foreground"
             title={wf ? '工作流（在任务设置中更改）' : '尚未配置工作流，点击前往设置'}
           >
             <StatusDot tone={!wf ? 'warn' : wf.errors ? 'error' : 'ok'} />
@@ -471,7 +505,7 @@ export default function PlanPage() {
         {/* 剧情与角色 */}
         <div className="flex gap-3 px-6 pb-4">
           <ContextCard
-            icon={<div className="grid size-9 shrink-0 place-items-center rounded-xl bg-amber-400/10 text-amber-300"><BookOpen className="size-4" /></div>}
+            icon={<div className="grid size-9 shrink-0 place-items-center rounded-xl bg-amber-500/10 text-amber-600"><BookOpen className="size-4" /></div>}
             label="剧情"
             title={story ? story.name : '不使用剧情'}
             sub={story ? `${story.genre || '未分类'} · ${(story.scenes ?? []).length} 个场景 · ${nStory} 张${storyOutfit ? ` · ${storyOutfit.name}` : ''}` : '直接从动作序列开始'}
@@ -479,12 +513,20 @@ export default function PlanPage() {
             onClick={() => setPicker('story')}
           />
           <ContextCard
-            icon={char ? <Avatar name={char.name} hue={hueOf(char.name)} /> : <div className="grid size-9 shrink-0 place-items-center rounded-xl bg-white/[0.05] text-muted-foreground"><User className="size-4" /></div>}
-            label="角色"
-            title={char ? char.name : '选择角色'}
-            sub={char ? `${outfitCount} 套服装 · ${(char.loras ?? []).filter((l) => l.name).length} 个 LoRA` : '必选'}
+            icon={char ? <Avatar name={char.name} hue={hueOf(char.name)} /> : <div className="grid size-9 shrink-0 place-items-center rounded-xl bg-tint/[0.05] text-muted-foreground"><User className="size-4" /></div>}
+            label="主角色"
+            title={char ? char.name : '选择主角色'}
+            sub={char ? `${outfitsOf(char.id)} 套服装 · ${(char.loras ?? []).filter((l) => l.name).length} 个 LoRA` : '必选'}
             empty={!char}
             onClick={() => setPicker('char')}
+          />
+          <ContextCard
+            icon={char2 ? <Avatar name={char2.name} hue={hueOf(char2.name)} /> : <div className="grid size-9 shrink-0 place-items-center rounded-xl bg-tint/[0.05] text-muted-foreground"><UserPlus className="size-4" /></div>}
+            label="第二角色"
+            title={char2 ? char2.name : d.second_character_id ? '（第二角色已被删除）' : '不使用'}
+            sub={char2 ? `${outfitsOf(char2.id)} 套服装 · ${(char2.loras ?? []).filter((l) => l.name).length} 个 LoRA · 在动作中启用` : '可选：双人图片时选择'}
+            empty={!char2}
+            onClick={() => setPicker('char2')}
           />
         </div>
 
@@ -531,6 +573,7 @@ export default function PlanPage() {
                   id={itemKeys[i]}
                   index={i}
                   item={it}
+                  second={char2?.name}
                   selected={selected === i}
                   error={itemError(i)}
                   onSelect={() => select(i)}
@@ -542,7 +585,7 @@ export default function PlanPage() {
             <button
               type="button"
               onClick={() => setPicker('pose')}
-              className="flex w-full items-center justify-center gap-2 rounded-xl border border-dashed border-white/[0.1] py-4 text-[13px] text-muted-foreground transition hover:border-primary/40 hover:bg-primary/[0.04] hover:text-primary"
+              className="flex w-full items-center justify-center gap-2 rounded-xl border border-dashed border-tint/[0.16] py-4 text-[13px] text-muted-foreground transition hover:border-primary/40 hover:bg-primary/[0.04] hover:text-primary"
             >
               <Plus className="size-4" />
               {items.length ? '添加动作' : '从素材库添加第一个动作'}
@@ -551,7 +594,7 @@ export default function PlanPage() {
         </div>
 
         {/* 底部操作 */}
-        <div className="flex items-center gap-3 border-t border-white/[0.05] px-6 py-3">
+        <div className="flex items-center gap-3 border-t border-tint/[0.08] px-6 py-3">
           <div className="min-w-0">
             <div className="text-[13px]">
               共 <span className="text-[15px] font-semibold tabular-nums">{units.length}</span> 张
@@ -591,12 +634,21 @@ export default function PlanPage() {
 
       {/* 姿态详情：宽屏时并排，窄屏时浮在序列上方 */}
       {detailOpen && (
-        <div className="absolute top-3 right-3 bottom-[76px] z-30 w-[380px] overflow-hidden rounded-2xl bg-popover shadow-2xl ring-1 shadow-black/50 ring-white/[0.08] 2xl:static 2xl:my-3 2xl:mr-3 2xl:w-[400px] 2xl:shrink-0 2xl:bg-card 2xl:shadow-none">
+        <div className="absolute top-3 right-3 bottom-[76px] z-30 w-[380px] overflow-hidden rounded-2xl bg-popover shadow-2xl ring-1 shadow-tint/15 ring-tint/[0.128] 2xl:static 2xl:my-3 2xl:mr-3 2xl:w-[400px] 2xl:shrink-0 2xl:bg-card 2xl:shadow-none">
           <PoseDetail index={selected!} firstUnit={firstUnitOf(selected!)} onClose={() => select(null)} />
         </div>
       )}
 
-      <CharacterPicker open={picker === 'char'} onOpenChange={(o) => setPicker(o ? 'char' : null)} value={d.character_id} onPick={changeCharacter} />
+      <CharacterPicker open={picker === 'char'} onOpenChange={(o) => setPicker(o ? 'char' : null)} value={d.character_id} onPick={changeCharacter} title="选择主角色" />
+      <CharacterPicker
+        open={picker === 'char2'}
+        onOpenChange={(o) => setPicker(o ? 'char2' : null)}
+        value={d.second_character_id ?? null}
+        onPick={changeSecondCharacter}
+        onClear={() => changeSecondCharacter(null)}
+        title="选择第二角色"
+        description="与主角色来自同一个角色库。第二角色在每个动作中单独启用，可分别选择服装、动作和表情；未启用的动作生成单人图片。"
+      />
       <StoryPicker
         open={picker === 'story'}
         onOpenChange={(o) => setPicker(o ? 'story' : null)}

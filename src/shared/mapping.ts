@@ -14,6 +14,11 @@ export const SOURCES: [string, string][] = [
     [`lora${i + 1}_name`, `角色 LoRA ${i + 1} 名称`] as [string, string],
     [`lora${i + 1}_strength`, `角色 LoRA ${i + 1} 强度`] as [string, string],
   ]).flat(),
+  // 第二角色的 LoRA：不假定工作流能加载两个角色 LoRA，需要用户把另外的 LoRA 加载节点映射到这里
+  ...Array.from({ length: MAX_LORA_SLOTS }, (_, i) => [
+    [`second_lora${i + 1}_name`, `第二角色 LoRA ${i + 1} 名称`] as [string, string],
+    [`second_lora${i + 1}_strength`, `第二角色 LoRA ${i + 1} 强度`] as [string, string],
+  ]).flat(),
   ['filename_prefix', '输出文件前缀'],
 ]
 export const SOURCE_LABELS: Record<string, string> = Object.fromEntries(SOURCES)
@@ -257,6 +262,7 @@ export interface ValueUnit extends PrefixUnit {
   positive: string
   negative: string
   loras: { name: string; strength: number }[]
+  loras2?: { name: string; strength: number }[]
 }
 
 /** 计算每个映射目标要写入的值。预览与实际提交都调用这个函数，保证一致。值为 null 表示保持工作流原值 */
@@ -276,10 +282,13 @@ export function mappingValues(
       value = src === 'positive' ? pos : neg
     } else if (src === 'seed') {
       value = Math.trunc(unit.seed)
-    } else if (src.startsWith('lora')) {
-      const slot = parseInt(src.slice(4, src.indexOf('_')), 10) - 1
-      if (src.endsWith('_name')) value = slot < loras.length ? loras[slot].name : null
-      else value = slot < loras.length ? Number(loras[slot].strength ?? 1.0) : 0.0
+    } else if (src.startsWith('lora') || src.startsWith('second_lora')) {
+      // 第二角色未出场（或该槽位没有 LoRA）时名称保持工作流原值、强度写 0
+      const list = src.startsWith('second_') ? (unit.loras2 ?? []) : loras
+      const m = /lora(\d+)_/.exec(src)
+      const slot = (m ? parseInt(m[1], 10) : 1) - 1
+      if (src.endsWith('_name')) value = slot < list.length ? list[slot].name : null
+      else value = slot < list.length ? Number(list[slot].strength ?? 1.0) : 0.0
     } else if (src === 'filename_prefix') {
       value = renderPrefix(e.template || DEFAULT_PREFIX_TEMPLATE, unit, dateStr)
     }

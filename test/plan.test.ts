@@ -38,7 +38,7 @@ describe('模板与 Prompt', () => {
     const s = newStore()
     const set = s.settings()
     const mods = { global: ['(best:1.2)', ''], character: ['<lora:x:0.8>, {a|b}', ''], content: ['', ''], camera: ['pov', ''] } as Record<string, [string, string]>
-    expect(compose(mods, set)[0]).toBe('(best:1.2), <lora:x:0.8>, {a|b}, pov')
+    expect(compose(mods, set)[0]).toBe('(best:1.2), pov, <lora:x:0.8>, {a|b}') // 默认：全局 → 场景 → 镜头 → 主角色
     set.compose_order = ['camera', 'character', 'global']
     set.pos_separator = '\\nBREAK\\n'
     expect(compose(mods, set)[0]).toBe('pov\nBREAK\n<lora:x:0.8>, {a|b}\nBREAK\n(best:1.2)')
@@ -50,7 +50,7 @@ describe('模板与 Prompt', () => {
     expect(s.listOutfits(lib.charA).map((o) => o.name)).toEqual(['A服装1', 'A服装2', 'A服装3', 'A服装4', 'A服装5'])
     expect(s.listOutfits(lib.charB).map((o) => o.name)).toEqual(['B服装1', 'B服装2', 'B服装3'])
     const L = loadPlanLibrary(s)
-    expect(expandTask(lib.task([lib.item('睡觉', lib.outfitsB[0], [], 1)]), L, s.settings()).errors.some((e) => e.includes('不属于当前角色'))).toBe(true)
+    expect(expandTask(lib.task([lib.item('睡觉', lib.outfitsB[0], [], 1)]), L, s.settings()).errors.some((e) => e.includes('不属于角色'))).toBe(true)
     const r = expandTask(lib.task([lib.item('睡觉', lib.outfitsA[1], [], 1)]), L, s.settings())
     expect(r.errors).toEqual([])
     expect(r.units[0].positive).toContain('outfit_a2')
@@ -162,7 +162,7 @@ describe('任务展开', () => {
     const set = s.settings()
     const data = lib.task([lib.item('睡觉', lib.outfitsA[0], [lib.exprs[0]], 1, { camera_id: lib.above })])
     let { units } = expandTask(data, loadPlanLibrary(s), set)
-    expect(units[0].positive).toBe('masterpiece, best quality, 1girl, char_a, red hair, outfit_a1, sleeping, lying, expr1, from above')
+    expect(units[0].positive).toBe('masterpiece, best quality, from above, 1girl, char_a, red hair, outfit_a1, sleeping, lying, expr1')
     set.compose_order = ['camera', 'global', 'character', 'outfit', 'content', 'expression', 'male', 'extra']
     ;({ units } = expandTask(data, loadPlanLibrary(s), set))
     expect(units[0].positive.startsWith('from above, masterpiece')).toBe(true)

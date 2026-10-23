@@ -85,7 +85,7 @@ function LoraPicker({ resources, onPick, children }: { resources: LoraResource[]
                     {r.sidecar?.modelName && r.sidecar.modelName !== fileStem(r) ? ` · ${fileStem(r)}` : ''}
                   </div>
                 </div>
-                {r.sidecar?.baseModel && <span className="shrink-0 rounded bg-white/[0.06] px-1.5 py-0.5 text-[10px] text-muted-foreground">{r.sidecar.baseModel}</span>}
+                {r.sidecar?.baseModel && <span className="shrink-0 rounded bg-tint/[0.06] px-1.5 py-0.5 text-[10px] text-muted-foreground">{r.sidecar.baseModel}</span>}
               </CommandItem>
             ))}
             {list.length > shown.length && <div className="px-3 py-2 text-center text-[11px] text-muted-foreground">还有 {list.length - shown.length} 个结果，请输入更多关键词</div>}
@@ -117,7 +117,7 @@ function LoraSection({ loras, resources, onChange, onResourceChanged, onImport }
         {loras.map((l, i) => {
           const r = byId(l.resource_id)
           return (
-            <div key={i} className="flex items-center gap-3 rounded-lg bg-black/20 p-2">
+            <div key={i} className="flex items-center gap-3 rounded-lg bg-inset p-2">
               <span className="w-12 shrink-0 text-[11px] text-muted-foreground">槽位 {i + 1}</span>
               {r && <LoraThumb r={r} width={96} className="h-10 w-8 rounded" />}
               <span className="min-w-0 flex-1 truncate font-mono text-[12px]">{r ? loraTitle(r) : l.name}</span>
@@ -148,7 +148,7 @@ function LoraSection({ loras, resources, onChange, onResourceChanged, onImport }
   if (!l)
     return (
       <LoraPicker resources={resources} onPick={pick}>
-        <button type="button" className="flex h-11 w-full items-center gap-2 rounded-xl border border-dashed border-white/[0.12] px-3 text-left text-[13px] text-muted-foreground hover:border-primary/40 hover:text-primary" data-testid="lora-picker-open">
+        <button type="button" className="flex h-11 w-full items-center gap-2 rounded-xl border border-dashed border-tint/[0.192] px-3 text-left text-[13px] text-muted-foreground hover:border-primary/40 hover:text-primary" data-testid="lora-picker-open">
           <Plus className="size-4" /> 选择 LoRA…
           <ChevronsUpDown className="ml-auto size-4 opacity-60" />
         </button>
@@ -158,11 +158,11 @@ function LoraSection({ loras, resources, onChange, onResourceChanged, onImport }
   const r = byId(l.resource_id)
   const suggested = r ? (/^[a-z]:[\\/]/i.test(r.path) ? r.relativePath.replaceAll('/', '\\') : r.relativePath) : ''
   return (
-    <div className="flex items-center gap-3 rounded-xl bg-white/[0.035] p-2.5 ring-1 ring-white/[0.06]" data-testid="character-lora">
+    <div className="flex items-center gap-3 rounded-xl bg-tint/[0.035] p-2.5 ring-1 ring-tint/[0.096]" data-testid="character-lora">
       {r ? (
         <LoraThumb r={r} width={160} className="h-16 w-12 rounded-lg" />
       ) : (
-        <div className="grid h-16 w-12 shrink-0 place-items-center rounded-lg bg-black/30 text-muted-foreground">
+        <div className="grid h-16 w-12 shrink-0 place-items-center rounded-lg bg-inset text-muted-foreground">
           <Unlink className="size-4" />
         </div>
       )}
@@ -208,7 +208,7 @@ function LoraSection({ loras, resources, onChange, onResourceChanged, onImport }
 function OutfitRow({ o, open, onToggle, onDeleted }: { o: Outfit; open: boolean; onToggle: () => void; onDeleted: () => void }) {
   const s = useSortableItem(String(o.id))
   return (
-    <div ref={s.setNodeRef} style={s.style} className={cn('rounded-xl bg-white/[0.03] ring-1 ring-white/[0.05]', open && 'bg-white/[0.045] ring-white/[0.1]', s.isDragging && 'shadow-2xl shadow-black/50')} data-testid="outfit-row">
+    <div ref={s.setNodeRef} style={s.style} className={cn('rounded-xl bg-tint/[0.03] ring-1 ring-tint/[0.08]', open && 'bg-tint/[0.045] ring-tint/[0.16]', s.isDragging && 'shadow-2xl shadow-tint/15')} data-testid="outfit-row">
       <div className="flex items-center gap-2 px-2 py-2">
         <button type="button" {...s.attributes} {...s.listeners} className="cursor-grab text-muted-foreground/50 hover:text-muted-foreground" aria-label="拖动排序">
           <GripVertical className="size-4" />
@@ -258,7 +258,7 @@ function OutfitEditor({ o, onDeleted }: { o: Outfit; onDeleted: () => void }) {
           aria-label="删除服装"
           className="hover:text-destructive"
           onClick={async () => {
-            const used = [...new Set([...(await api.references('outfit_id', o.id)), ...(await api.references('story_outfit_id', o.id))])]
+            const used = [...new Set([...(await api.references('outfit_id', o.id)), ...(await api.references('story_outfit_id', o.id)), ...(await api.references('second_outfit_id', o.id))])]
             if (!(await confirm({ title: `删除服装「${draft.name}」？`, description: used.length ? `以下套图任务正在使用它：${used.join('、')}` : undefined, confirmText: '删除', destructive: true }))) return
             await call(api['outfits.remove'](o.id))
             await reloadLib()
@@ -340,7 +340,7 @@ function CharacterDetail({ c, resources, refreshResources, onDeleted }: { c: Cha
           size="sm"
           className="hover:text-destructive"
           onClick={async () => {
-            const used = await api.references('character_id', c.id)
+            const used = [...new Set([...(await api.references('character_id', c.id)), ...(await api.references('second_character_id', c.id))])]
             if (!(await confirm({ title: `删除角色「${draft.name}」及其全部服装？`, description: (used.length ? `以下套图任务正在使用它：${used.join('、')}\n` : '') + '已生成的运行记录不受影响。', confirmText: '删除', destructive: true }))) return
             await call(api['characters.remove'](c.id))
             await reloadLib()
@@ -407,7 +407,7 @@ function CharacterDetail({ c, resources, refreshResources, onDeleted }: { c: Cha
                   <OutfitRow key={o.id} o={o} open={openOutfit === o.id} onToggle={() => setOpenOutfit(openOutfit === o.id ? null : o.id)} onDeleted={() => setOpenOutfit(null)} />
                 ))}
               </SortableArea>
-              {!outfits.length && <div className="rounded-xl border border-dashed border-white/[0.1] px-4 py-5 text-center text-xs text-muted-foreground">还没有服装。每套服装是一段原始 Prompt，只属于这个角色。</div>}
+              {!outfits.length && <div className="rounded-xl border border-dashed border-tint/[0.16] px-4 py-5 text-center text-xs text-muted-foreground">还没有服装。每套服装是一段原始 Prompt，只属于这个角色。</div>}
             </div>
           </Section>
         </div>
@@ -462,19 +462,19 @@ function ImportTriggersDialog({ resource, base, onClose, onConfirm }: { resource
             <FieldLabel hint="点击插入到下方选中的位置">触发词</FieldLabel>
             <div className="flex flex-wrap gap-1.5">
               {words.map((w) => (
-                <button key={w} type="button" onClick={() => add(w)} className={cn('rounded-full px-2.5 py-1 font-mono text-[11.5px] ring-1', existing.has(w.trim().toLowerCase()) ? 'bg-white/[0.03] text-muted-foreground ring-white/[0.06]' : 'bg-primary/10 text-primary ring-primary/25 hover:bg-primary/20')} title={existing.has(w.trim().toLowerCase()) ? '已在基础 Prompt 中' : '点击插入'}>
+                <button key={w} type="button" onClick={() => add(w)} className={cn('rounded-full px-2.5 py-1 font-mono text-[11.5px] ring-1', existing.has(w.trim().toLowerCase()) ? 'bg-tint/[0.03] text-muted-foreground ring-tint/[0.096]' : 'bg-primary/10 text-primary ring-primary/25 hover:bg-primary/20')} title={existing.has(w.trim().toLowerCase()) ? '已在基础 Prompt 中' : '点击插入'}>
                   {w}
                 </button>
               ))}
             </div>
           </div>
-          <div className={cn('rounded-xl p-3 ring-1', target < 0 ? 'ring-primary/50' : 'ring-white/[0.06]')} onClick={() => setTarget(-1)}>
+          <div className={cn('rounded-xl p-3 ring-1', target < 0 ? 'ring-primary/50' : 'ring-tint/[0.096]')} onClick={() => setTarget(-1)}>
             <FieldLabel hint="加在基础 Prompt 开头，已存在的标签不会重复">加入基础 Prompt</FieldLabel>
             <PromptField value={text} onChange={setText} minRows={2} placeholder="（不加入基础 Prompt）" />
             {result.skipped.length > 0 && <div className="mt-1 text-[11px] text-muted-foreground">已存在、将跳过：{result.skipped.join(', ')}</div>}
           </div>
           {outfits.map((o, i) => (
-            <div key={i} className={cn('space-y-2 rounded-xl p-3 ring-1', target === i ? 'ring-primary/50' : 'ring-white/[0.06]')} onClick={() => setTarget(i)}>
+            <div key={i} className={cn('space-y-2 rounded-xl p-3 ring-1', target === i ? 'ring-primary/50' : 'ring-tint/[0.096]')} onClick={() => setTarget(i)}>
               <div className="flex items-center gap-2">
                 <Shirt className="size-3.5 text-muted-foreground" />
                 <TextInput value={o.name} onChange={(v) => setOutfits((os) => os.map((x, j) => (j === i ? { ...x, name: v } : x)))} placeholder="服装名称" />
@@ -488,7 +488,7 @@ function ImportTriggersDialog({ resource, base, onClose, onConfirm }: { resource
           <Button variant="ghost" size="sm" onClick={() => { setOutfits((os) => [...os, { name: `新服装${os.length + 1}`, positive: '' }]); setTarget(outfits.length) }}>
             <Plus /> 整理为新服装
           </Button>
-          <div className="rounded-xl bg-black/25 p-3">
+          <div className="rounded-xl bg-inset p-3">
             <FieldLabel>导入后的基础 Prompt</FieldLabel>
             <pre className="font-mono text-[12px] whitespace-pre-wrap text-foreground/85" data-testid="import-preview">{result.text || '（空）'}</pre>
             {valid.length > 0 && <div className="mt-2 text-[11px] text-muted-foreground">将新建服装：{valid.map((o) => o.name).join('、')}（不会修改已有服装）</div>}
@@ -517,7 +517,7 @@ export default function CharactersPage() {
   const outfitCount = (id: number) => (lib?.outfits ?? []).filter((o) => o.character_id === id).length
   return (
     <div className="flex h-full">
-      <div className="flex w-[260px] shrink-0 flex-col border-r border-white/[0.05]">
+      <div className="flex w-[260px] shrink-0 flex-col border-r border-tint/[0.08]">
         <div className="flex items-center justify-between px-4 pt-5 pb-3">
           <h1 className="text-[15px] font-semibold">角色库</h1>
           <Button
@@ -544,7 +544,7 @@ export default function CharactersPage() {
               type="button"
               onClick={() => setSel(c.id)}
               data-active={sel === c.id || undefined}
-              className="flex w-full items-center gap-3 rounded-xl px-2 py-2 text-left hover:bg-white/[0.04] data-[active]:bg-white/[0.07]"
+              className="flex w-full items-center gap-3 rounded-xl px-2 py-2 text-left hover:bg-tint/[0.04] data-[active]:bg-tint/[0.07]"
             >
               <CharacterAvatar c={c} resources={resources} />
               <div className="min-w-0">

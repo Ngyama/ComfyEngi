@@ -32,7 +32,7 @@ async function setSetting<K extends keyof Settings>(key: K, value: Settings[K]) 
 
 function Card({ title, description, children }: { title: string; description?: ReactNode; children: ReactNode }) {
   return (
-    <div className="rounded-2xl bg-card p-5 ring-1 ring-white/[0.05]">
+    <div className="rounded-2xl bg-card p-5 ring-1 ring-tint/[0.08]">
       <div className="mb-4">
         <div className="text-[14px] font-semibold">{title}</div>
         {description && <div className="mt-1 text-xs leading-relaxed text-muted-foreground">{description}</div>}
@@ -114,7 +114,7 @@ function WorkflowsSection() {
             type="button"
             onClick={() => setSel(w.id)}
             data-active={cur?.id === w.id || undefined}
-            className="flex items-center gap-2 rounded-xl bg-card px-3 py-2 text-left ring-1 ring-white/[0.05] hover:bg-accent data-[active]:ring-primary/60"
+            className="flex items-center gap-2 rounded-xl bg-card px-3 py-2 text-left ring-1 ring-tint/[0.08] hover:bg-accent data-[active]:ring-primary/60"
           >
             <StatusDot tone={w.errors ? 'error' : w.mapping ? 'ok' : 'warn'} />
             <span className="text-[13px] font-medium">{w.name}</span>
@@ -126,11 +126,11 @@ function WorkflowsSection() {
         </Button>
       </div>
       {cur ? (
-        <div className="flex min-h-0 flex-1 flex-col rounded-2xl bg-card p-5 ring-1 ring-white/[0.05]">
+        <div className="flex min-h-0 flex-1 flex-col rounded-2xl bg-card p-5 ring-1 ring-tint/[0.08]">
           <WorkflowEditor key={cur.id} id={cur.id} onDeleted={() => setSel(null)} />
         </div>
       ) : (
-        <div className="rounded-2xl bg-card ring-1 ring-white/[0.05]">
+        <div className="rounded-2xl bg-card ring-1 ring-tint/[0.08]">
           <EmptyState icon={<WorkflowIcon />} title="还没有导入工作流" description="导入你在 ComfyUI 中使用的工作流（API 格式），然后指定哪些节点输入接收 Prompt、Seed、LoRA 等。软件不会改动工作流的其他部分。" action={<Button onClick={doImport}><Plus /> 导入 API 工作流</Button>} />
           <div className="px-6 pb-6">
             <ImportHint />
@@ -145,7 +145,7 @@ function WorkflowsSection() {
 function ModuleChip({ id }: { id: string }) {
   const s = useSortableItem(id)
   return (
-    <div ref={s.setNodeRef} style={s.style} {...s.attributes} {...s.listeners} className={cn('flex cursor-grab items-center gap-1.5 rounded-lg bg-white/[0.06] py-1.5 pr-3 pl-2 text-[12.5px] ring-1 ring-white/[0.06] hover:bg-white/[0.09]', s.isDragging && 'shadow-xl shadow-black/50 ring-primary/50')}>
+    <div ref={s.setNodeRef} style={s.style} {...s.attributes} {...s.listeners} className={cn('flex cursor-grab items-center gap-1.5 rounded-lg bg-tint/[0.06] py-1.5 pr-3 pl-2 text-[12.5px] ring-1 ring-tint/[0.096] hover:bg-tint/[0.09]', s.isDragging && 'shadow-xl shadow-tint/15 ring-primary/50')}>
       <GripVertical className="size-3.5 text-muted-foreground/60" />
       {MODULE_LABELS[id]}
     </div>
@@ -185,7 +185,7 @@ function ComposeSection({ s }: { s: Settings }) {
         </label>
         <div className="mt-4">
           <FieldLabel>示例</FieldLabel>
-          <pre className="rounded-xl bg-black/25 p-3 font-mono text-[12px] whitespace-pre-wrap">{compose(sample, { ...s, pos_separator: pos })[0]}</pre>
+          <pre className="rounded-xl bg-inset p-3 font-mono text-[12px] whitespace-pre-wrap">{compose(sample, { ...s, pos_separator: pos })[0]}</pre>
         </div>
       </Card>
     </div>
@@ -194,7 +194,7 @@ function ComposeSection({ s }: { s: Settings }) {
 
 function RunSection({ s }: { s: Settings }) {
   const row = (label: string, hint: string, key: keyof Settings, min: number, max: number, unit: string) => (
-    <div className="flex items-center gap-4 border-b border-white/[0.04] py-3 last:border-0">
+    <div className="flex items-center gap-4 border-b border-tint/[0.064] py-3 last:border-0">
       <div className="min-w-0 flex-1">
         <div className="text-[13px]">{label}</div>
         <div className="mt-0.5 text-[11.5px] text-muted-foreground">{hint}</div>
@@ -269,7 +269,7 @@ export default function SettingsPage() {
             type="button"
             onClick={() => setSec(k)}
             data-active={sec === k || undefined}
-            className="flex h-9 w-full items-center gap-2.5 rounded-lg px-3 text-[13px] text-muted-foreground hover:bg-white/[0.04] hover:text-foreground data-[active]:bg-white/[0.07] data-[active]:text-foreground [&_svg]:size-4"
+            className="flex h-9 w-full items-center gap-2.5 rounded-lg px-3 text-[13px] text-muted-foreground hover:bg-tint/[0.04] hover:text-foreground data-[active]:bg-tint/[0.07] data-[active]:text-foreground [&_svg]:size-4"
           >
             {icon}
             {label}

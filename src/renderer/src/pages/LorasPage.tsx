@@ -142,7 +142,7 @@ function useLoraImage(r: LoraResource | null, width: number, enabled = true) {
 export function LoraThumb({ r, width = 160, className }: { r: LoraResource; width?: number; className?: string }) {
   const src = useLoraImage(r, width)
   return (
-    <div className={cn('relative shrink-0 overflow-hidden bg-black/30', className)}>
+    <div className={cn('relative shrink-0 overflow-hidden bg-inset', className)}>
       {src ? (
         <img src={src} alt="" draggable={false} className="absolute inset-0 size-full object-cover" />
       ) : src === null || (!r.preview && !r.cover) ? (
@@ -150,7 +150,7 @@ export function LoraThumb({ r, width = 160, className }: { r: LoraResource; widt
           <Layers className="size-4" />
         </div>
       ) : (
-        <div className="absolute inset-0 animate-pulse bg-white/[0.04]" />
+        <div className="absolute inset-0 animate-pulse bg-tint/[0.04]" />
       )}
     </div>
   )
@@ -158,7 +158,7 @@ export function LoraThumb({ r, width = 160, className }: { r: LoraResource; widt
 
 function Placeholder({ r, large }: { r: LoraResource; large?: boolean }) {
   return (
-    <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 bg-[radial-gradient(circle_at_30%_20%,oklch(0.3_0.03_278/.55),transparent_60%),linear-gradient(160deg,oklch(0.25_0.01_270),oklch(0.2_0.008_270))] text-muted-foreground/60">
+    <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 bg-[radial-gradient(circle_at_30%_20%,oklch(0.95_0.03_8/.9),transparent_60%),linear-gradient(160deg,oklch(0.975_0.01_8),oklch(0.95_0.014_8))] text-muted-foreground/60">
       <Layers className={large ? 'size-10' : 'size-7'} />
       {large && <span className="text-xs">没有封面</span>}
       {!large && r.sidecar?.baseModel && <span className="text-[10px] tracking-wide">{r.sidecar.baseModel}</span>}
@@ -254,11 +254,11 @@ function TreeRow({ node, depth, roots, onRemoveRoot }: { node: Node; depth: numb
     <>
       <div
         data-active={active || undefined}
-        className="group flex h-8 items-center gap-1 rounded-lg pr-1.5 text-[13px] text-muted-foreground hover:bg-white/[0.04] hover:text-foreground data-[active]:bg-white/[0.08] data-[active]:text-foreground"
+        className="group flex h-8 items-center gap-1 rounded-lg pr-1.5 text-[13px] text-muted-foreground hover:bg-tint/[0.04] hover:text-foreground data-[active]:bg-tint/[0.08] data-[active]:text-foreground"
         style={{ paddingLeft: 6 + depth * 14 }}
         title={isRoot ? node.root : node.folder}
       >
-        <button type="button" onClick={toggle} className={cn('grid size-5 shrink-0 place-items-center rounded hover:bg-white/[0.06]', !node.children.length && 'invisible')} aria-label="展开">
+        <button type="button" onClick={toggle} className={cn('grid size-5 shrink-0 place-items-center rounded hover:bg-tint/[0.06]', !node.children.length && 'invisible')} aria-label="展开">
           {isOpen ? <ChevronDown className="size-3.5" /> : <ChevronRight className="size-3.5" />}
         </button>
         <button
@@ -317,13 +317,13 @@ const LoraCard = memo(function LoraCard({ r, selected, characterName, nameMode, 
       }}
       data-testid="lora-card"
       className={cn(
-        'group overflow-hidden rounded-xl bg-card text-left ring-1 ring-white/[0.05] transition hover:-translate-y-0.5 hover:ring-white/[0.14]',
+        'group overflow-hidden rounded-xl bg-card text-left ring-1 ring-tint/[0.08] transition hover:-translate-y-0.5 hover:ring-tint/[0.224]',
         selected && 'ring-2 ring-primary/70',
         (r.missing || r.offline) && 'opacity-60',
       )}
     >
-      <div className="relative aspect-[3/4] overflow-hidden bg-black/30">
-        {src ? <img src={src} alt="" draggable={false} className="absolute inset-0 size-full object-cover transition duration-300 group-hover:scale-[1.03]" /> : src === null || (!r.preview && !r.cover) ? <Placeholder r={r} /> : <div className="absolute inset-0 animate-pulse bg-white/[0.03]" />}
+      <div className="relative aspect-[3/4] overflow-hidden bg-inset">
+        {src ? <img src={src} alt="" draggable={false} className="absolute inset-0 size-full object-cover transition duration-300 group-hover:scale-[1.03]" /> : src === null || (!r.preview && !r.cover) ? <Placeholder r={r} /> : <div className="absolute inset-0 animate-pulse bg-tint/[0.03]" />}
         {video && hover && <video data-testid="lora-hover-video" src={mediaUrl(r)} autoPlay muted loop playsInline className="absolute inset-0 size-full object-cover" />}
         {video && !hover && (
           <span className="absolute right-2 bottom-2 grid size-6 place-items-center rounded-full bg-black/60 text-white/90 backdrop-blur-sm" title="视频封面：悬停播放">
@@ -406,7 +406,7 @@ function Detail({ r, onClose, onChanged }: { r: LoraResource; onClose: () => voi
       </div>
       <div className="min-h-0 flex-1 space-y-5 overflow-y-auto px-4 pb-6">
         {/* 大预览 */}
-        <div className="group relative overflow-hidden rounded-xl bg-black/30">
+        <div className="group relative overflow-hidden rounded-xl bg-inset">
           <div className="relative mx-auto aspect-[3/4] max-h-[44vh] w-full">
             {video && playing ? (
               <video data-testid="lora-detail-video" src={mediaUrl(r)} poster={src ?? undefined} controls autoPlay muted loop playsInline className="absolute inset-0 size-full bg-black object-contain" />
@@ -415,7 +415,7 @@ function Detail({ r, onClose, onChanged }: { r: LoraResource; onClose: () => voi
             ) : src === null || (!r.preview && !r.cover) ? (
               <Placeholder r={r} large />
             ) : (
-              <div className="absolute inset-0 animate-pulse bg-white/[0.03]" />
+              <div className="absolute inset-0 animate-pulse bg-tint/[0.03]" />
             )}
             {video && !playing && (
               <button type="button" onClick={() => setPlaying(true)} className="absolute inset-0 grid place-items-center" aria-label="播放视频封面">
@@ -464,7 +464,7 @@ function Detail({ r, onClose, onChanged }: { r: LoraResource; onClose: () => voi
           {badges.length > 0 && (
             <div className="mt-2 flex flex-wrap gap-1.5">
               {badges.map((b, i) => (
-                <span key={b} className={cn('rounded-md px-2 py-0.5 text-[11px]', i === 0 && sc?.baseModel ? 'bg-primary/15 text-primary' : 'bg-white/[0.06] text-muted-foreground')}>
+                <span key={b} className={cn('rounded-md px-2 py-0.5 text-[11px]', i === 0 && sc?.baseModel ? 'bg-primary/15 text-primary' : 'bg-tint/[0.06] text-muted-foreground')}>
                   {b}
                 </span>
               ))}
@@ -502,13 +502,13 @@ function Detail({ r, onClose, onChanged }: { r: LoraResource; onClose: () => voi
           <Section title="推荐权重（元数据）">
             <div className="grid grid-cols-3 gap-2">
               {usage.strength !== undefined && (
-                <div className="rounded-lg bg-white/[0.035] p-2.5 text-center">
+                <div className="rounded-lg bg-tint/[0.035] p-2.5 text-center">
                   <div className="text-[15px] font-semibold tabular-nums">{usage.strength}</div>
                   <div className="text-[10.5px] text-muted-foreground">强度</div>
                 </div>
               )}
               {(usage.strengthMin !== undefined || usage.strengthMax !== undefined) && (
-                <div className="rounded-lg bg-white/[0.035] p-2.5 text-center">
+                <div className="rounded-lg bg-tint/[0.035] p-2.5 text-center">
                   <div className="text-[15px] font-semibold tabular-nums">
                     {usage.strengthMin ?? '…'} – {usage.strengthMax ?? '…'}
                   </div>
@@ -516,7 +516,7 @@ function Detail({ r, onClose, onChanged }: { r: LoraResource; onClose: () => voi
                 </div>
               )}
               {usage.clipStrength !== undefined && (
-                <div className="rounded-lg bg-white/[0.035] p-2.5 text-center">
+                <div className="rounded-lg bg-tint/[0.035] p-2.5 text-center">
                   <div className="text-[15px] font-semibold tabular-nums">{usage.clipStrength}</div>
                   <div className="text-[10.5px] text-muted-foreground">CLIP 强度</div>
                 </div>
@@ -529,7 +529,7 @@ function Detail({ r, onClose, onChanged }: { r: LoraResource; onClose: () => voi
           <Section title="标签">
             <div className="flex flex-wrap gap-1.5">
               {sc.tags.map((t) => (
-                <span key={t} className="rounded-full bg-white/[0.05] px-2.5 py-1 text-[11.5px] text-foreground/80">
+                <span key={t} className="rounded-full bg-tint/[0.05] px-2.5 py-1 text-[11.5px] text-foreground/80">
                   {t}
                 </span>
               ))}
@@ -552,7 +552,7 @@ function Detail({ r, onClose, onChanged }: { r: LoraResource; onClose: () => voi
         {r.sidecarError && <div className="rounded-lg bg-warning/10 px-3 py-2 text-xs text-warning">{r.sidecarError}</div>}
 
         {/* ComfyEngi 自己的信息（保存在 Vault，不写入插件元数据） */}
-        <div className="space-y-3 rounded-xl bg-white/[0.025] p-3.5 ring-1 ring-white/[0.05]">
+        <div className="space-y-3 rounded-xl bg-tint/[0.025] p-3.5 ring-1 ring-tint/[0.08]">
           <div className="text-[12px] font-medium">ComfyEngi 设置</div>
           <div>
             <FieldLabel hint="角色 LoRA 槽位默认使用该权重">推荐权重</FieldLabel>
@@ -562,7 +562,7 @@ function Detail({ r, onClose, onChanged }: { r: LoraResource; onClose: () => voi
                 step={0.05}
                 value={draft.recommendedWeight}
                 onChange={(e) => patch({ recommendedWeight: Number(e.target.value) })}
-                className="h-8 w-24 rounded-lg bg-white/[0.04] px-2 text-center text-[13px] tabular-nums ring-1 ring-white/[0.07] outline-none focus:ring-primary/50"
+                className="h-8 w-24 rounded-lg bg-tint/[0.04] px-2 text-center text-[13px] tabular-nums ring-1 ring-tint/[0.112] outline-none focus:ring-primary/50"
               />
               {usage?.strength !== undefined && usage.strength !== draft.recommendedWeight && (
                 <button type="button" className="text-[11px] text-muted-foreground hover:text-foreground" onClick={() => patch({ recommendedWeight: usage.strength! })}>
@@ -762,7 +762,7 @@ export default function LorasPage() {
   return (
     <div className="flex h-full">
       {/* 文件夹树 */}
-      <div className="flex w-[248px] shrink-0 flex-col border-r border-white/[0.05]">
+      <div className="flex w-[248px] shrink-0 flex-col border-r border-tint/[0.08]">
         <div className="flex items-center gap-1 px-4 pt-5 pb-3">
           <h1 className="flex-1 text-[15px] font-semibold">LoRA</h1>
           <IconButton tip="添加 LoRA 目录" onClick={addRoot}>
@@ -777,7 +777,7 @@ export default function LorasPage() {
             type="button"
             data-active={!v.place || undefined}
             onClick={() => v.set({ place: null, sel: null })}
-            className="mb-1 flex h-8 w-full items-center gap-2 rounded-lg px-2.5 text-[13px] text-muted-foreground hover:bg-white/[0.04] hover:text-foreground data-[active]:bg-white/[0.08] data-[active]:text-foreground"
+            className="mb-1 flex h-8 w-full items-center gap-2 rounded-lg px-2.5 text-[13px] text-muted-foreground hover:bg-tint/[0.04] hover:text-foreground data-[active]:bg-tint/[0.08] data-[active]:text-foreground"
           >
             <Layers className="size-4" />
             <span className="flex-1 text-left">全部 LoRA</span>
@@ -792,7 +792,7 @@ export default function LorasPage() {
             </div>
           )}
         </div>
-        <div className="border-t border-white/[0.05] px-4 py-3 text-[10.5px] leading-relaxed text-muted-foreground/70">扫描只读取模型、同名封面与 .metadata.json，不修改任何文件。</div>
+        <div className="border-t border-tint/[0.08] px-4 py-3 text-[10.5px] leading-relaxed text-muted-foreground/70">扫描只读取模型、同名封面与 .metadata.json，不修改任何文件。</div>
       </div>
 
       {/* 卡片网格 */}
@@ -818,7 +818,7 @@ export default function LorasPage() {
             <span className="ml-1 shrink-0 text-xs font-normal text-muted-foreground">{list.length} 个</span>
           </div>
           <SearchBox value={v.q} onChange={(q) => v.set({ q })} placeholder="搜索名称、标签、触发词…" className="w-72" />
-          <div className="flex rounded-lg bg-white/[0.045] p-0.5 ring-1 ring-white/[0.06]" role="group" aria-label="显示名称">
+          <div className="flex rounded-lg bg-tint/[0.045] p-0.5 ring-1 ring-tint/[0.096]" role="group" aria-label="显示名称">
             {(
               [
                 ['model', '模型名称'],
@@ -830,7 +830,7 @@ export default function LorasPage() {
                 type="button"
                 onClick={() => void setNameMode(k)}
                 data-active={nameMode === k || undefined}
-                className="h-7 rounded-md px-2.5 text-[12px] text-muted-foreground hover:text-foreground data-[active]:bg-white/[0.1] data-[active]:text-foreground"
+                className="h-7 rounded-md px-2.5 text-[12px] text-muted-foreground hover:text-foreground data-[active]:bg-tint/[0.1] data-[active]:text-foreground"
               >
                 {l}
               </button>
@@ -839,7 +839,7 @@ export default function LorasPage() {
           <select
             value={v.sort}
             onChange={(e) => v.set({ sort: e.target.value as SortKey })}
-            className="h-8 rounded-lg bg-white/[0.045] px-2 text-[12.5px] ring-1 ring-white/[0.07] outline-none focus:ring-primary/50"
+            className="h-8 rounded-lg bg-tint/[0.045] px-2 text-[12.5px] ring-1 ring-tint/[0.112] outline-none focus:ring-primary/50"
             aria-label="排序"
           >
             <option value="name" className="bg-popover">按名称</option>
@@ -858,7 +858,7 @@ export default function LorasPage() {
                   {b}
                 </Chip>
               ))}
-              <span className="mx-1 h-4 w-px bg-white/[0.08]" />
+              <span className="mx-1 h-4 w-px bg-tint/[0.08]" />
             </>
           )}
           {(
@@ -874,7 +874,7 @@ export default function LorasPage() {
           ))}
           {hiddenCount > 0 && (
             <>
-              <span className="mx-1 h-4 w-px bg-white/[0.08]" />
+              <span className="mx-1 h-4 w-px bg-tint/[0.08]" />
               <label className="flex cursor-pointer items-center gap-2 text-xs text-muted-foreground" title="已删除、移走或所在目录暂时无法访问的旧记录。记录会一直保留，不会自动删除。">
                 <Switch checked={v.showMissing} onCheckedChange={(on) => v.set({ showMissing: on })} aria-label="显示缺失文件" />
                 显示缺失文件（{hiddenCount}）
@@ -901,7 +901,7 @@ export default function LorasPage() {
                     for (const n of tree) if (sameRoot(n.root, f.root)) open.add(n.key)
                     v.set({ place: { root: f.root, folder: f.folder }, sel: null, open })
                   }}
-                  className="flex items-center gap-2 rounded-xl bg-white/[0.035] px-3 py-2 text-[12.5px] ring-1 ring-white/[0.05] hover:bg-white/[0.07]"
+                  className="flex items-center gap-2 rounded-xl bg-tint/[0.035] px-3 py-2 text-[12.5px] ring-1 ring-tint/[0.08] hover:bg-tint/[0.07]"
                 >
                   <Folder className="size-4 text-muted-foreground" />
                   {f.name}
@@ -938,7 +938,7 @@ export default function LorasPage() {
       </div>
 
       {cur && (
-        <div className="absolute inset-y-3 right-3 z-30 w-[440px] overflow-hidden rounded-2xl bg-popover shadow-2xl ring-1 shadow-black/50 ring-white/[0.08] 2xl:static 2xl:my-3 2xl:mr-3 2xl:shrink-0 2xl:bg-card 2xl:shadow-none">
+        <div className="absolute inset-y-3 right-3 z-30 w-[440px] overflow-hidden rounded-2xl bg-popover shadow-2xl ring-1 shadow-tint/15 ring-tint/[0.128] 2xl:static 2xl:my-3 2xl:mr-3 2xl:shrink-0 2xl:bg-card 2xl:shadow-none">
           <Detail
             key={cur.id}
             r={cur}

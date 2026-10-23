@@ -47,7 +47,7 @@ function RunnerMini() {
   const label = { idle: '空闲', running: '生成中', waiting: '等待 ComfyUI', pausing: '即将暂停', paused: '已暂停', stopping: '正在停止', stopped: '已停止', finished: '已完成' }[s]
   const p = status.progress
   return (
-    <button type="button" onClick={() => go('queue')} className="w-full rounded-xl bg-white/[0.03] p-3 text-left ring-1 ring-white/[0.05] hover:bg-white/[0.05]">
+    <button type="button" onClick={() => go('queue')} className="w-full rounded-xl bg-tint/[0.03] p-3 text-left ring-1 ring-tint/[0.08] hover:bg-tint/[0.05]">
       <div className="flex items-center gap-2 text-xs">
         <StatusDot tone={tone} />
         <span className="font-medium">{label}</span>
@@ -57,7 +57,7 @@ function RunnerMini() {
           <div className="mt-1.5 truncate text-[11px] text-muted-foreground">
             {status.current.run_name} · {status.current.item_label}
           </div>
-          <div className="mt-2 h-1 overflow-hidden rounded-full bg-white/[0.06]">
+          <div className="mt-2 h-1 overflow-hidden rounded-full bg-tint/[0.06]">
             <div className="h-full rounded-full bg-primary transition-all" style={{ width: p.max ? `${(p.value / p.max) * 100}%` : '8%' }} />
           </div>
         </>
@@ -110,8 +110,8 @@ export default function App() {
                 data-active={page === key || undefined}
                 className={cn(
                   'flex h-9 items-center gap-3 rounded-lg px-3 text-[13px] text-muted-foreground transition-colors',
-                  'hover:bg-white/[0.04] hover:text-foreground',
-                  'data-[active]:bg-white/[0.07] data-[active]:text-foreground',
+                  'hover:bg-tint/[0.05] hover:text-foreground',
+                  'data-[active]:bg-card data-[active]:font-medium data-[active]:text-foreground data-[active]:shadow-[var(--panel-shadow)] data-[active]:[&>svg]:text-primary',
                 )}
               >
                 <Icon className="size-4" />
@@ -122,7 +122,7 @@ export default function App() {
             <RunnerMini />
           </nav>
           <main className="min-w-0 flex-1 pr-2 pb-2">
-            <div className="relative h-full overflow-hidden rounded-2xl bg-background shadow-[0_0_0_1px_rgba(255,255,255,0.05),0_10px_40px_-10px_rgba(0,0,0,0.6)]">
+            <div className="relative h-full overflow-hidden rounded-2xl bg-background shadow-[var(--panel-shadow)]">
               {ready && <Current />}
             </div>
           </main>

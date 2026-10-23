@@ -52,9 +52,9 @@ function Thumb({ u, selected, onClick }: { u: RunUnit; selected: boolean; onClic
       ref={ref}
       type="button"
       onClick={onClick}
-      className={cn('group overflow-hidden rounded-xl bg-card text-left ring-1 ring-white/[0.05] transition hover:ring-white/[0.15]', selected && 'ring-2 ring-primary/70')}
+      className={cn('group overflow-hidden rounded-xl bg-card text-left ring-1 ring-tint/[0.08] transition hover:ring-tint/[0.24]', selected && 'ring-2 ring-primary/70')}
     >
-      <div className="relative aspect-[3/4] bg-black/30">
+      <div className="relative aspect-[3/4] bg-inset">
         {failed ? (
           <div className="absolute inset-0 grid place-items-center text-destructive/80">
             <AlertTriangle className="size-6" />
@@ -109,7 +109,7 @@ function Detail({ u, onClose }: { u: RunUnit; onClose: () => void }) {
       </div>
       <div className="min-h-0 flex-1 space-y-4 overflow-y-auto px-4 pb-5">
         {u.status === 'done' && (
-          <div className="overflow-hidden rounded-xl bg-black/30">
+          <div className="overflow-hidden rounded-xl bg-inset">
             {src ? <img src={src} alt="" className="max-h-[52vh] w-full object-contain" /> : <div className="grid h-48 place-items-center text-xs text-muted-foreground">{src === null ? '无法加载预览（ComfyUI 未启动或文件已移动）' : '加载中…'}</div>}
           </div>
         )}
@@ -141,11 +141,11 @@ function Detail({ u, onClose }: { u: RunUnit; onClose: () => void }) {
         </div>
         <div>
           <FieldLabel right={<CopyButton text={u.positive} />}>最终正面 Prompt</FieldLabel>
-          <pre className="rounded-xl bg-black/25 p-3 font-mono text-[11.5px] leading-relaxed whitespace-pre-wrap select-text">{u.positive || '（空）'}</pre>
+          <pre className="rounded-xl bg-inset p-3 font-mono text-[11.5px] leading-relaxed whitespace-pre-wrap select-text">{u.positive || '（空）'}</pre>
         </div>
         <div>
           <FieldLabel right={<CopyButton text={u.negative} />}>最终负面 Prompt</FieldLabel>
-          <pre className="rounded-xl bg-black/25 p-3 font-mono text-[11.5px] leading-relaxed whitespace-pre-wrap select-text">{u.negative || '（空）'}</pre>
+          <pre className="rounded-xl bg-inset p-3 font-mono text-[11.5px] leading-relaxed whitespace-pre-wrap select-text">{u.negative || '（空）'}</pre>
         </div>
       </div>
     </div>
@@ -204,7 +204,7 @@ export default function HistoryPage() {
         </div>
       </div>
       {cur && (
-        <div className="absolute inset-y-3 right-3 z-30 w-[420px] overflow-hidden rounded-2xl bg-popover shadow-2xl ring-1 shadow-black/50 ring-white/[0.08] 2xl:static 2xl:my-3 2xl:mr-3 2xl:shrink-0 2xl:bg-card 2xl:shadow-none">
+        <div className="absolute inset-y-3 right-3 z-30 w-[420px] overflow-hidden rounded-2xl bg-popover shadow-2xl ring-1 shadow-tint/15 ring-tint/[0.128] 2xl:static 2xl:my-3 2xl:mr-3 2xl:shrink-0 2xl:bg-card 2xl:shadow-none">
           <Detail u={cur} onClose={() => setSel(null)} />
         </div>
       )}

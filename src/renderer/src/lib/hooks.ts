@@ -62,6 +62,12 @@ export function matches(rec: Record<string, unknown>, search: string): boolean {
   return search.toLowerCase().split(/\s+/).filter(Boolean).every((w) => hay.includes(w))
 }
 
+/** 素材搜索：只按名称匹配（空格分隔的多个词需全部包含） */
+export function matchesName(rec: { name?: string }, search: string): boolean {
+  const hay = String(rec.name ?? '').toLowerCase()
+  return search.toLowerCase().split(/\s+/).filter(Boolean).every((w) => hay.includes(w))
+}
+
 /** 根据名称生成稳定的柔和色相（用于角色头像等） */
 export function hueOf(s: string): number {
   let h = 0
