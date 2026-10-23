@@ -1,4 +1,4 @@
-// 套图生成计划编辑器（默认主页面）：剧情 → 角色 → 姿态序列 → 每个姿态的配置 → 检查 → 开始。
+// 套图生成计划编辑器（默认主页面）：剧情 → 角色 → 动作序列 → 每个动作的配置 → 检查 → 开始。
 
 import { useMemo, useState } from 'react'
 import {
@@ -32,11 +32,11 @@ import { api, call } from '@/lib/api'
 import { hueOf } from '@/lib/hooks'
 import { confirm, reloadLib, templatesOf, useLib, useNav, usePlan, useRunner } from '@/lib/stores'
 import { cn } from '@/lib/utils'
-import { expandTask, newItem, newTaskData } from '@shared/planner'
+import { expandTask, newInteractionItem, newItem, newTaskData } from '@shared/planner'
 import type { Plan } from '@shared/api'
 import type { PlanUnit, TaskItem } from '@shared/types'
 import { PlanPreviewDialog, TaskSettingsDialog } from './dialogs'
-import { CharacterPicker, PosePicker, StoryPicker } from './pickers'
+import { CharacterPicker, PosePicker, StoryPicker, type NewAction } from './pickers'
 import { PoseDetail } from './PoseDetail'
 
 // ---------------------------------------------------------------- 任务切换
@@ -215,6 +215,12 @@ function PoseCard({
   const s = useSortableItem(id)
   const T = (tid: number | null) => (tid ? lib?.templates.find((t) => t.id === tid) : undefined)
   const pose = T(item.pose_id)
+  const position = T(item.position_id ?? null)
+  const sub = T(item.subposition_id ?? null)
+  const acts = (item.act_ids ?? []).map((a) => T(a)?.name ?? '（已删除）')
+  const scene = T(item.scene_id ?? null)
+  const label = item.position_id ? (position ? (sub ? `${position.name} · ${sub.name}` : position.name) : '（主体位已删除）') : item.pose_id ? (pose?.name ?? '（动作已删除）') : '（未选择动作）'
+  const missing = item.position_id ? !position : !pose
   const outfit = item.outfit_id ? lib?.outfits.find((o) => o.id === item.outfit_id) : undefined
   const exprs = item.expression_ids.map((e) => T(e)?.name ?? '（已删除）')
   const camera = T(item.camera_id)
@@ -237,7 +243,18 @@ function PoseCard({
       <span className="grid size-7 shrink-0 place-items-center rounded-lg bg-white/[0.06] text-xs font-semibold text-muted-foreground tabular-nums">{index + 1}</span>
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-2">
-          <span data-testid="pose-name" className={cn('truncate text-[14px] font-medium', !pose && 'text-destructive')}>{pose?.name ?? '（姿态已删除）'}</span>
+          <span data-testid="pose-name" className={cn('truncate text-[14px] font-medium', missing && 'text-destructive')}>{label}</span>
+          {item.position_id && pose && <span className="shrink-0 truncate text-[11px] text-muted-foreground">+ {pose.name}</span>}
+          {acts.length > 0 && (
+            <span className="shrink-0 rounded-md bg-violet-400/10 px-1.5 py-0.5 text-[10.5px] text-violet-300" title="行为">
+              {acts.join(' + ')}
+            </span>
+          )}
+          {scene && (
+            <span className="shrink-0 rounded-md bg-emerald-400/10 px-1.5 py-0.5 text-[10.5px] text-emerald-300" title="场景">
+              {scene.name}
+            </span>
+          )}
           {item.male_enabled && (
             <span className="shrink-0 rounded-md bg-sky-400/10 px-1.5 py-0.5 text-[10.5px] text-sky-300" title="男性出场">
               ♂ 男性
@@ -337,18 +354,19 @@ export default function PlanPage() {
   const wf = lib?.workflows.find((w) => w.id === wfId)
   const units = result?.units ?? []
   const errors = result?.errors ?? []
-  const itemError = (i: number) => errors.find((e) => e.startsWith(`第 ${i + 1} 个姿态`))?.replace(/^第 \d+ 个姿态(「[^」]*」)?：/, '')
-  const globalErrors = errors.filter((e) => !/^第 \d+ 个姿态/.test(e))
+  const itemError = (i: number) => errors.find((e) => e.startsWith(`第 ${i + 1} 个动作`))?.replace(/^第 \d+ 个动作(「[^」]*」)?：/, '')
+  const globalErrors = errors.filter((e) => !/^第 \d+ 个动作/.test(e))
   const nStory = units.filter((u) => u.section === 'story').length
   const firstUnitOf = (i: number): PlanUnit | null => units.find((u) => u.section === 'pose' && u.item_index === i) ?? null
   const outfitCount = (lib?.outfits ?? []).filter((o) => o.character_id === d.character_id).length
 
   const setKeysAfter = (fn: (k: string[]) => string[]) => setKeys(fn(itemKeys))
 
-  const addPoses = (ids: number[]) => {
+  const addPoses = (ids: NewAction[]) => {
     const at = selected !== null && selected < items.length ? selected + 1 : items.length
     const prev = at > 0 ? items[at - 1] : null
-    update((x) => x.items.splice(at, 0, ...ids.map((pid) => newItem(pid, prev?.outfit_id ?? null)))) // 服装默认继承上一个姿态
+    // 服装默认继承上一个动作
+    update((x) => x.items.splice(at, 0, ...ids.map((a) => ('pose_id' in a ? newItem(a.pose_id, prev?.outfit_id ?? null) : newInteractionItem(a.position_id, a.subposition_id, prev?.outfit_id ?? null)))))
     setKeysAfter((k) => [...k.slice(0, at), ...ids.map(() => Math.random().toString(36).slice(2)), ...k.slice(at)])
     select(at + ids.length - 1)
   }
@@ -362,7 +380,7 @@ export default function PlanPage() {
     setKeysAfter((k) => k.filter((_, j) => j !== i))
     if (selected === i) select(null)
     else if (selected !== null && selected > i) select(selected - 1)
-    toast('已删除姿态', {
+    toast('已删除动作', {
       action: {
         label: '撤销',
         onClick: () => {
@@ -389,7 +407,7 @@ export default function PlanPage() {
       }
       if (x.story_outfit_id) x.story_outfit_id = byName.get(old.get(x.story_outfit_id) ?? '\u0000') ?? null
     })
-    if (lost) toast.warning(`已切换角色：${lost} 个姿态的服装在新角色中没有同名服装，请重新选择`)
+    if (lost) toast.warning(`已切换角色：${lost} 个动作的服装在新角色中没有同名服装，请重新选择`)
   }
 
   const openPreview = async () => {
@@ -456,7 +474,7 @@ export default function PlanPage() {
             icon={<div className="grid size-9 shrink-0 place-items-center rounded-xl bg-amber-400/10 text-amber-300"><BookOpen className="size-4" /></div>}
             label="剧情"
             title={story ? story.name : '不使用剧情'}
-            sub={story ? `${story.genre || '未分类'} · ${(story.scenes ?? []).length} 个场景 · ${nStory} 张${storyOutfit ? ` · ${storyOutfit.name}` : ''}` : '直接从姿态序列开始'}
+            sub={story ? `${story.genre || '未分类'} · ${(story.scenes ?? []).length} 个场景 · ${nStory} 张${storyOutfit ? ` · ${storyOutfit.name}` : ''}` : '直接从动作序列开始'}
             empty={!story}
             onClick={() => setPicker('story')}
           />
@@ -470,13 +488,13 @@ export default function PlanPage() {
           />
         </div>
 
-        {/* 姿态序列 */}
+        {/* 动作序列 */}
         <div className="flex items-center gap-2 px-6 pb-2">
-          <span className="text-[11px] font-medium tracking-wide text-muted-foreground uppercase">姿态序列</span>
+          <span className="text-[11px] font-medium tracking-wide text-muted-foreground uppercase">动作序列</span>
           <span className="text-[11px] text-muted-foreground/70">按此顺序生成 · 拖动调整</span>
           <div className="flex-1" />
           <Button size="sm" variant="ghost" onClick={() => setPicker('pose')}>
-            <Plus /> 添加姿态
+            <Plus /> 添加动作
           </Button>
         </div>
         <div className="min-h-0 flex-1 overflow-y-auto px-6 pb-4" onClick={() => select(null)}>
@@ -527,7 +545,7 @@ export default function PlanPage() {
               className="flex w-full items-center justify-center gap-2 rounded-xl border border-dashed border-white/[0.1] py-4 text-[13px] text-muted-foreground transition hover:border-primary/40 hover:bg-primary/[0.04] hover:text-primary"
             >
               <Plus className="size-4" />
-              {items.length ? '添加姿态' : '从姿态库添加第一个姿态'}
+              {items.length ? '添加动作' : '从素材库添加第一个动作'}
             </button>
           </div>
         </div>
@@ -538,7 +556,7 @@ export default function PlanPage() {
             <div className="text-[13px]">
               共 <span className="text-[15px] font-semibold tabular-nums">{units.length}</span> 张
               <span className="ml-2 text-xs text-muted-foreground">
-                {nStory ? `剧情 ${nStory} + ` : ''}姿态 {units.length - nStory} · {items.length} 个姿态
+                {nStory ? `剧情 ${nStory} + ` : ''}动作 {units.length - nStory} · {items.length} 个动作
               </span>
             </div>
           </div>

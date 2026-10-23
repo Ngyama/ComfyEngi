@@ -45,7 +45,11 @@ function record(table: TableName, v: unknown): Record<string, unknown> {
   for (const c of TABLES[table].cols as readonly string[]) {
     if (!(c in src)) continue
     const val = src[c]
-    if (TEXT_COLS.has(c)) out[c] = str(val, c)
+    if (c === 'target') {
+      if (val !== 'any' && val !== 'female' && val !== 'male') throw new BadArg('无效的适用对象')
+      out[c] = val
+    } else if (c === 'parent_id') out[c] = val === null ? null : int(val, 'parent_id')
+    else if (TEXT_COLS.has(c)) out[c] = str(val, c)
     else if (INT_COLS.has(c)) out[c] = int(val, c)
     else if (c === 'loras') {
       if (!Array.isArray(val)) throw new BadArg('loras 必须是数组')

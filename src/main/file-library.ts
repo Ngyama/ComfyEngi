@@ -72,7 +72,7 @@ export class FileLibrary {
     const row: Row = {name:'',positive:'',negative:'',note:'',sort:0,tag:'',category:'',tags:'',loras:[],scenes:[], ...old?.row,...rec,id,type:table}
     delete row._revision
     if (table === 'outfits' && !this.entries.has(`characters:${row.character_id}`)) throw new Error('服装角色不存在')
-    const dir = table === 'templates' ? `prompts/${({pose:'poses',expression:'expressions',camera:'cameras',male:'male',global:'global'} as Row)[row.kind] || 'global'}` : table === 'workflows' ? 'workflows' : `prompts/${table}`
+    const dir = table === 'templates' ? `prompts/${({pose:'poses',expression:'expressions',camera:'cameras',male:'male',global:'global',scene:'scenes',position:'positions',subposition:'positions',act:'acts'} as Row)[row.kind] || 'global'}` : table === 'workflows' ? 'workflows' : `prompts/${table}`
     mkdirSync(join(this.root,dir),{recursive:true})
     const path = old?.path || join(this.root,dir,`${id}-${randomUUID()}.${table==='workflows'?'json':'md'}`)
     if (!old && existsSync(path)) throw new Error('目标文件已存在')

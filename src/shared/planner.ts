@@ -30,7 +30,18 @@ export function newItem(poseId: number | null = null, outfitId: number | null = 
     male_extra: '',
     extra_positive: '',
     extra_negative: '',
+    position_id: null,
+    subposition_id: null,
+    act_ids: [],
+    male_pose_ids: [],
+    male_expression_ids: [],
+    scene_id: null,
   }
+}
+
+/** 双人互动条目：主体位（可带子体位） */
+export function newInteractionItem(positionId: number, subpositionId: number | null = null, outfitId: number | null = null): TaskItem {
+  return { ...newItem(null, outfitId), position_id: positionId, subposition_id: subpositionId }
 }
 
 export function randomSeed(): number {
@@ -216,15 +227,27 @@ export function expandTask(data: TaskData, lib: PlanLibrary, settings: Settings,
     })
   }
 
-  // ---- 姿态序列 ----
+  // ---- 动作序列 ----
+  // 每个条目：单人动作（pose_id），或双人主体位 + 子体位（可另加女性动作）；行为可叠加
+  const tpl = (id: number | null | undefined) => (id != null && lib.templates.get(id)) || null
+  const defaultScene = tpl(data.scene_id)
+  if (data.scene_id && !defaultScene) errors.push('所选默认场景已被删除')
   ;(data.items ?? []).forEach((it, pi) => {
-    let where = `第 ${pi + 1} 个姿态`
-    const pose = (it.pose_id != null && lib.templates.get(it.pose_id)) || null
-    if (!pose) {
-      errors.push(`${where}：未选择姿态或姿态模板已被删除`)
+    let where = `第 ${pi + 1} 个动作`
+    const pose = tpl(it.pose_id)
+    const position = tpl(it.position_id)
+    if (it.pose_id && !pose) errors.push(`${where}：动作模板已被删除`)
+    if (it.position_id && !position) errors.push(`${where}：主体位已被删除`)
+    if (!pose && !position) {
+      if (!it.pose_id && !it.position_id) errors.push(`${where}：未选择动作`)
       return
     }
-    where = `第 ${pi + 1} 个姿态「${pose.name}」`
+    const sub = tpl(it.subposition_id)
+    if (it.subposition_id && !sub) errors.push(`${where}：子体位已被删除`)
+    const acts = (it.act_ids ?? []).map((x) => tpl(x)).filter((t): t is Template => !!t)
+    if (acts.length !== (it.act_ids ?? []).length) errors.push(`${where}：有行为素材已被删除`)
+    const label = position ? (sub ? `${position.name} · ${sub.name}` : position.name) : pose!.name
+    where = `第 ${pi + 1} 个动作「${label}」`
     const outfit = checkOutfit(it.outfit_id, where)
     const exprs: Template[] = []
     for (const eid of it.expression_ids ?? []) {
@@ -232,10 +255,21 @@ export function expandTask(data: TaskData, lib: PlanLibrary, settings: Settings,
       if (e) exprs.push(e)
       else errors.push(`${where}：有表情模板已被删除`)
     }
-    const camera = (it.camera_id != null && lib.templates.get(it.camera_id)) || null
+    const camera = tpl(it.camera_id)
     if (it.camera_id && !camera) errors.push(`${where}：所选镜头模板已被删除`)
+    const scene = it.scene_id ? tpl(it.scene_id) : defaultScene
+    if (it.scene_id && !scene) errors.push(`${where}：所选场景已被删除`)
     const maleOn = !!it.male_enabled
-    const maleTs = (it.male_ids ?? []).map((x) => lib.templates.get(x)).filter((t): t is Template => !!t)
+    const maleTs = (it.male_ids ?? []).map((x) => tpl(x)).filter((t): t is Template => !!t)
+    const malePoses = (it.male_pose_ids ?? []).map((x) => tpl(x)).filter((t): t is Template => !!t)
+    const maleExprs = (it.male_expression_ids ?? []).map((x) => tpl(x)).filter((t): t is Template => !!t)
+    // 双人互动模块：主体位 + 子体位（补充）+ 行为，原样拼接
+    const parts: [string, string][] = position ? [filled(position, char), filled(sub, char), ...acts.map((a) => filled(a, char))] : acts.map((a) => filled(a, char))
+    const trim = settings.trim_modules ?? true
+    const interaction: [string, string] = [
+      joinParts(parts.map((x) => x[0]), unescapeSeparator(settings.pos_separator ?? ', '), trim),
+      joinParts(parts.map((x) => x[1]), unescapeSeparator(settings.neg_separator ?? ', '), trim),
+    ]
     const count = toInt(it.count)
     if (count <= 0) {
       errors.push(`${where}：生成张数必须大于 0`)
@@ -257,16 +291,20 @@ export function expandTask(data: TaskData, lib: PlanLibrary, settings: Settings,
         const m = baseModules(outfit)
         m.content = filled(pose, char)
         m.expression = filled(e, char)
-        m.male = maleOn ? maleModule(maleBase, maleTs, it.male_extra ?? '', settings, char) : ['', '']
+        // 男性模块：基础描述 + 男性动作 + 男性表情 + 旧版男性模板 + 附加文本；未启用男性时一律为空
+        m.male = maleOn ? maleModule(maleBase, [...malePoses, ...maleExprs, ...maleTs], it.male_extra ?? '', settings, char) : ['', '']
         m.camera = filled(camera, char)
         m.extra = [fillPlaceholders(it.extra_positive ?? '', char), fillPlaceholders(it.extra_negative ?? '', char)]
-        add('pose', pi, pose.name, k, m, {
+        // 新模块只在有内容时写入，旧任务的计划与快照结构保持不变
+        if (interaction[0] || interaction[1]) m.interaction = interaction
+        if (scene) m.scene = filled(scene, char)
+        const meta: UnitMeta = {
           task: taskName,
           character: charName,
           story: story?.name ?? '',
           genre: story?.genre ?? '',
-          section: '姿态',
-          item: pose.name,
+          section: '动作',
+          item: label,
           item_no: pi + 1,
           outfit: outfit?.name ?? '',
           expression: e?.name ?? '',
@@ -274,10 +312,15 @@ export function expandTask(data: TaskData, lib: PlanLibrary, settings: Settings,
           expression_of: n,
           camera: camera?.name ?? '',
           male: maleOn,
-          male_templates: maleOn ? maleTs.map((t) => t.name) : [],
+          male_templates: maleOn ? [...malePoses, ...maleExprs, ...maleTs].map((t) => t.name) : [],
           n: k + 1,
           of: count,
-        })
+        }
+        if (scene) meta.scene = scene.name
+        if (position) meta.position = position.name
+        if (sub) meta.subposition = sub.name
+        if (acts.length) meta.acts = acts.map((a) => a.name)
+        add('pose', pi, label, k, m, meta)
         k++
       }
     }

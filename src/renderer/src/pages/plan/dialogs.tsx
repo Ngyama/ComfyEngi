@@ -42,7 +42,21 @@ export function TaskSettingsDialog({ open, onOpenChange }: { open: boolean; onOp
             </div>
           </section>
           <section>
-            <FieldLabel hint="只在姿态或剧情场景启用「男性出场」时加入">男性基础 Prompt</FieldLabel>
+            <FieldLabel hint="应用到没有单独指定场景的动作（剧情场景使用各自的 Prompt）">默认场景</FieldLabel>
+            <div className="flex flex-wrap gap-1.5">
+              <Chip active={!d.scene_id} onClick={() => update((x) => (x.scene_id = null))}>
+                不使用
+              </Chip>
+              {templatesOf(lib, 'scene').map((sc) => (
+                <Chip key={sc.id} active={d.scene_id === sc.id} onClick={() => update((x) => (x.scene_id = sc.id))} title={sc.positive}>
+                  {sc.name}
+                </Chip>
+              ))}
+              {!templatesOf(lib, 'scene').length && <span className="text-xs text-muted-foreground">场景库为空，可在「素材库 → 场景」中添加</span>}
+            </div>
+          </section>
+          <section>
+            <FieldLabel hint="只在动作或剧情场景启用「男性出场」时加入">男性基础描述</FieldLabel>
             <div className="flex flex-wrap gap-1.5">
               <Chip active={!d.male_base_id} onClick={() => update((x) => (x.male_base_id = null))}>
                 不使用
@@ -125,7 +139,7 @@ export function PlanPreviewDialog({ open, onOpenChange, plan, onEnqueue }: { ope
         <DialogHeader>
           <DialogTitle>生成计划预览</DialogTitle>
           <DialogDescription>
-            共 {units.length} 张{nStory ? `（剧情 ${nStory} → 姿态 ${units.length - nStory}）` : ''}
+            共 {units.length} 张{nStory ? `（剧情 ${nStory} → 动作 ${units.length - nStory}）` : ''}
             {plan?.workflow ? ` · 工作流：${plan.workflow.name}` : ''}。这里显示的 Prompt、Seed 与写入节点的值就是实际提交给 ComfyUI 的内容。
           </DialogDescription>
         </DialogHeader>

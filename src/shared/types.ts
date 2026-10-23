@@ -1,14 +1,29 @@
 // 前后端共享的数据模型。字段名与旧版 SQLite 数据库保持一致，保证旧数据无需转换即可读取。
 
-export type TemplateKind = 'global' | 'pose' | 'expression' | 'male' | 'camera'
+/**
+ * 素材类型（kind）。旧类型全部保留：
+ * - pose：单人动作（旧「姿态」模板原样归入这里，没有分类的显示为「待分类」）
+ * - position / subposition / act：双人互动的主体位 / 子体位（parent_id 指向主体位）/ 可复用的行为
+ * - scene：场景（环境、地点、背景）
+ * - male / camera：兼容素材（男性描述、镜头），不再作为素材库一级分类
+ */
+export type TemplateKind = 'global' | 'scene' | 'pose' | 'position' | 'subposition' | 'act' | 'expression' | 'male' | 'camera'
 
 export const TEMPLATE_KINDS: Record<TemplateKind, string> = {
-  pose: '姿态',
-  expression: '表情',
-  camera: '镜头',
-  male: '男性',
   global: '全局 Prompt',
+  scene: '场景',
+  pose: '单人动作',
+  position: '主体位',
+  subposition: '子体位',
+  act: '行为',
+  expression: '表情',
+  male: '男性描述',
+  camera: '镜头',
 }
+
+/** 适用对象：用于筛选和分组，不是严格限制。通用素材可分配给女性或男性 */
+export type Target = 'any' | 'female' | 'male'
+export const TARGETS: Record<Target, string> = { any: '通用', female: '女性', male: '男性' }
 
 interface Timestamps {
   _revision?: string
@@ -26,6 +41,10 @@ export interface Template extends Timestamps {
   tags: string
   note: string
   sort: number
+  /** 适用对象（动作、表情）；旧数据没有此字段时视为通用 */
+  target?: Target
+  /** 子体位所属的主体位 ID */
+  parent_id?: number | null
 }
 
 export interface Lora {
@@ -107,6 +126,15 @@ export interface TaskItem {
   male_extra: string
   extra_positive: string
   extra_negative: string
+  /** 双人互动：主体位、子体位（作为主体位的补充 Prompt）、可叠加的行为 */
+  position_id?: number | null
+  subposition_id?: number | null
+  act_ids?: number[]
+  /** 男性出场时男性自己的动作与表情（单人动作 / 表情素材，只在启用男性时拼入男性模块） */
+  male_pose_ids?: number[]
+  male_expression_ids?: number[]
+  /** 场景：null 时沿用任务的默认场景 */
+  scene_id?: number | null
 }
 
 export interface TaskData {
@@ -118,6 +146,8 @@ export interface TaskData {
   workflow_id: number | null
   seed_base: number
   items: TaskItem[]
+  /** 默认场景：应用到姿态序列中没有单独指定场景的动作（不用于剧情场景） */
+  scene_id?: number | null
 }
 
 export interface Task extends Timestamps {
@@ -150,7 +180,7 @@ export const DEFAULT_SETTINGS: Settings = {
   lora_display_name: 'model',
   comfy_url: 'http://127.0.0.1:8188',
   comfy_output_dir: '',
-  compose_order: ['global', 'character', 'outfit', 'content', 'expression', 'male', 'camera', 'extra'],
+  compose_order: ['global', 'character', 'outfit', 'content', 'expression', 'male', 'interaction', 'scene', 'camera', 'extra'],
   pos_separator: ', ',
   neg_separator: ', ',
   trim_modules: true,
@@ -180,6 +210,10 @@ export interface UnitMeta {
   camera: string
   male: boolean
   male_templates: string[]
+  scene?: string
+  position?: string
+  subposition?: string
+  acts?: string[]
   n: number
   of: number
   index?: number

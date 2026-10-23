@@ -1,7 +1,8 @@
-// 姿态详细设置：浮动在主界面右侧，点击其他卡片即可切换，修改即时生效并自动保存。
+// 动作详细设置：浮动在主界面右侧，点击其他卡片即可切换，修改即时生效并自动保存。
+// 每个动作：单人动作，或双人主体位 + 子体位（可另加女性动作）；行为可叠加；女性 / 男性各自的动作与表情；场景。
 
 import { useMemo, useState } from 'react'
-import { Camera, ChevronsUpDown, Shirt, Smile, X } from 'lucide-react'
+import { Camera, ChevronsUpDown, MapPin, Shirt, Smile, X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Command, CommandEmpty, CommandInput, CommandItem, CommandList } from '@/components/ui/command'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
@@ -11,70 +12,183 @@ import { matches } from '@/lib/hooks'
 import { templatesOf, useLib, usePlan } from '@/lib/stores'
 import { cn } from '@/lib/utils'
 import { PLACEHOLDER_HELP } from '@shared/prompt'
-import type { PlanUnit, TaskItem } from '@shared/types'
+import type { PlanUnit, TaskItem, Template } from '@shared/types'
+
+const forTarget = (list: Template[], who: 'female' | 'male') => list.filter((t) => (t.target ?? 'any') !== (who === 'female' ? 'male' : 'female'))
+
+/** 可搜索的单选（单人动作） */
+function TemplateCombo({ list, value, onPick, placeholder, allowNone }: { list: Template[]; value: number | null | undefined; onPick: (id: number | null) => void; placeholder: string; allowNone?: boolean }) {
+  const [open, setOpen] = useState(false)
+  const cur = list.find((t) => t.id === value)
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <button type="button" className="flex h-9 w-full items-center gap-1.5 rounded-lg bg-white/[0.04] px-3 text-left text-[13px] ring-1 ring-white/[0.07] hover:bg-white/[0.06]">
+          <span className={cn('truncate', !cur && 'text-muted-foreground')}>{cur?.name ?? placeholder}</span>
+          {cur?.category && <span className="truncate text-[11px] text-muted-foreground">· {cur.category}</span>}
+          <ChevronsUpDown className="ml-auto size-3.5 shrink-0 text-muted-foreground" />
+        </button>
+      </PopoverTrigger>
+      <PopoverContent className="w-72 p-0" align="start">
+        <Command>
+          <CommandInput placeholder="搜索…" />
+          <CommandList>
+            <CommandEmpty>没有匹配的素材</CommandEmpty>
+            {allowNone && (
+              <CommandItem value="__none__" onSelect={() => (onPick(null), setOpen(false))}>
+                <span className="text-muted-foreground">不指定</span>
+              </CommandItem>
+            )}
+            {list.map((p) => (
+              <CommandItem key={p.id} value={`${p.name} ${p.category} ${p.tags} ${p.id}`} onSelect={() => (onPick(p.id), setOpen(false))}>
+                <span className="truncate">{p.name}</span>
+                {p.category && <span className="ml-auto text-[11px] text-muted-foreground">{p.category}</span>}
+              </CommandItem>
+            ))}
+          </CommandList>
+        </Command>
+      </PopoverContent>
+    </Popover>
+  )
+}
+
+function MultiChips({ list, value, onChange, numbered }: { list: Template[]; value: number[]; onChange: (v: number[]) => void; numbered?: boolean }) {
+  return (
+    <div className="flex flex-wrap gap-1.5">
+      {list.map((t) => {
+        const n = value.indexOf(t.id)
+        return (
+          <Chip key={t.id} active={n >= 0} order={numbered && n >= 0 && value.length > 1 ? n + 1 : undefined} title={t.positive} onClick={() => onChange(n >= 0 ? value.filter((x) => x !== t.id) : [...value, t.id])}>
+            {t.name || '（未命名）'}
+          </Chip>
+        )
+      })}
+    </div>
+  )
+}
 
 export function PoseDetail({ index, firstUnit, onClose }: { index: number; firstUnit: PlanUnit | null; onClose: () => void }) {
   const lib = useLib((s) => s.lib)
   const { task, update } = usePlan()
   const item = task?.data.items[index]
   const [exprQ, setExprQ] = useState('')
-  const [poseOpen, setPoseOpen] = useState(false)
   const poses = templatesOf(lib, 'pose')
+  const positions = templatesOf(lib, 'position')
+  const subs = templatesOf(lib, 'subposition')
+  const acts = templatesOf(lib, 'act')
+  const scenes = templatesOf(lib, 'scene')
   const exprs = templatesOf(lib, 'expression')
   const cameras = templatesOf(lib, 'camera')
   const maleBaseId = task?.data.male_base_id ?? null
-  const males = templatesOf(lib, 'male').filter((t) => t.id !== maleBaseId)
+  const legacyMales = templatesOf(lib, 'male').filter((t) => t.id !== maleBaseId)
   const outfits = useMemo(() => (lib?.outfits ?? []).filter((o) => o.character_id === task?.data.character_id), [lib, task?.data.character_id])
   if (!task || !item) return null
 
   const set = (patch: Partial<TaskItem>) => update((d) => Object.assign(d.items[index], patch))
-  const pose = lib?.templates.find((t) => t.id === item.pose_id)
+  const T = (id: number | null | undefined) => (id ? lib?.templates.find((t) => t.id === id) : undefined)
+  const duo = !!item.position_id
+  const position = T(item.position_id)
+  const sub = T(item.subposition_id)
+  const title = duo ? (position ? (sub ? `${position.name} · ${sub.name}` : position.name) : '选择主体位') : (T(item.pose_id)?.name ?? '选择动作')
   const nExpr = item.expression_ids.length
   const divisible = !nExpr || item.count % nExpr === 0
-  const toggleExpr = (id: number) =>
-    set({ expression_ids: item.expression_ids.includes(id) ? item.expression_ids.filter((x) => x !== id) : [...item.expression_ids, id] })
-  const shownExprs = exprs.filter((e) => !exprQ || matches(e as never, exprQ))
-  const maleBase = lib?.templates.find((t) => t.id === maleBaseId)
+  const femaleExprs = forTarget(exprs, 'female').filter((e) => !exprQ || matches(e as never, exprQ))
+  const maleBase = T(maleBaseId)
+  const defaultScene = T(task.data.scene_id)
+  const actIds = item.act_ids ?? []
+  const childSubs = position ? subs.filter((s) => s.parent_id === position.id) : []
 
   return (
     <div className="flex h-full flex-col">
       <div className="flex items-center gap-2 px-4 pt-4 pb-3">
         <span className="grid size-6 shrink-0 place-items-center rounded-md bg-white/[0.07] text-xs font-semibold tabular-nums">{index + 1}</span>
-        <Popover open={poseOpen} onOpenChange={setPoseOpen}>
-          <PopoverTrigger asChild>
-            <button type="button" className="flex min-w-0 flex-1 items-center gap-1.5 rounded-lg px-2 py-1 text-left hover:bg-white/[0.05]">
-              <span className="truncate text-[15px] font-semibold">{pose?.name ?? '选择姿态'}</span>
-              <ChevronsUpDown className="size-3.5 shrink-0 text-muted-foreground" />
-            </button>
-          </PopoverTrigger>
-          <PopoverContent className="w-72 p-0" align="start">
-            <Command>
-              <CommandInput placeholder="搜索姿态…" />
-              <CommandList>
-                <CommandEmpty>没有匹配的姿态</CommandEmpty>
-                {poses.map((p) => (
-                  <CommandItem
-                    key={p.id}
-                    value={`${p.name} ${p.category} ${p.tags} ${p.id}`}
-                    onSelect={() => {
-                      set({ pose_id: p.id })
-                      setPoseOpen(false)
-                    }}
-                  >
-                    <span className="truncate">{p.name}</span>
-                    {p.category && <span className="ml-auto text-[11px] text-muted-foreground">{p.category}</span>}
-                  </CommandItem>
-                ))}
-              </CommandList>
-            </Command>
-          </PopoverContent>
-        </Popover>
+        <span className="min-w-0 flex-1 truncate px-1 text-[15px] font-semibold" data-testid="detail-title">
+          {title}
+        </span>
         <Button variant="ghost" size="icon-sm" onClick={onClose} aria-label="关闭">
           <X />
         </Button>
       </div>
 
       <div className="min-h-0 flex-1 space-y-5 overflow-y-auto px-4 pb-6">
+        {/* 动作 */}
+        <section>
+          <FieldLabel
+            right={
+              <div className="flex rounded-lg bg-white/[0.045] p-0.5">
+                {(
+                  [
+                    [false, '单人动作'],
+                    [true, '双人互动'],
+                  ] as const
+                ).map(([isDuo, label]) => (
+                  <button
+                    key={label}
+                    type="button"
+                    data-active={duo === isDuo || undefined}
+                    disabled={isDuo && !positions.length}
+                    title={isDuo && !positions.length ? '先在「素材库 → 动作 → 双人互动」中添加主体位' : undefined}
+                    className="h-6 rounded-md px-2 text-[11.5px] text-muted-foreground disabled:opacity-40 data-[active]:bg-white/[0.1] data-[active]:text-foreground"
+                    onClick={() => {
+                      if (duo === isDuo) return
+                      // 切到双人：保留单人动作作为女性动作；切回单人：清除主体位、子体位与行为
+                      if (isDuo) set({ position_id: positions[0].id, subposition_id: null })
+                      else set({ position_id: null, subposition_id: null, act_ids: [] })
+                    }}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+            }
+          >
+            动作
+          </FieldLabel>
+          {!duo ? (
+            <TemplateCombo list={forTarget(poses, 'female')} value={item.pose_id} onPick={(id) => set({ pose_id: id })} placeholder="选择单人动作" />
+          ) : (
+            <div className="space-y-3">
+              <div>
+                <div className="mb-1.5 text-[11px] text-muted-foreground">主体位</div>
+                <div className="flex flex-wrap gap-1.5">
+                  {positions.map((p) => (
+                    <Chip key={p.id} active={item.position_id === p.id} title={p.positive} onClick={() => set({ position_id: p.id, subposition_id: null })}>
+                      {p.name || '（未命名）'}
+                    </Chip>
+                  ))}
+                  {!positions.length && <span className="text-xs text-muted-foreground">还没有主体位，可在「素材库 → 动作 → 双人互动」中添加</span>}
+                </div>
+              </div>
+              {childSubs.length > 0 && (
+                <div>
+                  <div className="mb-1.5 text-[11px] text-muted-foreground">子体位（补充在主体位之后）</div>
+                  <div className="flex flex-wrap gap-1.5">
+                    <Chip active={!item.subposition_id} onClick={() => set({ subposition_id: null })}>
+                      不指定
+                    </Chip>
+                    {childSubs.map((c) => (
+                      <Chip key={c.id} active={item.subposition_id === c.id} title={c.positive} onClick={() => set({ subposition_id: c.id })}>
+                        {c.name || '（未命名）'}
+                      </Chip>
+                    ))}
+                  </div>
+                </div>
+              )}
+              {acts.length > 0 && (
+                <div>
+                  <div className="mb-1.5 text-[11px] text-muted-foreground">行为（可叠加）</div>
+                  <MultiChips list={acts} value={actIds} onChange={(v) => set({ act_ids: v })} />
+                </div>
+              )}
+              <div>
+                <div className="mb-1.5 text-[11px] text-muted-foreground">女性动作（可选）</div>
+                <TemplateCombo list={forTarget(poses, 'female')} value={item.pose_id} onPick={(id) => set({ pose_id: id })} placeholder="不指定" allowNone />
+              </div>
+              {!item.male_enabled && <div className="text-[11px] text-warning">双人互动通常需要在下方开启「男性出场」</div>}
+            </div>
+          )}
+        </section>
+
         {/* 服装 */}
         <section>
           <FieldLabel hint={task.data.character_id ? undefined : '先选择角色'}>
@@ -116,90 +230,95 @@ export function PoseDetail({ index, firstUnit, onClose }: { index: number; first
           </div>
         </section>
 
-        {/* 表情 */}
+        {/* 女性表情 */}
         <section>
           <FieldLabel
             right={nExpr ? <button type="button" className="text-[11px] text-muted-foreground hover:text-foreground" onClick={() => set({ expression_ids: [] })}>清空</button> : undefined}
           >
             <span className="inline-flex items-center gap-1">
-              <Smile className="size-3" /> 表情（可多选）
+              <Smile className="size-3" /> 表情（女性，可多选）
             </span>
           </FieldLabel>
           {exprs.length > 12 && <SearchBox value={exprQ} onChange={setExprQ} placeholder="筛选表情…" className="mb-2" />}
-          <div className="flex max-h-56 flex-wrap gap-1.5 overflow-y-auto">
-            {shownExprs.map((e) => {
-              const n = item.expression_ids.indexOf(e.id)
-              return (
-                <Chip key={e.id} active={n >= 0} order={n >= 0 && nExpr > 1 ? n + 1 : undefined} onClick={() => toggleExpr(e.id)} title={e.positive}>
-                  {e.name || '（未命名）'}
-                </Chip>
-              )
-            })}
-            {!exprs.length && <span className="text-xs text-muted-foreground">表情库为空，可在素材库中添加</span>}
+          <div className="max-h-56 overflow-y-auto">
+            <MultiChips list={femaleExprs} value={item.expression_ids} onChange={(v) => set({ expression_ids: v })} numbered />
           </div>
+          {!exprs.length && <span className="text-xs text-muted-foreground">表情库为空，可在素材库中添加</span>}
         </section>
 
-        {/* 镜头 */}
+        {/* 场景 */}
         <section>
-          <FieldLabel hint="POV 等镜头不会自动启用男性">
+          <FieldLabel hint="环境 / 地点 / 背景">
             <span className="inline-flex items-center gap-1">
-              <Camera className="size-3" /> 镜头
+              <MapPin className="size-3" /> 场景
             </span>
           </FieldLabel>
           <div className="flex flex-wrap gap-1.5">
-            <Chip active={!item.camera_id} onClick={() => set({ camera_id: null })}>
-              不指定
+            <Chip active={!item.scene_id} onClick={() => set({ scene_id: null })}>
+              {defaultScene ? `任务默认：${defaultScene.name}` : '不指定'}
             </Chip>
-            {cameras.map((c) => (
-              <Chip key={c.id} active={item.camera_id === c.id} onClick={() => set({ camera_id: c.id })} title={c.positive}>
+            {scenes.map((c) => (
+              <Chip key={c.id} active={item.scene_id === c.id} onClick={() => set({ scene_id: c.id })} title={c.positive}>
                 {c.name || '（未命名）'}
               </Chip>
             ))}
+            {!scenes.length && <span className="text-xs text-muted-foreground">场景库为空，可在「素材库 → 场景」中添加</span>}
           </div>
         </section>
 
-        {/* 低频：男性 / 附加 / 预览 */}
+        {/* 低频：男性 / 镜头 / 附加 / 预览 */}
         <div className="space-y-2">
           <Disclosure
             title="男性出场"
-            summary={item.male_enabled ? `已启用${item.male_ids.length ? ` · ${item.male_ids.length} 个模板` : ''}` : '单人画面'}
+            summary={item.male_enabled ? '已启用' : '单人画面'}
             open={item.male_enabled}
             right={<Switch checked={item.male_enabled} onCheckedChange={(v) => set({ male_enabled: v })} />}
           >
             <div className="space-y-3">
               <div className="text-xs text-muted-foreground">
-                男性基础：{maleBase ? <span className="text-foreground/80">{maleBase.name}</span> : '未设置（在任务设置中选择）'}
+                男性基础描述：{maleBase ? <span className="text-foreground/80">{maleBase.name}</span> : '未设置（在任务设置中选择）'}
               </div>
-              {males.length > 0 && (
-                <div className="flex flex-wrap gap-1.5">
-                  {males.map((m) => {
-                    const n = item.male_ids.indexOf(m.id)
-                    return (
-                      <Chip
-                        key={m.id}
-                        active={n >= 0}
-                        title={m.positive}
-                        onClick={() => set({ male_ids: n >= 0 ? item.male_ids.filter((x) => x !== m.id) : [...item.male_ids, m.id] })}
-                      >
-                        {m.name}
-                        {m.category ? <span className="opacity-60"> · {m.category}</span> : null}
-                      </Chip>
-                    )
-                  })}
+              <div>
+                <div className="mb-1.5 text-[11px] text-muted-foreground">男性动作</div>
+                <MultiChips list={forTarget(poses, 'male')} value={item.male_pose_ids ?? []} onChange={(v) => set({ male_pose_ids: v })} />
+              </div>
+              <div>
+                <div className="mb-1.5 text-[11px] text-muted-foreground">男性表情</div>
+                <MultiChips list={forTarget(exprs, 'male')} value={item.male_expression_ids ?? []} onChange={(v) => set({ male_expression_ids: v })} />
+              </div>
+              {legacyMales.length > 0 && (
+                <div>
+                  <div className="mb-1.5 text-[11px] text-muted-foreground">男性描述模板（兼容旧版）</div>
+                  <MultiChips list={legacyMales} value={item.male_ids} onChange={(v) => set({ male_ids: v })} />
                 </div>
               )}
-              <PromptField value={item.male_extra} onChange={(v) => set({ male_extra: v })} placeholder="男性附加 Prompt（本姿态专用，如特定互动动作）" minRows={2} />
+              <PromptField value={item.male_extra} onChange={(v) => set({ male_extra: v })} placeholder="男性附加 Prompt（本动作专用）" minRows={2} />
             </div>
           </Disclosure>
 
-          <Disclosure title="附加 Prompt" summary={item.extra_positive || item.extra_negative ? '已填写' : '本姿态专用，可留空'}>
+          <Disclosure title="镜头" summary={T(item.camera_id)?.name ?? '不指定'}>
+            <div className="flex flex-wrap gap-1.5">
+              <Chip active={!item.camera_id} onClick={() => set({ camera_id: null })}>
+                不指定
+              </Chip>
+              {cameras.map((c) => (
+                <Chip key={c.id} active={item.camera_id === c.id} onClick={() => set({ camera_id: c.id })} title={c.positive}>
+                  <Camera className="mr-0.5 inline size-3" />
+                  {c.name || '（未命名）'}
+                </Chip>
+              ))}
+            </div>
+            <div className="mt-2 text-[11px] text-muted-foreground">POV 等镜头不会自动启用男性。</div>
+          </Disclosure>
+
+          <Disclosure title="附加 Prompt" summary={item.extra_positive || item.extra_negative ? '已填写' : '本动作专用，可留空'}>
             <div className="space-y-2">
               <PromptField value={item.extra_positive} onChange={(v) => set({ extra_positive: v })} placeholder={`附加正面，可用占位符 ${PLACEHOLDER_HELP}`} minRows={2} />
               <PromptField value={item.extra_negative} onChange={(v) => set({ extra_negative: v })} placeholder="附加负面" minRows={2} />
             </div>
           </Disclosure>
 
-          <Disclosure title="最终 Prompt 预览" summary="本姿态第 1 张">
+          <Disclosure title="最终 Prompt 预览" summary="本动作第 1 张">
             {firstUnit ? (
               <div className="space-y-3">
                 <div>
@@ -212,7 +331,7 @@ export function PoseDetail({ index, firstUnit, onClose }: { index: number; first
                 </div>
               </div>
             ) : (
-              <div className="text-xs text-muted-foreground">此姿态当前无法生成，请查看卡片上的提示。</div>
+              <div className="text-xs text-muted-foreground">此动作当前无法生成，请查看卡片上的提示。</div>
             )}
           </Disclosure>
         </div>

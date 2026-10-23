@@ -8,6 +8,7 @@ import { DatabaseSync } from 'node:sqlite'
 import { planForTask } from '../src/main/plan'
 import { SCHEMA_VERSION, Store } from '../src/main/store'
 import { tempDir } from './helpers'
+import { normalizedOrder } from '@shared/prompt'
 
 const FIX = join(__dirname, 'fixtures')
 const expected = JSON.parse(readFileSync(join(FIX, 'legacy-v0.expected.json'), 'utf8'))
@@ -47,7 +48,9 @@ describe('旧数据库迁移', () => {
   it('所有角色、模板、服装、剧情、工作流、任务原样读取', () => {
     const { store } = openLegacy()
     for (const t of ['templates', 'characters', 'outfits', 'stories', 'workflows', 'tasks'] as const) {
-      expect(store.list(t)).toEqual(expected.tables[t])
+      // v2 起素材多了适用对象与层级两个默认列（不修改原有字段）
+      const exp = t === 'templates' ? expected.tables[t].map((r: object) => ({ ...r, target: 'any', parent_id: null })) : expected.tables[t]
+      expect(store.list(t)).toEqual(exp)
     }
     const raw = store.list('templates').find((t) => t.name === '原样文本')!
     expect(raw.positive).toContain('<lora:foo_v2:0.75>, {red|blue} hair\nBREAK\r\n 全角，「」🌸 ')
@@ -56,7 +59,7 @@ describe('旧数据库迁移', () => {
 
   it('设置、执行队列与运行记录原样读取', () => {
     const { store } = openLegacy()
-    expect(store.settings()).toEqual({ lora_roots: [], lora_display_name: 'model', ...expected.settings })
+    expect(store.settings()).toEqual({ lora_roots: [], lora_display_name: 'model', ...expected.settings, compose_order: normalizedOrder(expected.settings.compose_order) })
     const runs = store.listRuns(true)
     expect(runs.map((r) => [r.id, r.name, r.status, r.counts])).toEqual(expected.runs.map((r: { id: number; name: string; status: string; counts: unknown }) => [r.id, r.name, r.status, r.counts]))
     expect(store.listUnits(runs[0].id)).toEqual(expected.units)
@@ -83,7 +86,7 @@ describe('旧数据库迁移', () => {
         expect(u.seed).toBe(e.seed)
         expect(u.modules).toEqual(e.modules)
         expect(u.inputs).toEqual(e.inputs)
-        expect(u.meta).toEqual(e.meta)
+        expect(u.meta).toEqual({ ...(e.meta as Record<string, unknown>), section: (e.meta as { section: string }).section === '姿态' ? '动作' : (e.meta as { section: string }).section }) // 「姿态」更名为「动作」
       })
     }
     store.close()

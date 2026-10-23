@@ -4,11 +4,13 @@ import type { Character, Modules, Settings } from './types'
 
 export const MODULES: [string, string][] = [
   ['global', '全局'],
-  ['character', '角色'],
-  ['outfit', '服装'],
-  ['content', '剧情场景 / 姿态'],
-  ['expression', '表情'],
-  ['male', '男性'],
+  ['character', '角色（女性）'],
+  ['outfit', '服装（女性）'],
+  ['content', '剧情场景 / 动作（女性）'],
+  ['expression', '表情（女性）'],
+  ['male', '男性（基础 / 动作 / 表情）'],
+  ['interaction', '双人互动（主体位 / 子体位 / 行为）'],
+  ['scene', '场景'],
   ['camera', '镜头'],
   ['extra', '附加'],
 ]
@@ -78,9 +80,15 @@ export function prependTags(base: string, words: string[], sep = ', '): { text: 
   return { text: (base ?? '').trim() ? `${added.join(sep)}${sep}${base}` : added.join(sep), added, skipped }
 }
 
+/** 用户保存的顺序缺少新模块时，按默认顺序插到前一个模块之后（而不是全部追加到末尾） */
 export function normalizedOrder(order: string[] | null | undefined): string[] {
-  const valid = (order ?? []).filter((m) => m in MODULE_LABELS)
-  return [...valid, ...MODULE_KEYS.filter((m) => !valid.includes(m))]
+  const out = (order ?? []).filter((m, i, a) => m in MODULE_LABELS && a.indexOf(m) === i)
+  MODULE_KEYS.forEach((m, i) => {
+    if (out.includes(m)) return
+    const prev = MODULE_KEYS.slice(0, i).reverse().find((k) => out.includes(k))
+    out.splice(prev ? out.indexOf(prev) + 1 : 0, 0, m)
+  })
+  return out
 }
 
 type ComposeSettings = Pick<Settings, 'compose_order' | 'pos_separator' | 'neg_separator' | 'trim_modules'>

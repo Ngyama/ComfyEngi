@@ -177,7 +177,7 @@ export default function HistoryPage() {
           }
         />
         <div className="flex items-center gap-3 px-6 pb-4">
-          <SearchBox value={q} onChange={setQ} placeholder="搜索任务、角色、姿态、表情、Prompt 或 prompt_id…" className="max-w-md flex-1" />
+          <SearchBox value={q} onChange={setQ} placeholder="搜索任务、角色、动作、表情、Prompt 或 prompt_id…" className="max-w-md flex-1" />
           <div className="flex gap-1.5">
             {[
               ['', '全部'],
