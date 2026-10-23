@@ -138,6 +138,24 @@ function useLoraImage(r: LoraResource | null, width: number, enabled = true) {
   return src
 }
 
+/** 小型 LoRA 封面（供角色库等页面复用，支持图片封面与 MP4 静态帧） */
+export function LoraThumb({ r, width = 160, className }: { r: LoraResource; width?: number; className?: string }) {
+  const src = useLoraImage(r, width)
+  return (
+    <div className={cn('relative shrink-0 overflow-hidden bg-black/30', className)}>
+      {src ? (
+        <img src={src} alt="" draggable={false} className="absolute inset-0 size-full object-cover" />
+      ) : src === null || (!r.preview && !r.cover) ? (
+        <div className="absolute inset-0 grid place-items-center text-muted-foreground/60">
+          <Layers className="size-4" />
+        </div>
+      ) : (
+        <div className="absolute inset-0 animate-pulse bg-white/[0.04]" />
+      )}
+    </div>
+  )
+}
+
 function Placeholder({ r, large }: { r: LoraResource; large?: boolean }) {
   return (
     <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 bg-[radial-gradient(circle_at_30%_20%,oklch(0.3_0.03_278/.55),transparent_60%),linear-gradient(160deg,oklch(0.25_0.01_270),oklch(0.2_0.008_270))] text-muted-foreground/60">

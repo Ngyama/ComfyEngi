@@ -49,7 +49,8 @@ function record(table: TableName, v: unknown): Record<string, unknown> {
     else if (INT_COLS.has(c)) out[c] = int(val, c)
     else if (c === 'loras') {
       if (!Array.isArray(val)) throw new BadArg('loras 必须是数组')
-      out[c] = val.map((l) => ({ resource_id: plain(l).resource_id == null ? undefined : str(plain(l).resource_id), name: str(plain(l).name, 'LoRA 名称'), strength: Number(plain(l).strength ?? 1) }))
+      const words = (v: unknown, name: string) => (v == null ? undefined : Array.isArray(v) ? v.map((w) => str(w, name)) : (() => { throw new BadArg(`${name} 必须是数组`) })())
+      out[c] = val.map((l) => ({ resource_id: plain(l).resource_id == null ? undefined : str(plain(l).resource_id), name: str(plain(l).name, 'LoRA 名称'), strength: Number(plain(l).strength ?? 1), trigger_words: words(plain(l).trigger_words, '触发词'), custom_triggers: words(plain(l).custom_triggers, '自定义触发词') }))
     } else if (c === 'scenes') {
       if (!Array.isArray(val)) throw new BadArg('scenes 必须是数组')
       out[c] = val.map((x) => {

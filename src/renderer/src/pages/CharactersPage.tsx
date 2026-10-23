@@ -1,67 +1,327 @@
-// 角色库：角色资料、LoRA，以及该角色专属的服装模板。
+// 角色库：一个连续的角色编辑页面——名称 → LoRA → 触发词 → 基础 Prompt → 服装。
+// 角色标签、角色负面 Prompt 不再显示，但保存时不发送这两个字段，旧内容原样保留（{角色标签} 占位符仍可用）。
 
-import { useEffect, useState } from 'react'
-import { Copy, Plus, Shirt, Trash2, Users, X } from 'lucide-react'
+import { useEffect, useMemo, useState } from 'react'
+import { AlertTriangle, ChevronDown, ChevronRight, ChevronsUpDown, Copy, GripVertical, Plus, Shirt, Trash2, Unlink, Users, X } from 'lucide-react'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import { Command, CommandEmpty, CommandInput, CommandItem, CommandList } from '@/components/ui/command'
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { Avatar, EmptyState, FieldLabel, PromptField, SearchBox, TextInput } from '@/components/common'
 import { SortableArea, useSortableItem } from '@/components/sortable'
 import { api, call } from '@/lib/api'
 import { hueOf, matches, useDraft } from '@/lib/hooks'
 import { confirm, reloadLib, useLib } from '@/lib/stores'
 import { cn } from '@/lib/utils'
-import type { Character, Lora, Outfit } from '@shared/types'
+import { LoraThumb, loraTitle } from '@/pages/LorasPage'
+import type { Character, Lora, LoraResource, Outfit } from '@shared/types'
 
-function LoraEditor({ value, onChange }: { value: Lora[]; onChange: (v: Lora[]) => void }) {
-  const [resources,setResources]=useState<import('@shared/types').LoraResource[]>([])
-  useEffect(()=>{void api['loras.list']().then(setResources).catch(()=>{})},[])
-  const set = (i: number, p: Partial<Lora>) => onChange(value.map((l, j) => (j === i ? { ...l, ...p } : l)))
+// ---------------------------------------------------------------- LoRA 资源（复用 LoRA Manager 的数据接口）
+
+let resourceCache: LoraResource[] | null = null
+function useLoraResources() {
+  const [rows, setRows] = useState<LoraResource[]>(resourceCache ?? [])
+  const refresh = async () => {
+    const r = await api['loras.list']().catch(() => null)
+    if (r) {
+      resourceCache = r
+      setRows(r)
+    }
+  }
+  useEffect(() => {
+    void refresh()
+  }, [])
+  return { rows, refresh }
+}
+
+const fileStem = (r: LoraResource) => r.name.replace(/\.safetensors$/i, '')
+const folderOf = (r: LoraResource) => r.folder || r.root.replace(/[\\/]+$/, '').split(/[\\/]/).pop() || ''
+
+/** 可搜索的 LoRA 选择器：同时匹配本地文件名与 metadata 中的模型名称 */
+function LoraPicker({ resources, onPick, children }: { resources: LoraResource[]; onPick: (r: LoraResource) => void; children: React.ReactNode }) {
+  const [open, setOpen] = useState(false)
+  const [q, setQ] = useState('')
+  useEffect(() => {
+    if (open) setQ('')
+  }, [open])
+  const list = useMemo(() => {
+    const words = q.toLowerCase().split(/\s+/).filter(Boolean)
+    return resources
+      .filter((r) => !r.missing && !r.offline)
+      .filter((r) => {
+        const hay = `${r.name} ${r.sidecar?.modelName ?? ''} ${r.folder}`.toLowerCase()
+        return words.every((w) => hay.includes(w))
+      })
+      .sort((a, b) => loraTitle(a).localeCompare(loraTitle(b), 'zh'))
+  }, [resources, q])
+  const shown = list.slice(0, 60)
   return (
-    <div className="space-y-2">
-      <select className="bg-background p-2 rounded-lg text-xs w-full" value="" onChange={e=>{const r=resources.find(r=>r.id===e.target.value);if(r)onChange([...value,{resource_id:r.id,name:r.comfyName||r.name,strength:r.recommendedWeight}])}}><option value="">从 LoRA Manager 添加资源…</option>{resources.filter(r=>!r.missing&&!r.offline).map(r=><option key={r.id} value={r.id}>{r.name}</option>)}</select>
-      {value.map((l, i) => (
-        <div key={i} className="flex items-center gap-2">
-          <span className="w-12 shrink-0 text-[11px] text-muted-foreground">槽位 {i + 1}</span>
-          <TextInput value={l.name} onChange={(v) => set(i, { name: v })} placeholder="与 ComfyUI 中的文件名一致，如 xxx.safetensors" mono />
-          <input
-            type="number"
-            step={0.05}
-            value={l.strength}
-            onChange={(e) => set(i, { strength: parseFloat(e.target.value) || 0 })}
-            className="h-9 w-20 shrink-0 rounded-lg bg-white/[0.04] px-2 text-center text-[13px] tabular-nums ring-1 ring-white/[0.07] outline-none focus:ring-primary/50"
-          />
-          <Button variant="ghost" size="icon-sm" onClick={() => onChange(value.filter((_, j) => j !== i))} aria-label="删除 LoRA">
-            <X />
-          </Button>
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>{children}</PopoverTrigger>
+      <PopoverContent className="w-[420px] p-0" align="start">
+        <Command shouldFilter={false}>
+          <CommandInput value={q} onValueChange={setQ} placeholder="搜索文件名或模型名称…" />
+          <CommandList className="max-h-[380px]">
+            <CommandEmpty>{resources.length ? '没有匹配的 LoRA' : '还没有扫描到 LoRA，请先在「LoRA 管理」中添加目录'}</CommandEmpty>
+            {shown.map((r) => (
+              <CommandItem
+                key={r.id}
+                value={r.id}
+                onSelect={() => {
+                  onPick(r)
+                  setOpen(false)
+                }}
+                className="gap-3 py-1.5"
+                data-testid="lora-picker-item"
+              >
+                <LoraThumb r={r} width={96} className="h-12 w-9 rounded-md" />
+                <div className="min-w-0 flex-1">
+                  <div className="truncate text-[13px]">{loraTitle(r)}</div>
+                  <div className="truncate text-[11px] text-muted-foreground">
+                    {folderOf(r)}
+                    {r.sidecar?.modelName && r.sidecar.modelName !== fileStem(r) ? ` · ${fileStem(r)}` : ''}
+                  </div>
+                </div>
+                {r.sidecar?.baseModel && <span className="shrink-0 rounded bg-white/[0.06] px-1.5 py-0.5 text-[10px] text-muted-foreground">{r.sidecar.baseModel}</span>}
+              </CommandItem>
+            ))}
+            {list.length > shown.length && <div className="px-3 py-2 text-center text-[11px] text-muted-foreground">还有 {list.length - shown.length} 个结果，请输入更多关键词</div>}
+          </CommandList>
+        </Command>
+      </PopoverContent>
+    </Popover>
+  )
+}
+
+function WeightInput({ value, onChange }: { value: number; onChange: (v: number) => void }) {
+  return (
+    <label className="flex items-center gap-2 text-[11px] text-muted-foreground">
+      权重
+      <input
+        type="number"
+        step={0.05}
+        value={value}
+        aria-label="LoRA 权重"
+        onChange={(e) => onChange(parseFloat(e.target.value) || 0)}
+        className="h-8 w-20 rounded-lg bg-white/[0.04] px-2 text-center text-[13px] text-foreground tabular-nums ring-1 ring-white/[0.07] outline-none focus:ring-primary/50"
+      />
+    </label>
+  )
+}
+
+/** 角色的 LoRA：最多关联一个；旧版多 LoRA 数据保持原样并明确提示 */
+function LoraSection({ loras, resources, onChange, onResourceChanged }: { loras: Lora[]; resources: LoraResource[]; onChange: (v: Lora[]) => void; onResourceChanged: () => void }) {
+  const byId = (id?: string) => (id ? resources.find((r) => r.id === id) : undefined)
+  const pick = (r: LoraResource) => {
+    const old = loras[0]
+    const meta = r.sidecar?.triggerWords ?? []
+    const custom = old?.custom_triggers ?? []
+    onChange([
+      {
+        resource_id: r.id,
+        name: r.comfyName || r.name,
+        strength: r.recommendedWeight,
+        custom_triggers: custom,
+        // 只保留在新 LoRA 中仍然存在的已启用触发词（以及自定义触发词）
+        trigger_words: (old?.trigger_words ?? []).filter((w) => meta.includes(w) || custom.includes(w)),
+      },
+    ])
+  }
+
+  if (loras.length > 1)
+    return (
+      <div className="space-y-2 rounded-xl bg-warning/[0.07] p-3 ring-1 ring-warning/25" data-testid="legacy-loras">
+        <div className="flex items-start gap-2 text-xs leading-relaxed text-warning">
+          <AlertTriangle className="mt-0.5 size-3.5 shrink-0" />
+          <span>
+            这是旧版保存的 {loras.length} 个 LoRA（多槽位配置），生成时仍按原样全部使用，不会被修改。新版每个角色只关联一个 LoRA；如需改为单个，请点击「改为单个 LoRA」。
+          </span>
         </div>
-      ))}
-      <Button variant="ghost" size="sm" onClick={() => onChange([...value, { name: '', strength: 1 }])} disabled={value.length >= 4}>
-        <Plus /> 添加 LoRA
+        {loras.map((l, i) => {
+          const r = byId(l.resource_id)
+          return (
+            <div key={i} className="flex items-center gap-3 rounded-lg bg-black/20 p-2">
+              <span className="w-12 shrink-0 text-[11px] text-muted-foreground">槽位 {i + 1}</span>
+              {r && <LoraThumb r={r} width={96} className="h-10 w-8 rounded" />}
+              <span className="min-w-0 flex-1 truncate font-mono text-[12px]">{r ? loraTitle(r) : l.name}</span>
+              <span className="text-[12px] text-muted-foreground tabular-nums">{l.strength}</span>
+            </div>
+          )
+        })}
+        <Button
+          size="sm"
+          variant="secondary"
+          onClick={async () => {
+            if (
+              await confirm({
+                title: '改为单个 LoRA？',
+                description: `将只保留槽位 1，移除该角色的另外 ${loras.length - 1} 个 LoRA 关联。\n不会删除或修改任何 LoRA 文件；之后可以再选择其他 LoRA。`,
+                confirmText: '只保留槽位 1',
+              })
+            )
+              onChange(loras.slice(0, 1))
+          }}
+        >
+          改为单个 LoRA
+        </Button>
+      </div>
+    )
+
+  const l = loras[0]
+  if (!l)
+    return (
+      <LoraPicker resources={resources} onPick={pick}>
+        <button type="button" className="flex h-11 w-full items-center gap-2 rounded-xl border border-dashed border-white/[0.12] px-3 text-left text-[13px] text-muted-foreground hover:border-primary/40 hover:text-primary" data-testid="lora-picker-open">
+          <Plus className="size-4" /> 选择 LoRA…
+          <ChevronsUpDown className="ml-auto size-4 opacity-60" />
+        </button>
+      </LoraPicker>
+    )
+
+  const r = byId(l.resource_id)
+  const suggested = r ? (/^[a-z]:[\\/]/i.test(r.path) ? r.relativePath.replaceAll('/', '\\') : r.relativePath) : ''
+  return (
+    <div className="flex items-center gap-3 rounded-xl bg-white/[0.035] p-2.5 ring-1 ring-white/[0.06]" data-testid="character-lora">
+      {r ? (
+        <LoraThumb r={r} width={160} className="h-16 w-12 rounded-lg" />
+      ) : (
+        <div className="grid h-16 w-12 shrink-0 place-items-center rounded-lg bg-black/30 text-muted-foreground">
+          <Unlink className="size-4" />
+        </div>
+      )}
+      <div className="min-w-0 flex-1">
+        <div className="truncate text-[13px] font-medium">{r ? loraTitle(r) : l.name}</div>
+        <div className="truncate text-[11px] text-muted-foreground">
+          {r ? `${folderOf(r)} · ${r.name}` : l.resource_id ? 'LoRA 管理中找不到这条记录（可能已移除扫描目录）' : '旧版手动填写的模型名称'}
+        </div>
+        {r && (r.missing || r.offline) && <div className="mt-0.5 text-[11px] text-destructive">{r.missing ? '模型文件缺失' : '所在目录无法访问'}</div>}
+        {r && !r.comfyName && !r.missing && !r.offline && (
+          <button
+            type="button"
+            className="mt-0.5 text-left text-[11px] text-warning hover:underline"
+            onClick={async () => {
+              await call(api['loras.save']({ ...r, comfyName: suggested }))
+              onResourceChanged()
+            }}
+            title="ComfyUI LoRA 加载节点使用的相对名称"
+          >
+            尚未设置 ComfyUI 模型名称，点击使用 <span className="font-mono">{suggested}</span>
+          </button>
+        )}
+      </div>
+      <WeightInput value={l.strength} onChange={(v) => onChange([{ ...l, strength: v }])} />
+      <LoraPicker resources={resources} onPick={pick}>
+        <Button variant="ghost" size="sm">
+          更换
+        </Button>
+      </LoraPicker>
+      <Button variant="ghost" size="icon-sm" className="text-muted-foreground hover:text-destructive" onClick={() => onChange([])} aria-label="取消关联 LoRA">
+        <X />
       </Button>
-      <p className="text-[11px] leading-relaxed text-muted-foreground">
-        在「设置 → 工作流」中把「角色 LoRA 名称 / 强度」映射到 LoRA 节点后才会写入；映射的角色槽位必须全部配置，空槽位会阻止入队。若习惯在 Prompt 中写 &lt;lora:…&gt;，直接写进基础 Prompt 即可。
-      </p>
     </div>
   )
 }
 
-function OutfitCard({ o, selected, onClick }: { o: Outfit; selected: boolean; onClick: () => void }) {
+/** 触发词：来自 LoRA metadata 的建议 + 自定义；由用户勾选参与生成，默认不启用 */
+function TriggerSection({ lora, resource, onChange }: { lora: Lora; resource?: LoraResource; onChange: (l: Lora) => void }) {
+  const [text, setText] = useState('')
+  const enabled = lora.trigger_words ?? []
+  const custom = lora.custom_triggers ?? []
+  const meta = resource?.sidecar?.triggerWords ?? []
+  const all = [...meta, ...custom.filter((w) => !meta.includes(w))]
+  const toggle = (w: string) => onChange({ ...lora, trigger_words: enabled.includes(w) ? enabled.filter((x) => x !== w) : [...enabled, w] })
+  const add = () => {
+    const w = text.trim()
+    if (!w) return
+    setText('')
+    if (all.includes(w)) {
+      if (!enabled.includes(w)) toggle(w)
+      return
+    }
+    onChange({ ...lora, custom_triggers: [...custom, w], trigger_words: [...enabled, w] })
+  }
+  return (
+    <div className="space-y-2">
+      <div className="flex flex-wrap gap-1.5">
+        {all.map((w) => {
+          const on = enabled.includes(w)
+          const isCustom = !meta.includes(w)
+          return (
+            <span
+              key={w}
+              className={cn(
+                'inline-flex items-center rounded-full font-mono text-[11.5px] ring-1 transition',
+                on ? 'bg-primary/15 text-primary ring-primary/40' : 'bg-white/[0.04] text-foreground/70 ring-white/[0.07] hover:bg-white/[0.08]',
+              )}
+            >
+              <button type="button" onClick={() => toggle(w)} className="px-2.5 py-1" aria-pressed={on} data-testid="trigger-chip">
+                {on ? '✓ ' : ''}
+                {w}
+              </button>
+              {isCustom && (
+                <button
+                  type="button"
+                  className="-ml-1 pr-2 opacity-60 hover:opacity-100"
+                  aria-label={`移除自定义触发词 ${w}`}
+                  onClick={() => onChange({ ...lora, custom_triggers: custom.filter((x) => x !== w), trigger_words: enabled.filter((x) => x !== w) })}
+                >
+                  <X className="size-3" />
+                </button>
+              )}
+            </span>
+          )
+        })}
+        <input
+          value={text}
+          onChange={(e) => setText(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') {
+              e.preventDefault()
+              add()
+            }
+          }}
+          onBlur={add}
+          placeholder="+ 自定义触发词"
+          className="h-7 w-32 rounded-full bg-transparent px-2.5 font-mono text-[11.5px] ring-1 ring-white/[0.07] outline-none placeholder:font-sans placeholder:text-muted-foreground/60 focus:ring-primary/50"
+        />
+      </div>
+      <div className="text-[11px] text-muted-foreground">
+        {enabled.length ? (
+          <>
+            生成时加在基础 Prompt 前：<span className="font-mono text-foreground/80">{enabled.join(', ')}</span>
+          </>
+        ) : meta.length ? (
+          '点击触发词启用；默认不启用。启用的触发词会随角色保存，不修改 LoRA 的 metadata.json。'
+        ) : (
+          '这个 LoRA 的 metadata 中没有触发词，可以手动添加。'
+        )}
+      </div>
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------- 服装
+
+function OutfitRow({ o, open, onToggle, onDeleted }: { o: Outfit; open: boolean; onToggle: () => void; onDeleted: () => void }) {
   const s = useSortableItem(String(o.id))
   return (
-    <div
-      ref={s.setNodeRef}
-      style={s.style}
-      {...s.attributes}
-      {...s.listeners}
-      onClick={onClick}
-      className={cn('cursor-pointer rounded-xl bg-white/[0.035] p-3 ring-1 ring-white/[0.05] transition hover:bg-white/[0.06]', selected && 'bg-white/[0.07] ring-primary/60', s.isDragging && 'shadow-2xl shadow-black/50')}
-    >
-      <div className="flex items-center gap-2">
-        <Shirt className="size-3.5 text-muted-foreground" />
-        <span className="truncate text-[13px] font-medium">{o.name || '（未命名）'}</span>
+    <div ref={s.setNodeRef} style={s.style} className={cn('rounded-xl bg-white/[0.03] ring-1 ring-white/[0.05]', open && 'bg-white/[0.045] ring-white/[0.1]', s.isDragging && 'shadow-2xl shadow-black/50')} data-testid="outfit-row">
+      <div className="flex items-center gap-2 px-2 py-2">
+        <button type="button" {...s.attributes} {...s.listeners} className="cursor-grab text-muted-foreground/50 hover:text-muted-foreground" aria-label="拖动排序">
+          <GripVertical className="size-4" />
+        </button>
+        <button type="button" onClick={onToggle} className="flex min-w-0 flex-1 items-center gap-2 text-left">
+          {open ? <ChevronDown className="size-4 shrink-0 text-muted-foreground" /> : <ChevronRight className="size-4 shrink-0 text-muted-foreground" />}
+          <Shirt className="size-3.5 shrink-0 text-muted-foreground" />
+          <span className="shrink-0 text-[13px] font-medium">{o.name || '（未命名）'}</span>
+          {!open && <span className="min-w-0 truncate font-mono text-[11px] text-muted-foreground">{o.positive || '（空）'}</span>}
+        </button>
       </div>
-      <div className="mt-1 line-clamp-2 font-mono text-[11px] leading-snug text-muted-foreground">{o.positive || '（空）'}</div>
+      {open && (
+        <div className="px-3 pb-3">
+          <OutfitEditor o={o} onDeleted={onDeleted} />
+        </div>
+      )}
     </div>
   )
 }
@@ -73,7 +333,7 @@ function OutfitEditor({ o, onDeleted }: { o: Outfit; onDeleted: () => void }) {
   })
   if (!draft) return null
   return (
-    <div className="space-y-3 rounded-xl bg-white/[0.025] p-4 ring-1 ring-white/[0.05]">
+    <div className="space-y-3">
       <div className="flex items-center gap-2">
         <TextInput value={draft.name} onChange={(v) => patch({ name: v })} className="font-medium" />
         <Button
@@ -104,32 +364,53 @@ function OutfitEditor({ o, onDeleted }: { o: Outfit; onDeleted: () => void }) {
           <Trash2 />
         </Button>
       </div>
-      <PromptField label="正面 Prompt" value={draft.positive} onChange={(v) => patch({ positive: v })} placeholder="服装 / 穿着状态（原样保存）" minRows={4} copy />
-      <PromptField label="负面 Prompt" value={draft.negative} onChange={(v) => patch({ negative: v })} placeholder="可留空" minRows={2} />
+      <PromptField label="正面 Prompt" value={draft.positive} onChange={(v) => patch({ positive: v })} placeholder="服装 / 穿着状态（原样保存）" minRows={3} copy />
+      <PromptField label="负面 Prompt" value={draft.negative} onChange={(v) => patch({ negative: v })} placeholder="可留空" minRows={1} />
       <TextInput value={draft.note} onChange={(v) => patch({ note: v })} placeholder="备注（可选）" />
     </div>
   )
 }
 
-function CharacterDetail({ c, onDeleted }: { c: Character; onDeleted: () => void }) {
+// ---------------------------------------------------------------- 角色
+
+function CharacterAvatar({ c, resources, className }: { c: Character; resources: LoraResource[]; className?: string }) {
+  const r = c.loras?.length === 1 && c.loras[0].resource_id ? resources.find((x) => x.id === c.loras[0].resource_id) : undefined
+  if (r && (r.preview || r.cover)) return <LoraThumb r={r} width={96} className={cn('size-9 rounded-xl', className)} />
+  return <Avatar name={c.name} hue={hueOf(c.name)} className={className} />
+}
+
+function Section({ title, hint, right, children }: { title: string; hint?: string; right?: React.ReactNode; children: React.ReactNode }) {
+  return (
+    <section>
+      <FieldLabel hint={hint} right={right}>
+        {title}
+      </FieldLabel>
+      {children}
+    </section>
+  )
+}
+
+function CharacterDetail({ c, resources, refreshResources, onDeleted }: { c: Character; resources: LoraResource[]; refreshResources: () => void; onDeleted: () => void }) {
   const lib = useLib((s) => s.lib)
-  const [tab, setTab] = useState('profile')
-  const [selOutfit, setSelOutfit] = useState<number | null>(null)
+  const [openOutfit, setOpenOutfit] = useState<number | null>(null)
+  // 只发送这里可编辑的字段：tag / negative 等隐藏字段不发送，保存时原样保留
   const { draft, patch, flush } = useDraft<Character>(c, c.id, async (v) => {
-    await call(api['characters.save']({ id: v.id, _revision: v._revision, name: v.name, tag: v.tag, positive: v.positive, negative: v.negative, loras: v.loras.filter((l) => l.name.trim()), note: v.note }))
+    await call(api['characters.save']({ id: v.id, _revision: v._revision, name: v.name, positive: v.positive, loras: v.loras, note: v.note }))
     await reloadLib()
   })
   const outfits = (lib?.outfits ?? []).filter((o) => o.character_id === c.id)
-  const curOutfit = outfits.find((o) => o.id === selOutfit) ?? null
   if (!draft) return null
+  const loras = draft.loras ?? []
+  const single = loras.length === 1 ? loras[0] : null
+  const resource = single?.resource_id ? resources.find((r) => r.id === single.resource_id) : undefined
   return (
     <div className="flex h-full flex-col">
-      <div className="flex items-center gap-3 px-6 pt-5 pb-3">
-        <Avatar name={draft.name} hue={hueOf(draft.name)} className="size-11 text-base" />
+      <div className="flex items-center gap-3 px-6 pt-5 pb-4">
+        <CharacterAvatar c={draft} resources={resources} className="size-11 text-base" />
         <div className="min-w-0 flex-1">
           <div className="truncate text-[16px] font-semibold">{draft.name || '（未命名）'}</div>
           <div className="text-xs text-muted-foreground">
-            {outfits.length} 套服装 · {draft.loras.filter((l) => l.name).length} 个 LoRA
+            {outfits.length} 套服装 · {loras.length ? (loras.length > 1 ? `${loras.length} 个 LoRA（旧配置）` : '1 个 LoRA') : '未关联 LoRA'}
           </div>
         </div>
         <Button
@@ -161,80 +442,74 @@ function CharacterDetail({ c, onDeleted }: { c: Character; onDeleted: () => void
           <Trash2 /> 删除
         </Button>
       </div>
-      <Tabs value={tab} onValueChange={setTab} className="min-h-0 flex-1 gap-0">
-        <div className="px-6">
-          <TabsList>
-            <TabsTrigger value="profile">角色资料</TabsTrigger>
-            <TabsTrigger value="outfits">服装 {outfits.length}</TabsTrigger>
-          </TabsList>
-        </div>
-        <TabsContent value="profile" className="min-h-0 overflow-y-auto px-6 pt-4 pb-6">
-          <div className="grid max-w-3xl gap-4">
-            <div className="grid grid-cols-2 gap-3">
-              <div>
-                <FieldLabel>名称</FieldLabel>
-                <TextInput value={draft.name} onChange={(v) => patch({ name: v })} />
-              </div>
-              <div>
-                <FieldLabel hint="可用 {角色标签} 引用">角色标签</FieldLabel>
-                <TextInput value={draft.tag} onChange={(v) => patch({ tag: v })} placeholder="例如 Danbooru 角色标签" mono />
-              </div>
-            </div>
-            <PromptField label="基础 Prompt" value={draft.positive} onChange={(v) => patch({ positive: v })} placeholder="角色外观、固定特征（原样保存）" minRows={5} copy />
-            <PromptField label="负面 Prompt" value={draft.negative} onChange={(v) => patch({ negative: v })} placeholder="角色专用负面（可留空）" minRows={2} />
-            <div>
-              <FieldLabel>LoRA</FieldLabel>
-              <LoraEditor value={draft.loras ?? []} onChange={(v) => patch({ loras: v })} />
-            </div>
-            <div>
-              <FieldLabel>备注</FieldLabel>
+
+      <div className="min-h-0 flex-1 overflow-y-auto px-6 pb-8">
+        <div className="max-w-3xl space-y-6">
+          <div className="grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)] gap-3">
+            <Section title="名称">
+              <TextInput value={draft.name} onChange={(v) => patch({ name: v })} />
+            </Section>
+            <Section title="备注">
               <TextInput value={draft.note} onChange={(v) => patch({ note: v })} placeholder="可选" />
-            </div>
+            </Section>
           </div>
-        </TabsContent>
-        <TabsContent value="outfits" className="flex min-h-0 gap-4 px-6 pt-4 pb-6">
-          <div className="w-64 shrink-0 space-y-2 overflow-y-auto">
-            <SortableArea
-              items={outfits}
-              getId={(o) => String(o.id)}
-              onReorder={async (_f, _t, next) => {
-                await call(api['outfits.reorder'](next.map((o) => o.id)))
-                await reloadLib()
-              }}
-            >
-              {outfits.map((o) => (
-                <OutfitCard key={o.id} o={o} selected={selOutfit === o.id} onClick={() => setSelOutfit(o.id)} />
-              ))}
-            </SortableArea>
-            <button
-              type="button"
-              onClick={async () => {
-                const r = await call(api['outfits.save']({ character_id: c.id, name: `服装${outfits.length + 1}` }))
-                if (r) {
+
+          <Section title="LoRA" hint="最多关联一个；名称与权重写入工作流中映射的 LoRA 节点">
+            <LoraSection loras={loras} resources={resources} onChange={(v) => patch({ loras: v })} onResourceChanged={refreshResources} />
+          </Section>
+
+          {single && (
+            <Section title="触发词" hint="勾选的触发词会加在基础 Prompt 前参与生成">
+              <TriggerSection lora={single} resource={resource} onChange={(l) => patch({ loras: [l] })} />
+            </Section>
+          )}
+
+          <PromptField label="基础 Prompt" value={draft.positive} onChange={(v) => patch({ positive: v })} placeholder="角色外观、固定特征（原样保存）" minRows={2} copy />
+
+          <Section
+            title={`服装${outfits.length ? ` · ${outfits.length}` : ''}`}
+            hint="拖动调整顺序，点击展开编辑"
+            right={
+              <Button
+                size="xs"
+                variant="ghost"
+                onClick={async () => {
+                  const r = await call(api['outfits.save']({ character_id: c.id, name: `服装${outfits.length + 1}` }))
+                  if (r) {
+                    await reloadLib()
+                    setOpenOutfit(r.id)
+                  }
+                }}
+              >
+                <Plus /> 新建服装
+              </Button>
+            }
+          >
+            <div className="space-y-1.5">
+              <SortableArea
+                items={outfits}
+                getId={(o) => String(o.id)}
+                onReorder={async (_f, _t, next) => {
+                  await call(api['outfits.reorder'](next.map((o) => o.id)))
                   await reloadLib()
-                  setSelOutfit(r.id)
-                }
-              }}
-              className="flex w-full items-center justify-center gap-2 rounded-xl border border-dashed border-white/[0.1] py-3 text-xs text-muted-foreground hover:border-primary/40 hover:text-primary"
-            >
-              <Plus className="size-3.5" /> 添加服装
-            </button>
-          </div>
-          <div className="min-w-0 flex-1 overflow-y-auto">
-            {curOutfit ? (
-              <OutfitEditor key={curOutfit.id} o={curOutfit} onDeleted={() => setSelOutfit(null)} />
-            ) : (
-              <EmptyState icon={<Shirt />} title={outfits.length ? '选择一套服装进行编辑' : '还没有服装模板'} description="每套服装是一段原始 Prompt，只属于这个角色。拖动左侧卡片调整顺序。" />
-            )}
-          </div>
-        </TabsContent>
-      </Tabs>
+                }}
+              >
+                {outfits.map((o) => (
+                  <OutfitRow key={o.id} o={o} open={openOutfit === o.id} onToggle={() => setOpenOutfit(openOutfit === o.id ? null : o.id)} onDeleted={() => setOpenOutfit(null)} />
+                ))}
+              </SortableArea>
+              {!outfits.length && <div className="rounded-xl border border-dashed border-white/[0.1] px-4 py-5 text-center text-xs text-muted-foreground">还没有服装。每套服装是一段原始 Prompt，只属于这个角色。</div>}
+            </div>
+          </Section>
+        </div>
+      </div>
     </div>
   )
 }
 
 export default function CharactersPage() {
   const lib = useLib((s) => s.lib)
+  const { rows: resources, refresh } = useLoraResources()
   const [q, setQ] = useState('')
   const [sel, setSel] = useState<number | null>(lib?.characters[0]?.id ?? null)
   const chars = (lib?.characters ?? []).filter((c) => !q || matches(c as never, q))
@@ -271,7 +546,7 @@ export default function CharactersPage() {
               data-active={sel === c.id || undefined}
               className="flex w-full items-center gap-3 rounded-xl px-2 py-2 text-left hover:bg-white/[0.04] data-[active]:bg-white/[0.07]"
             >
-              <Avatar name={c.name} hue={hueOf(c.name)} />
+              <CharacterAvatar c={c} resources={resources} />
               <div className="min-w-0">
                 <div className="truncate text-[13px] font-medium">{c.name || '（未命名）'}</div>
                 <div className="truncate text-[11px] text-muted-foreground">{outfitCount(c.id)} 套服装</div>
@@ -282,9 +557,9 @@ export default function CharactersPage() {
       </div>
       <div className="min-w-0 flex-1">
         {cur ? (
-          <CharacterDetail key={cur.id} c={cur} onDeleted={() => setSel(null)} />
+          <CharacterDetail key={cur.id} c={cur} resources={resources} refreshResources={refresh} onDeleted={() => setSel(null)} />
         ) : (
-          <EmptyState icon={<Users />} title={lib?.characters.length ? '选择一个角色' : '还没有角色'} description="角色包含基础 Prompt、LoRA 与专属的服装模板；在套图任务中选择角色后会自动载入。" />
+          <EmptyState icon={<Users />} title={lib?.characters.length ? '选择一个角色' : '还没有角色'} description="角色包含 LoRA、触发词、基础 Prompt 与专属的服装模板；在套图任务中选择角色后会自动载入。" />
         )}
       </div>
     </div>

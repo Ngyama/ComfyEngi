@@ -145,9 +145,14 @@ export function expandTask(data: TaskData, lib: PlanLibrary, settings: Settings,
     return o
   }
 
+  // 角色模块 = 启用的 LoRA 触发词 + 角色基础 Prompt（原样拼接，不改写、不去重）；没有启用触发词时与原来完全一致
+  const triggers = char ? (char.loras ?? []).flatMap((l) => l.trigger_words ?? []).filter((w) => typeof w === 'string' && w.trim()) : []
+  const charPair: [string, string] = triggers.length
+    ? [joinParts([...triggers, char?.positive ?? ''], unescapeSeparator(settings.pos_separator ?? ', '), settings.trim_modules ?? true), char?.negative ?? '']
+    : pair(char)
   const baseModules = (outfit: Outfit | null): Modules => ({
     global: pair(g),
-    character: pair(char),
+    character: charPair,
     outfit: pair(outfit),
   })
 

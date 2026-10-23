@@ -32,6 +32,10 @@ export interface Lora {
   resource_id?: string
   name: string
   strength: number
+  /** 参与生成的触发词（用户勾选，按勾选顺序），与角色基础 Prompt 组合，不写入原 metadata.json */
+  trigger_words?: string[]
+  /** 用户手动添加的自定义触发词（可勾选或不勾选） */
+  custom_triggers?: string[]
 }
 
 export interface Character extends Timestamps {
