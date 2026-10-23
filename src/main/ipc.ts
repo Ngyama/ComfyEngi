@@ -1,9 +1,9 @@
-import { LoraManager } from './lora-manager'
+import { LoraManager, pathKey } from './lora-manager'
 // IPC 处理：只响应白名单方法，并对每个参数做类型校验；Renderer 无法直接访问文件系统或数据库。
 
 import { existsSync } from 'node:fs'
-import { readFile } from 'node:fs/promises'
-import { join } from 'node:path'
+import { mkdir, readFile, writeFile } from 'node:fs/promises'
+import { dirname, extname, join } from 'node:path'
 import { BrowserWindow, dialog, ipcMain, nativeImage, shell, app } from 'electron'
 import { API_METHODS, INVOKE_CHANNEL, type Api, type ApiMethod } from '@shared/api'
 import { checkAgainstObjectInfo, ComfyError, loadApiWorkflow, mappingValues, validateMapping } from '@shared/mapping'
@@ -140,19 +140,43 @@ export function registerIpc(ctx: IpcContext) {
     'vault.choose': (create,migrate) => { if(runner.isAlive()) throw new Error('请先安全停止队列，等待当前任务完成'); return ctx.chooseVault(!!create,!!migrate) },
     'loras.list': () => loras().list(),
     'loras.save': (r) => loras().save(plain(r) as never),
-    'loras.scan': async () => {
-      const result=await dialog.showOpenDialog(ctx.window()!,{title:'选择 LoRA 目录（可多选，扫描不会移动模型）',properties:['openDirectory','multiSelections']})
-      const roots=result.canceled ? (store.getSetting('lora_roots' as never) as unknown as string[] || []) : result.filePaths
-      store.setSetting('lora_roots',roots); return loras().scan(roots)
+    'loras.roots': () => store.getSetting('lora_roots') ?? [],
+    'loras.addRoot': async () => {
+      const result=await dialog.showOpenDialog(ctx.window()!,{title:'添加 LoRA 目录（可多选；扫描只读取，不会修改或移动模型）',properties:['openDirectory','multiSelections']})
+      if(result.canceled || !result.filePaths.length) return null
+      const roots=[...(store.getSetting('lora_roots') ?? [])]
+      for(const p of result.filePaths) if(!roots.some(r=>pathKey(r)===pathKey(p))) roots.push(p)
+      store.setSetting('lora_roots',roots)
+      return { roots, errors: await loras().scan(roots) }
     },
+    'loras.removeRoot': (root) => {
+      const roots=(store.getSetting('lora_roots') ?? []).filter(r=>pathKey(r)!==pathKey(str(root)))
+      store.setSetting('lora_roots',roots); return roots
+    },
+    'loras.scan': () => loras().scan(store.getSetting('lora_roots') ?? []),
     'loras.preview': async (id) => {
-      const result=await dialog.showOpenDialog(ctx.window()!,{properties:['openFile'],filters:[{name:'图片',extensions:['png','jpg','jpeg','webp']}]})
+      const result=await dialog.showOpenDialog(ctx.window()!,{title:'选择封面图片（会复制到工作区，不修改模型目录）',properties:['openFile'],filters:[{name:'图片',extensions:['png','jpg','jpeg','webp']}]})
       if(!result.canceled && result.filePaths[0]) await loras().preview(str(id),result.filePaths[0])
     },
-    'loras.image': async(id) => {
-      const r=(await loras().list()).find(r=>r.id===str(id))
-      if(!r?.preview || !/^loras[\\/]previews[\\/][a-f0-9-]+\.image$/i.test(r.preview)) return null
-      return nativeImage.createFromPath(join(ctx.dataDir,r.preview)).resize({width:400}).toDataURL()
+    'loras.clearPreview': (id) => loras().clearPreview(str(id)),
+    'loras.image': async(id, width) => {
+      const w=Math.max(64,Math.min(1600,width==null?400:int(width,'width')))
+      const src=await loras().imageSource(str(id),w)
+      if(!src) return null
+      // 缩略图缓存在工作区 .comfyengi/cache 中；源图片变化（修改时间 / 大小）后自动失效
+      if(existsSync(src.cache)) return `data:image/jpeg;base64,${(await readFile(src.cache)).toString('base64')}`
+      const img=nativeImage.createFromPath(src.source)
+      if(!img.isEmpty()) {
+        const out=img.getSize().width>w ? img.resize({width:w,quality:'good'}) : img
+        const jpg=out.toJPEG(85)
+        try { await mkdir(dirname(src.cache),{recursive:true}); await writeFile(src.cache,jpg) } catch { /* 缓存失败不影响显示 */ }
+        return `data:image/jpeg;base64,${jpg.toString('base64')}`
+      }
+      // nativeImage 不能解码的格式（如 WebP）直接交给页面渲染
+      if(src.size>12*1024*1024) return null
+      const ext=extname(src.source).toLowerCase().replace('.','')
+      const mime=ext==='webp'?'image/webp':ext==='png'?'image/png':'image/jpeg'
+      return `data:${mime};base64,${(await readFile(src.source)).toString('base64')}`
     },
     'loras.open': async(id) => { const r=(await loras().list()).find(r=>r.id===str(id)); if(r) shell.showItemInFolder(r.path) },
     'library.load':  () => { store.files?.scan(); return libraryOf(store) },

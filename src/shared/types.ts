@@ -293,8 +293,24 @@ export interface Library {
 export type Severity = 'error' | 'warning'
 export type Message = [Severity, string]
 
+/**
+ * 从 ComfyUI-Lora-Manager 的同名 `.metadata.json` 中提取的摘要（只读，只包含文件里实际存在的字段）。
+ */
+export interface LoraSidecar {
+ modelName?:string; baseModel?:string; description?:string; tags?:string[]; triggerWords?:string[]
+ usage?:{strength?:number; strengthMin?:number; strengthMax?:number; clipStrength?:number}
+ notes?:string; versionName?:string; creator?:string; modelType?:string; sha256?:string
+ civitaiModelId?:number; civitaiVersionId?:number; favorite?:boolean; previewUrl?:string
+}
+
 export interface LoraResource {
  id:string; name:string; path:string; relativePath:string; size:number; mtime:number;
  metadata:Record<string,unknown>; metadataError:string; category:string; tags:string; note:string;
  characterId:number|null; recommendedWeight:number; comfyName:string; preview:string; missing:boolean
+ /** 所属的 LoRA 根目录与相对根目录的文件夹（'/' 分隔，根目录本身为 ''） */
+ root:string; folder:string
+ /** 自动识别的同名封面（只读引用原文件） */
+ cover:string
+ /** 同名 .metadata.json 的摘要及缓存依据 */
+ sidecar:LoraSidecar|null; sidecarPath:string; sidecarMtime:number; sidecarError:string
 }

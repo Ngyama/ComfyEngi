@@ -149,7 +149,7 @@ try {
 
   // 其他页面
   await nav('LoRA 管理')
-  check('LoRA Manager 正常打开',await win.getByText('LoRA Manager',{exact:true}).isVisible())
+  check('LoRA Manager 正常打开', await win.getByRole('button', { name: /全部 LoRA/ }).isVisible())
   await shot('09-loras')
   await nav('素材库')
   await win.locator('main .grid > div').first().click()
