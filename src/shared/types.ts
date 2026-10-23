@@ -309,7 +309,11 @@ export interface LoraSidecar {
 export interface LoraResource {
  id:string; name:string; path:string; relativePath:string; size:number; mtime:number;
  metadata:Record<string,unknown>; metadataError:string; category:string; tags:string; note:string;
- characterId:number|null; recommendedWeight:number; comfyName:string; preview:string; missing:boolean
+ characterId:number|null; recommendedWeight:number; comfyName:string; preview:string
+ /** 已确认缺失：所在根目录可以访问，但文件不存在（通常是被删除或移走）。列表时计算，不写入 Vault */
+ missing:boolean
+ /** 暂时无法确认：根目录不可访问（磁盘离线 / 目录被移除）或权限等读取错误。不视为已删除 */
+ offline?:boolean
  /** 所属的 LoRA 根目录与相对根目录的文件夹（'/' 分隔，根目录本身为 ''） */
  root:string; folder:string
  /** 自动识别的同名封面（只读引用原文件） */

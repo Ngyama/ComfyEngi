@@ -4,7 +4,7 @@
 // 用法：npx electron-vite build && node --experimental-strip-types --no-warnings scripts/e2e-loras.mjs [--shots <目录>]
 
 import { createHash } from 'node:crypto'
-import { copyFileSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
+import { copyFileSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { _electron as electron } from 'playwright-core'
@@ -266,6 +266,49 @@ try {
   await win.waitForTimeout(600)
   const opts = await win.locator('select option').allInnerTexts()
   check('角色库可以从 LoRA Manager 添加资源', opts.some((o) => o.includes('Alice')))
+
+  // 缺失文件：只在测试临时目录中删除 / 移动，验证界面行为
+  await win.locator('nav button', { hasText: 'LoRA' }).click()
+  await win.waitForTimeout(500)
+  const rescan = async () => {
+    await win.locator('button[aria-label="重新扫描全部目录"]').click()
+    await win.waitForTimeout(1500)
+  }
+  const inkPath = join(lorasA, 'style', 'Ink.safetensors')
+  const inkBytes = readFileSync(inkPath)
+  if (!(await win.getByPlaceholder('例如 常用 主角').isVisible())) await win.locator('[data-testid=lora-card]', { hasText: 'Ink' }).click()
+  await win.getByPlaceholder('例如 常用 主角').fill('ink-tag')
+  await win.waitForTimeout(800)
+  await win.getByRole('button', { name: '关闭' }).last().click()
+  rmSync(inkPath)
+  await rescan()
+  check('已删除的 LoRA 默认隐藏', (await win.locator('[data-testid=lora-card]', { hasText: 'Ink' }).count()) === 0 && (await cards.count()) === 7)
+  const toggle = win.getByRole('switch', { name: '显示缺失文件' })
+  await toggle.click()
+  await win.waitForTimeout(400)
+  const inkCard = win.locator('[data-testid=lora-card]', { hasText: 'Ink' })
+  check('打开「显示缺失文件」后可查看旧记录', (await inkCard.count()) === 1 && (await inkCard.innerText()).includes('文件缺失'))
+  await shot('l07-missing-shown')
+  await toggle.click()
+  writeFileSync(inkPath, inkBytes)
+  await rescan()
+  if (!(await win.getByPlaceholder('例如 常用 主角').isVisible())) await win.locator('[data-testid=lora-card]', { hasText: 'Ink' }).click()
+  await win.waitForTimeout(400)
+  check('文件恢复后显示原记录（标签保留）', (await win.getByPlaceholder('例如 常用 主角').inputValue()) === 'ink-tag' && (await cards.count()) === 8)
+  await win.getByRole('button', { name: '关闭' }).last().click()
+
+  renameSync(lorasB, lorasB + '-offline')
+  await rescan()
+  check('离线目录中的 LoRA 暂时隐藏并给出提示', (await win.locator('[data-testid=lora-card]', { hasText: 'Extra' }).count()) === 0 && (await win.getByText(/所在的目录当前无法访问/).isVisible()))
+  await toggle.click()
+  await win.waitForTimeout(400)
+  const extra = win.locator('[data-testid=lora-card]', { hasText: 'Extra' })
+  check('离线记录不显示为「文件缺失」', (await extra.innerText()).includes('目录无法访问') && !(await extra.innerText()).includes('文件缺失'))
+  await shot('l08-offline')
+  await toggle.click()
+  renameSync(lorasB + '-offline', lorasB)
+  await rescan()
+  check('目录恢复后正常显示', (await win.locator('[data-testid=lora-card]', { hasText: 'Extra' }).count()) === 1 && (await win.getByText(/所在的目录当前无法访问/).count()) === 0)
 
   // 显示名称切换
   await win.locator('nav button', { hasText: 'LoRA' }).click()

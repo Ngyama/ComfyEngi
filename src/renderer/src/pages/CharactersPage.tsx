@@ -19,7 +19,7 @@ function LoraEditor({ value, onChange }: { value: Lora[]; onChange: (v: Lora[]) 
   const set = (i: number, p: Partial<Lora>) => onChange(value.map((l, j) => (j === i ? { ...l, ...p } : l)))
   return (
     <div className="space-y-2">
-      <select className="bg-background p-2 rounded-lg text-xs w-full" value="" onChange={e=>{const r=resources.find(r=>r.id===e.target.value);if(r)onChange([...value,{resource_id:r.id,name:r.comfyName||r.name,strength:r.recommendedWeight}])}}><option value="">从 LoRA Manager 添加资源…</option>{resources.filter(r=>!r.missing).map(r=><option key={r.id} value={r.id}>{r.name}</option>)}</select>
+      <select className="bg-background p-2 rounded-lg text-xs w-full" value="" onChange={e=>{const r=resources.find(r=>r.id===e.target.value);if(r)onChange([...value,{resource_id:r.id,name:r.comfyName||r.name,strength:r.recommendedWeight}])}}><option value="">从 LoRA Manager 添加资源…</option>{resources.filter(r=>!r.missing&&!r.offline).map(r=><option key={r.id} value={r.id}>{r.name}</option>)}</select>
       {value.map((l, i) => (
         <div key={i} className="flex items-center gap-2">
           <span className="w-12 shrink-0 text-[11px] text-muted-foreground">槽位 {i + 1}</span>

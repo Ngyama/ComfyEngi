@@ -23,6 +23,7 @@ import {
 } from 'lucide-react'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
+import { Switch } from '@/components/ui/switch'
 import { Chip, CopyButton, Disclosure, EmptyState, FieldLabel, IconButton, SearchBox, TextInput } from '@/components/common'
 import { api, call } from '@/lib/api'
 import { useDraft } from '@/lib/hooks'
@@ -156,6 +157,8 @@ interface View {
   q: string
   base: string | null
   link: 'all' | 'linked' | 'unlinked'
+  /** 显示已缺失或暂时无法访问的旧记录（默认隐藏） */
+  showMissing: boolean
   sort: SortKey
   sel: string | null
   open: Set<string>
@@ -168,6 +171,7 @@ const useView = create<View>((set) => ({
   q: '',
   base: null,
   link: 'all',
+  showMissing: false,
   sort: 'name',
   sel: null,
   open: new Set(),
@@ -297,7 +301,7 @@ const LoraCard = memo(function LoraCard({ r, selected, characterName, nameMode, 
       className={cn(
         'group overflow-hidden rounded-xl bg-card text-left ring-1 ring-white/[0.05] transition hover:-translate-y-0.5 hover:ring-white/[0.14]',
         selected && 'ring-2 ring-primary/70',
-        r.missing && 'opacity-60',
+        (r.missing || r.offline) && 'opacity-60',
       )}
     >
       <div className="relative aspect-[3/4] overflow-hidden bg-black/30">
@@ -314,7 +318,8 @@ const LoraCard = memo(function LoraCard({ r, selected, characterName, nameMode, 
           {r.sidecar?.favorite && <Star className="size-4 fill-warning text-warning drop-shadow" />}
         </div>
         {r.missing && <span className="absolute inset-x-2 bottom-2 rounded-md bg-destructive/85 px-2 py-1 text-center text-[10.5px] text-white">文件缺失</span>}
-        {!r.missing && characterName && (
+        {r.offline && <span className="absolute inset-x-2 bottom-2 rounded-md bg-warning/85 px-2 py-1 text-center text-[10.5px] text-black">目录无法访问</span>}
+        {!r.missing && !r.offline && characterName && (
           <span className="absolute bottom-2 left-2 inline-flex max-w-[85%] items-center gap-1 rounded-md bg-black/60 px-1.5 py-0.5 text-[10px] text-white/85 backdrop-blur-sm">
             <User className="size-3 shrink-0" />
             <span className="truncate">{characterName}</span>
@@ -447,7 +452,8 @@ function Detail({ r, onClose, onChanged }: { r: LoraResource; onClose: () => voi
               ))}
             </div>
           )}
-          {r.missing && <div className="mt-2 rounded-lg bg-destructive/10 px-3 py-2 text-xs text-destructive">模型文件已不在原位置，重新扫描后会自动更新；角色关联保留。</div>}
+          {r.missing && <div className="mt-2 rounded-lg bg-destructive/10 px-3 py-2 text-xs text-destructive">模型文件已不在原位置（可能已删除或移走）。记录与角色关联会保留；文件放回原处或同名同大小的文件重新出现在扫描目录中，重新扫描后会自动恢复这条记录。</div>}
+          {r.offline && <div className="mt-2 rounded-lg bg-warning/10 px-3 py-2 text-xs text-warning">所在目录当前无法访问（磁盘未连接、目录被移除或没有权限），暂时无法确认文件状态，不会当作已删除处理。</div>}
         </div>
 
         {/* 触发词 */}
@@ -676,7 +682,11 @@ export default function LorasPage() {
     if (v.place && sameRoot(v.place.root, root)) v.set({ place: null })
   }
 
-  const all = useMemo(() => rows ?? [], [rows])
+  const records = useMemo(() => rows ?? [], [rows])
+  // 默认只显示实际存在的 LoRA；缺失 / 无法访问的记录仍保留在 Vault 中，打开开关即可查看
+  const hiddenCount = useMemo(() => records.filter((r) => r.missing || r.offline).length, [records])
+  const offlineCount = useMemo(() => records.filter((r) => r.offline).length, [records])
+  const all = useMemo(() => (v.showMissing ? records : records.filter((r) => !r.missing && !r.offline)), [records, v.showMissing])
   const tree = useMemo(() => buildTree(roots, all), [roots, all])
   useEffect(() => {
     const fresh = tree.filter((n) => !v.seenRoots.has(n.key))
@@ -727,7 +737,7 @@ export default function LorasPage() {
     return findNode(tree)?.children ?? []
   }, [tree, v.place])
 
-  const cur = all.find((r) => r.id === v.sel) ?? null
+  const cur = records.find((r) => r.id === v.sel) ?? null
   const crumbs = v.place ? [baseName(v.place.root), ...(v.place.folder ? v.place.folder.split('/') : [])] : []
   const filtered = !!v.q || !!v.base || v.link !== 'all'
 
@@ -844,7 +854,21 @@ export default function LorasPage() {
               {l}
             </Chip>
           ))}
+          {hiddenCount > 0 && (
+            <>
+              <span className="mx-1 h-4 w-px bg-white/[0.08]" />
+              <label className="flex cursor-pointer items-center gap-2 text-xs text-muted-foreground" title="已删除、移走或所在目录暂时无法访问的旧记录。记录会一直保留，不会自动删除。">
+                <Switch checked={v.showMissing} onCheckedChange={(on) => v.set({ showMissing: on })} aria-label="显示缺失文件" />
+                显示缺失文件（{hiddenCount}）
+              </label>
+            </>
+          )}
         </div>
+        {offlineCount > 0 && !v.showMissing && (
+          <div className="mx-6 mb-3 rounded-lg bg-warning/10 px-3 py-2 text-xs text-warning">
+            {offlineCount} 个 LoRA 所在的目录当前无法访问（磁盘未连接或目录被移除），已暂时隐藏；记录不会被删除，目录恢复后重新扫描即可。
+          </div>
+        )}
 
         <div className="min-h-0 flex-1 overflow-y-auto px-6 pb-6">
           {subfolders.length > 0 && (

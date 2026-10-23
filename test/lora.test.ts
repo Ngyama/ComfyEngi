@@ -1,7 +1,7 @@
 // LoRA 本地浏览：文件夹层级、同名封面、ComfyUI-Lora-Manager 元数据、只读保护与缓存。
 
 import { createHash } from 'node:crypto'
-import { mkdirSync, readdirSync, readFileSync, statSync, utimesSync, writeFileSync } from 'node:fs'
+import { mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { createVault } from '../src/main/vault'
@@ -304,5 +304,99 @@ describe('LoRA 视频封面', () => {
     expect(src!.cache.startsWith(m.root)).toBe(true)
     writeFileSync(join(loras, 'chars/V.mp4'), 'changed video bytes')
     expect((await m.imageSource(v.id, 360))?.cache).not.toBe(src?.cache)
+  })
+})
+
+describe('缺失与离线的 LoRA', () => {
+  const metaCount = (m: LoraManager) => readdirSync(join(m.root, 'loras/metadata')).filter((f) => f.endsWith('.json')).length
+
+  it('已删除的文件标记为缺失，记录与用户信息完整保留，重新扫描不删除也不新增', async () => {
+    const loras = setupLoras()
+    const m = newManager()
+    await m.scan([loras])
+    const a = (await m.list()).find((r) => r.name === 'A.safetensors')!
+    await m.save({ ...a, tags: '常用', note: '备注', characterId: 5 })
+    const n = metaCount(m)
+    rmSync(join(loras, 'characters/A.safetensors'))
+    await m.scan([loras])
+    const row = (await m.list()).find((r) => r.id === a.id)!
+    expect([row.missing, row.offline]).toEqual([true, false])
+    expect([row.tags, row.note, row.characterId]).toEqual(['常用', '备注', 5])
+    expect(metaCount(m)).toBe(n)
+    expect((await m.list()).filter((r) => !r.missing && !r.offline)).toHaveLength(4)
+  })
+
+  it('文件放回原处后恢复原记录（同一 ID）', async () => {
+    const loras = setupLoras()
+    const m = newManager()
+    await m.scan([loras])
+    const a = (await m.list()).find((r) => r.name === 'A.safetensors')!
+    await m.save({ ...a, tags: 'keep' })
+    const bytes = readFileSync(join(loras, 'characters/A.safetensors'))
+    rmSync(join(loras, 'characters/A.safetensors'))
+    await m.scan([loras])
+    writeFileSync(join(loras, 'characters/A.safetensors'), bytes)
+    await m.scan([loras])
+    const rows = (await m.list()).filter((r) => r.name === 'A.safetensors')
+    expect(rows).toHaveLength(1)
+    expect([rows[0].id, rows[0].missing, rows[0].tags]).toEqual([a.id, false, 'keep'])
+  })
+
+  it('同名同大小的文件出现在新位置时沿用缺失的旧记录，不产生重复', async () => {
+    const loras = setupLoras()
+    const m = newManager()
+    await m.scan([loras])
+    const a = (await m.list()).find((r) => r.name === 'A.safetensors')!
+    await m.save({ ...a, tags: 'moved', characterId: 9 })
+    mkdirSync(join(loras, 'moved'))
+    renameSync(join(loras, 'characters/A.safetensors'), join(loras, 'moved/A.safetensors'))
+    await m.scan([loras])
+    const rows = (await m.list()).filter((r) => r.name === 'A.safetensors')
+    expect(rows).toHaveLength(1)
+    expect([rows[0].id, rows[0].folder, rows[0].missing, rows[0].tags, rows[0].characterId]).toEqual([a.id, 'moved', false, 'moved', 9])
+  })
+
+  it('无法唯一对应时不猜测：两个同名同大小的缺失记录，新文件创建新记录', async () => {
+    const loras = setupLoras()
+    mkdirSync(join(loras, 'dup'))
+    writeFileSync(join(loras, 'dup/A.safetensors'), readFileSync(join(loras, 'characters/A.safetensors')))
+    const m = newManager()
+    await m.scan([loras])
+    rmSync(join(loras, 'dup/A.safetensors'))
+    rmSync(join(loras, 'characters/A.safetensors'))
+    await m.scan([loras])
+    mkdirSync(join(loras, 'new'))
+    writeFileSync(join(loras, 'new/A.safetensors'), safetensors({ ss_output_name: 'A' }))
+    await m.scan([loras])
+    const rows = (await m.list()).filter((r) => r.name === 'A.safetensors')
+    expect(rows).toHaveLength(3)
+    expect(rows.filter((r) => r.missing)).toHaveLength(2)
+  })
+
+  it('根目录无法访问（磁盘离线 / 目录被移走）时标记为离线而不是缺失，恢复后正常', async () => {
+    const loras = setupLoras()
+    const m = newManager()
+    await m.scan([loras])
+    const n = metaCount(m)
+    renameSync(loras, loras + '-offline')
+    const errors = await m.scan([loras])
+    expect(errors).toEqual([expect.stringContaining('无法访问')])
+    const rows = await m.list()
+    expect(rows.every((r) => r.offline && !r.missing)).toBe(true)
+    expect(metaCount(m)).toBe(n)
+    renameSync(loras + '-offline', loras)
+    await m.scan([loras])
+    expect((await m.list()).every((r) => !r.offline && !r.missing)).toBe(true)
+    expect(metaCount(m)).toBe(n)
+  })
+
+  it('子目录读取失败只报告错误，不把其中的文件当作删除', async () => {
+    const loras = setupLoras()
+    const m = newManager()
+    await m.scan([loras])
+    const before = await m.list()
+    // 扫描一个不存在的额外根目录：只产生错误，已有记录状态不变
+    expect(await m.scan([loras, join(loras, '..', 'not-here')])).toHaveLength(1)
+    expect((await m.list()).map((r) => [r.id, r.missing, r.offline])).toEqual(before.map((r) => [r.id, false, false]))
   })
 })

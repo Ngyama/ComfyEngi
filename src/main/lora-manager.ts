@@ -133,8 +133,29 @@ export class LoraManager {
     return join(this.root, 'loras/metadata')
   }
 
+  /**
+   * 计算文件状态，不修改任何记录：
+   * - 文件存在 → 正常
+   * - 文件不存在（ENOENT）且所在根目录可以访问 → missing（已确认缺失）
+   * - 根目录不可访问，或权限 / 设备等其他错误 → offline（暂时无法确认，不当作删除）
+   */
+  private async fileState(r: LoraResource, roots: Map<string, Promise<boolean>>): Promise<{ missing: boolean; offline: boolean }> {
+    try {
+      await stat(r.path)
+      return { missing: false, offline: false }
+    } catch (e) {
+      const code = (e as NodeJS.ErrnoException).code
+      if (code !== 'ENOENT' && code !== 'ENOTDIR') return { missing: false, offline: true }
+      const root = r.root || dirname(r.path)
+      const key = pathKey(root)
+      if (!roots.has(key)) roots.set(key, stat(root).then((s) => s.isDirectory(), () => false))
+      return (await roots.get(key)) ? { missing: true, offline: false } : { missing: false, offline: true }
+    }
+  }
+
   async list(): Promise<LoraResource[]> {
     const rows: LoraResource[] = []
+    const roots = new Map<string, Promise<boolean>>()
     let files: string[] = []
     try {
       files = await readdir(this.metaDir)
@@ -145,7 +166,7 @@ export class LoraManager {
       if (f.endsWith('.json')) {
         const r = { ...DEFAULTS, ...(JSON.parse(await readFile(join(this.metaDir, f), 'utf8')) as LoraResource) }
         if (!r.folder && r.relativePath) r.folder = dirname(r.relativePath) === '.' ? '' : dirname(r.relativePath).replaceAll('\\', '/')
-        r.missing = !(await stat(r.path).catch(() => null))
+        Object.assign(r, await this.fileState(r, roots))
         rows.push(r)
       }
     return rows
@@ -155,7 +176,7 @@ export class LoraManager {
   async get(id: string): Promise<LoraResource | null> {
     if (!ID_RE.test(id)) return null
     try {
-      return { ...DEFAULTS, ...(JSON.parse(await readFile(join(this.metaDir, `${id}.json`), 'utf8')) as LoraResource), missing: false }
+      return { ...DEFAULTS, ...(JSON.parse(await readFile(join(this.metaDir, `${id}.json`), 'utf8')) as LoraResource), missing: false, offline: false }
     } catch {
       return null
     }
@@ -179,8 +200,9 @@ export class LoraManager {
   }
 
   private write(r: LoraResource) {
-    const { missing: _m, ...rest } = r
+    const { missing: _m, offline: _o, ...rest } = r
     void _m
+    void _o
     atomic(join(this.metaDir, r.id + '.json'), JSON.stringify(rest, null, 2))
   }
 
@@ -190,6 +212,17 @@ export class LoraManager {
     const rows = await this.list()
     const byPath = new Map(rows.map((r) => [pathKey(r.path), r]))
     const seen = new Set<string>()
+    // 已确认缺失的旧记录：同名同大小的文件在其他位置重新出现时，沿用原记录（ID、标签、备注、角色关联）
+    const adopted = new Set<string>()
+    const adopt = async (path: string): Promise<LoraResource | undefined> => {
+      const name = path.slice(path.lastIndexOf(sep) + 1).toLowerCase()
+      const s = await stat(path).catch(() => null)
+      if (!s) return undefined
+      const candidates = rows.filter((r) => r.missing && !adopted.has(r.id) && r.name.toLowerCase() === name && r.size === s.size)
+      if (candidates.length !== 1) return undefined // 无法唯一确定时不猜测，创建新记录
+      adopted.add(candidates[0].id)
+      return candidates[0]
+    }
     const errors: string[] = []
     // 嵌套的根目录：文件归属最深的那个根目录
     const rootList = [...new Set(roots.map((r) => resolve(r)))].sort((a, b) => b.length - a.length)
@@ -218,7 +251,7 @@ export class LoraManager {
         if (seen.has(key)) continue
         seen.add(key)
         try {
-          await this.scanFile(path, owner(path) || dir, names, byPath.get(key))
+          await this.scanFile(path, owner(path) || dir, names, byPath.get(key) ?? (await adopt(path)))
         } catch (err) {
           errors.push(`${path}: ${(err as Error).message}`)
         }
@@ -248,7 +281,7 @@ export class LoraManager {
     // 文件头：大小与修改时间都未变时复用缓存
     let metadata = old?.metadata ?? {}
     let metadataError = old?.metadataError ?? ''
-    if (!old || old.size !== s.size || old.mtime !== s.mtimeMs || old.missing) {
+    if (!old || old.size !== s.size || old.mtime !== s.mtimeMs || old.missing || old.offline || pathKey(old.path) !== pathKey(path)) {
       try {
         metadata = await readHeader(path, s.size)
         metadataError = ''
@@ -318,9 +351,10 @@ export class LoraManager {
       sidecarMtime,
       sidecarError,
       missing: false,
+      offline: false,
     }
     // 只在内容变化时写回 Vault，避免每次扫描都改动工作区文件
-    const strip = (r: LoraResource | undefined) => (r ? canonical({ ...r, missing: false }) : '')
+    const strip = (r: LoraResource | undefined) => (r ? canonical({ ...r, missing: false, offline: false }) : '')
     if (strip(old) !== strip(row)) this.write(row)
   }
 
