@@ -1,3 +1,6 @@
+import { existsSync, readFileSync, watch } from 'node:fs'
+import { atomic } from './file-library'
+import { createVault, openVault } from './vault'
 // Electron 主进程入口：窗口、数据目录、数据库、执行器生命周期。
 
 import { appendFileSync, mkdirSync } from 'node:fs'
@@ -12,13 +15,16 @@ import { Store } from './store'
 
 // 数据目录：%APPDATA%\ComfyEngi（与旧版相同，旧数据直接沿用）；可用 COMFYENGI_DATA_DIR 覆盖
 const dataDir = process.env.COMFYENGI_DATA_DIR || join(app.getPath('appData'), 'ComfyEngi')
-const backupDir = join(dataDir, 'backups')
+const recentFile = join(dataDir, 'recent-vault.json')
+let vaultRoot: string | null = process.env.COMFYENGI_VAULT || null
+try { if (!vaultRoot && existsSync(recentFile)) vaultRoot = JSON.parse(readFileSync(recentFile,'utf8')).root } catch { /* welcome */ }
+const backupDir = join(vaultRoot || dataDir, 'data', 'backups')
 mkdirSync(dataDir, { recursive: true })
 // Chromium 缓存等放在子目录，避免与数据库混在一起
 app.setPath('userData', join(dataDir, 'electron'))
 app.setAppUserModelId('ComfyEngi')
 
-const logFile = join(dataDir, 'error.log')
+const logFile = join(vaultRoot || dataDir, vaultRoot ? 'logs/error.log' : 'error.log')
 const logError = (e: unknown) => {
   try {
     appendFileSync(logFile, `\n[${new Date().toISOString()}]\n${e instanceof Error ? e.stack : String(e)}\n`)
@@ -103,17 +109,39 @@ if (!app.requestSingleInstanceLock()) {
 
   app.whenReady().then(() => {
     try {
-      store = new Store(join(dataDir, 'comfyengi.db'), { backupDir })
+      if (vaultRoot && process.env.COMFYENGI_IMPORT_LEGACY && !existsSync(join(vaultRoot,'.comfyengi/vault.json'))) createVault(vaultRoot, process.env.COMFYENGI_IMPORT_LEGACY)
+      store = vaultRoot ? openVault(vaultRoot) : new Store(':memory:')
       store.dailyBackup(backupDir)
-      seedSamples(store)
+      if (vaultRoot) seedSamples(store)
     } catch (e) {
       logError(e)
       dialog.showErrorBox('无法打开数据库', `${(e as Error).message}\n\n数据目录：${dataDir}`)
-      app.quit()
-      return
+      vaultRoot = null
+      store = new Store(':memory:')
     }
     runner = new Runner(store, { onEvent: send })
-    registerIpc({ store, runner, dataDir, backupDir, logs, window: () => win })
+    registerIpc({ store, runner, dataDir: vaultRoot || dataDir, backupDir, logs, window: () => win,
+      chooseVault: async (create,migrate) => {
+        const r=await dialog.showOpenDialog(win!,{title:create?'创建工作区（选择空目录）':'打开工作区',properties:['openDirectory','createDirectory']})
+        if(r.canceled || !r.filePaths[0]) return
+        if(runner.isAlive()) throw new Error('队列仍在执行，请先停止')
+        const root=r.filePaths[0]
+        if(create) createVault(root,migrate ? join(dataDir,'comfyengi.db') : undefined)
+        const check=openVault(root); check.close()
+        atomic(recentFile,JSON.stringify({root})); app.relaunch(); app.quit()
+      }
+    })
+    if (store.files) {
+      let timer: ReturnType<typeof setTimeout>
+      const notify = () => {
+        clearTimeout(timer)
+        timer=setTimeout(()=>{
+          if(store.files?.changed()) send({kind:'log',text:'[Vault] 检测到外部文件变化，请复制未保存草稿后使用设置中的刷新。'})
+        },800)
+      }
+      const watchers=['prompts','workflows'].map(d=>watch(join(vaultRoot!,d),{recursive:true},notify))
+      app.on('will-quit',()=>{clearTimeout(timer);watchers.forEach(w=>w.close())})
+    }
     createWindow()
   })
 

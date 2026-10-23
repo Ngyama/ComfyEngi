@@ -11,6 +11,7 @@ export const TEMPLATE_KINDS: Record<TemplateKind, string> = {
 }
 
 interface Timestamps {
+  _revision?: string
   created_at?: number | null
   updated_at?: number | null
 }
@@ -28,6 +29,7 @@ export interface Template extends Timestamps {
 }
 
 export interface Lora {
+  resource_id?: string
   name: string
   strength: number
 }
@@ -122,6 +124,7 @@ export interface Task extends Timestamps {
 }
 
 export interface Settings {
+  lora_roots: string[]
   comfy_url: string
   comfy_output_dir: string
   compose_order: string[]
@@ -137,6 +140,7 @@ export interface Settings {
 }
 
 export const DEFAULT_SETTINGS: Settings = {
+  lora_roots: [],
   comfy_url: 'http://127.0.0.1:8188',
   comfy_output_dir: '',
   compose_order: ['global', 'character', 'outfit', 'content', 'expression', 'male', 'camera', 'extra'],
@@ -288,3 +292,9 @@ export interface Library {
 
 export type Severity = 'error' | 'warning'
 export type Message = [Severity, string]
+
+export interface LoraResource {
+ id:string; name:string; path:string; relativePath:string; size:number; mtime:number;
+ metadata:Record<string,unknown>; metadataError:string; category:string; tags:string; note:string;
+ characterId:number|null; recommendedWeight:number; comfyName:string; preview:string; missing:boolean
+}

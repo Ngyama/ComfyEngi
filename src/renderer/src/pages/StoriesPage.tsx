@@ -62,7 +62,7 @@ function StoryDetail({ st, onDeleted }: { st: Story; onDeleted: () => void }) {
     { ...st, scenes: st.scenes ?? [], keys: (st.scenes ?? []).map(() => Math.random().toString(36).slice(2)) },
     st.id,
     async (v) => {
-      await call(api['stories.save']({ id: v.id, name: v.name, genre: v.genre.trim(), note: v.note, scenes: v.scenes }))
+      await call(api['stories.save']({ id: v.id, _revision: v._revision, name: v.name, genre: v.genre.trim(), note: v.note, scenes: v.scenes }))
       await reloadLib()
     },
   )

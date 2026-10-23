@@ -5,7 +5,7 @@ import { normalizeTaskData, PlanLibrary } from '@shared/planner'
 import type { Library, RunnerStatus, Task, TaskData, Template, TemplateKind } from '@shared/types'
 import { api } from './api'
 
-export type Page = 'plan' | 'queue' | 'history' | 'library' | 'characters' | 'stories' | 'settings'
+export type Page = 'loras' | 'plan' | 'queue' | 'history' | 'library' | 'characters' | 'stories' | 'settings'
 
 // ---------------------------------------------------------------- 导航
 interface NavState {

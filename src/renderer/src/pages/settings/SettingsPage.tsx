@@ -1,3 +1,4 @@
+import { VaultPanel } from '@/components/VaultPanel'
 // 设置：ComfyUI 连接、工作流映射、Prompt 组合、无人值守运行、数据与备份。
 
 import { useState, type ReactNode } from 'react'
@@ -47,6 +48,7 @@ function ComfySection({ s }: { s: Settings }) {
   const [test, setTest] = useState<{ ok: boolean; text: string } | null>(null)
   return (
     <div className="space-y-4">
+      <VaultPanel />
       <Card title="ComfyUI 地址" description="本地 ComfyUI 的 HTTP 地址；WebSocket 地址会自动推导。">
         <div className="flex gap-2">
           <TextInput value={url} onChange={setUrl} onBlur={() => void setSetting('comfy_url', url.trim().replace(/\/+$/, ''))} mono />

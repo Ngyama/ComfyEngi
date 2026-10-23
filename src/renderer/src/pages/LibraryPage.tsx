@@ -56,7 +56,7 @@ function TemplateCard({ t, selected, onClick, sortable }: { t: Template; selecte
 export function TemplateEditor({ t, kind, onClose, onDeleted }: { t: Template; kind: TemplateKind; onClose: () => void; onDeleted: () => void }) {
   const lib = useLib((s) => s.lib)
   const { draft, patch, flush } = useDraft<Template>(t, t.id, async (v) => {
-    await call(api['templates.save']({ id: v.id, name: v.name, category: v.category, tags: v.tags, positive: v.positive, negative: v.negative, note: v.note }))
+    await call(api['templates.save']({ id: v.id, _revision: v._revision, name: v.name, category: v.category, tags: v.tags, positive: v.positive, negative: v.negative, note: v.note }))
     await reloadLib()
   })
   const cats = useMemo(() => [...new Set([...templatesOf(lib, kind).map((x) => x.category).filter(Boolean), ...(CATEGORY_SUGGEST[kind] ?? [])])].sort(), [lib, kind])

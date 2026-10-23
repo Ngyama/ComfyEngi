@@ -1,3 +1,4 @@
+import { FileLibrary, FILE_TABLES } from './file-library'
 // SQLite 存储（Electron 内置 node:sqlite）。表结构与旧版 Python 程序完全相同，
 // 旧数据库可直接打开；所有 Prompt 文本以原始字符串写入 TEXT 列，读写不做转换。
 
@@ -101,6 +102,7 @@ export interface OpenInfo {
 }
 
 export class Store {
+  files?: FileLibrary
   db: DatabaseSync
   path: string
   openInfo: OpenInfo = { migratedFrom: null, backup: null }
@@ -186,17 +188,23 @@ export class Store {
 
   // ---------- 通用增删改查 ----------
   list<T extends TableName>(table: T, where = '', params: SqlValue[] = [], order = 'sort, id'): RowOf[T][] {
+    if (this.files && FILE_TABLES.includes(table)) {
+      const rows = this.files.list(table)
+      return (where === 'character_id=?' ? rows.filter(r => r.character_id === params[0]) : rows) as unknown as RowOf[T][]
+    }
     const sql = `SELECT * FROM ${table}${where ? ` WHERE ${where}` : ''} ORDER BY ${order}`
     return this.all(sql, ...params).map((r) => this.decode(table, r)!)
   }
 
   get<T extends TableName>(table: T, id: number | null | undefined): RowOf[T] | null {
     if (id == null) return null
+    if (this.files && FILE_TABLES.includes(table)) return (this.files.list(table).find(r => r.id === id) ?? null) as unknown as RowOf[T] | null
     return this.decode(table, this.one(`SELECT * FROM ${table} WHERE id=?`, id))
   }
 
   /** 插入或更新一条记录，返回 id。只写入 rec 中出现的列 */
   save(table: TableName, rec: Row): number {
+    if (this.files && FILE_TABLES.includes(table)) return this.files.save(table, rec)
     const { cols, json } = TABLES[table]
     const values: [string, SqlValue][] = []
     for (const c of cols) {
@@ -225,10 +233,15 @@ export class Store {
   }
 
   remove(table: TableName, id: number) {
+    if (this.files && FILE_TABLES.includes(table)) {
+      if (table === 'characters') for (const o of this.listOutfits(id)) this.files.remove('outfits',o.id)
+      this.files.remove(table,id); return
+    }
     this.run(`DELETE FROM ${table} WHERE id=?`, id)
   }
 
   setOrder(table: TableName, ids: number[]) {
+    if (this.files && FILE_TABLES.includes(table)) { ids.forEach((id,i) => this.save(table,{id,sort:i+1})); return }
     this.tx(() => ids.forEach((id, i) => this.run(`UPDATE ${table} SET sort=? WHERE id=?`, i + 1, id)))
   }
 

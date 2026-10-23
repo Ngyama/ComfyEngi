@@ -36,7 +36,7 @@ const check = (name, ok, detail = '') => {
   console.log(`${ok ? 'PASS' : 'FAIL'}  ${name}${detail ? `  (${detail})` : ''}`)
 }
 
-const env = { ...process.env, COMFYENGI_DATA_DIR: dataDir }
+const env = { ...process.env, COMFYENGI_DATA_DIR: dataDir, COMFYENGI_VAULT: join(dataDir, 'vault'), COMFYENGI_IMPORT_LEGACY: join(dataDir, 'comfyengi.db') }
 const app = exe
   ? await electron.launch({ executablePath: resolve(exe), args: [], env })
   : await electron.launch({ args: [root], cwd: root, env })
@@ -56,7 +56,7 @@ try {
   await setSize(1920, 1040)
   await win.waitForSelector('text=姿态序列', { timeout: 20000 })
   check('旧数据迁移：自动打开旧版任务', await win.locator('text=旧版任务').first().isVisible())
-  check('迁移前已备份', readdirSync(join(dataDir, 'backups')).some((f) => f.includes('before-v1-from-v0')))
+  check('迁移前已备份', readdirSync(join(dataDir, 'vault/data/backups')).some((f) => f.includes('before-v1-from-v0')))
   const cards = win.locator('[aria-roledescription="sortable"]')
   check('旧任务的 2 个姿态以卡片显示', (await cards.count()) === 2, String(await cards.count()))
   await shot('01-plan')
@@ -128,6 +128,8 @@ try {
   }
   await nav('执行队列')
   await win.waitForSelector('text=生成中', { timeout: 10000 })
+  const switchError=await win.evaluate(async()=>{try{await window.api['vault.choose'](false,false);return ''}catch(e){return String(e)}})
+  check('运行期间禁止工作区切换',switchError.includes('停止'))
   await shot('05-queue-running')
   await win.waitForSelector('text=全部完成', { timeout: 120000 })
   await shot('06-queue-done')
@@ -146,6 +148,9 @@ try {
   await shot('08-history-detail')
 
   // 其他页面
+  await nav('LoRA 管理')
+  check('LoRA Manager 正常打开',await win.getByText('LoRA Manager',{exact:true}).isVisible())
+  await shot('09-loras')
   await nav('素材库')
   await win.locator('main .grid > div').first().click()
   await shot('09-library')
@@ -189,6 +194,16 @@ try {
   await app.close().catch(() => {})
   await mock.shutdown()
 }
+const welcomeDir = mkdtempSync(join(tmpdir(), 'comfyengi-welcome-'))
+const welcomeEnv = {...process.env, COMFYENGI_DATA_DIR:welcomeDir, COMFYENGI_VAULT:'', COMFYENGI_IMPORT_LEGACY:''}
+const welcome = exe
+ ? await electron.launch({executablePath:resolve(exe),args:[],env:welcomeEnv})
+ : await electron.launch({args:[root],cwd:root,env:welcomeEnv})
+try {
+ const page=await welcome.firstWindow()
+ await page.getByText('创建新工作区',{exact:true}).waitFor()
+ check('首次启动显示工作区欢迎页',await page.getByText('创建新工作区',{exact:true}).isVisible())
+} finally {await welcome.close()}
 console.log(`\n截图：${shots}\n数据目录：${dataDir}`)
 const failed = results.filter(([ok]) => !ok).length
 console.log(failed ? `${failed} 项失败` : '全部通过')

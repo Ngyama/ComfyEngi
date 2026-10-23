@@ -135,7 +135,7 @@ export function WorkflowEditor({ id, onDeleted }: { id: number; onDeleted: () =>
   const saveMapping = async (m: MappingEntry[]) => {
     setWf({ ...wf, mapping: m })
     setOnline(null)
-    await call(api['workflows.save']({ id: wf.id, mapping: m }))
+    await call(api['workflows.save']({ id: wf.id, _revision: wf._revision, mapping: m }))
     await reloadLib()
   }
   const setEntry = (i: number, p: Partial<MappingEntry>) => {
@@ -168,7 +168,7 @@ export function WorkflowEditor({ id, onDeleted }: { id: number; onDeleted: () =>
           value={wf.name}
           onChange={(e) => setWf({ ...wf, name: e.target.value })}
           onBlur={async () => {
-            await call(api['workflows.save']({ id: wf.id, name: wf.name.trim() || '未命名工作流' }))
+            await call(api['workflows.save']({ id: wf.id, _revision: wf._revision, name: wf.name.trim() || '未命名工作流' }))
             await reloadLib()
           }}
           className="min-w-0 flex-1 rounded-md bg-transparent text-[15px] font-semibold outline-none hover:bg-white/[0.03] focus:bg-white/[0.05]"

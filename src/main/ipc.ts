@@ -1,3 +1,4 @@
+import { LoraManager } from './lora-manager'
 // IPC 处理：只响应白名单方法，并对每个参数做类型校验；Renderer 无法直接访问文件系统或数据库。
 
 import { existsSync } from 'node:fs'
@@ -39,6 +40,7 @@ const INT_COLS = new Set(['sort', 'character_id'])
 function record(table: TableName, v: unknown): Record<string, unknown> {
   const src = plain(v, '记录')
   const out: Record<string, unknown> = {}
+  if (src._revision) out._revision = str(src._revision)
   if (src.id !== undefined && src.id !== null) out.id = int(src.id, 'id')
   for (const c of TABLES[table].cols as readonly string[]) {
     if (!(c in src)) continue
@@ -47,7 +49,7 @@ function record(table: TableName, v: unknown): Record<string, unknown> {
     else if (INT_COLS.has(c)) out[c] = int(val, c)
     else if (c === 'loras') {
       if (!Array.isArray(val)) throw new BadArg('loras 必须是数组')
-      out[c] = val.map((l) => ({ name: str(plain(l).name, 'LoRA 名称'), strength: Number(plain(l).strength ?? 1) }))
+      out[c] = val.map((l) => ({ resource_id: plain(l).resource_id == null ? undefined : str(plain(l).resource_id), name: str(plain(l).name, 'LoRA 名称'), strength: Number(plain(l).strength ?? 1) }))
     } else if (c === 'scenes') {
       if (!Array.isArray(val)) throw new BadArg('scenes 必须是数组')
       out[c] = val.map((x) => {
@@ -69,6 +71,7 @@ function record(table: TableName, v: unknown): Record<string, unknown> {
 }
 
 export interface IpcContext {
+  chooseVault: (create:boolean, migrate:boolean) => Promise<void>
   store: Store
   runner: Runner
   dataDir: string
@@ -131,8 +134,28 @@ const firstOutput = (u: RunUnit | null) => {
 
 export function registerIpc(ctx: IpcContext) {
   const { store, runner } = ctx
+  const loras = () => { if (!store.files) throw new Error('请先打开工作区'); return new LoraManager(store.files.root) }
   const handlers: { [K in ApiMethod]: (...args: unknown[]) => unknown } = {
-    'library.load': () => libraryOf(store),
+    'vault.info': () => ({root:store.files?.root??null,errors:store.files?.errors??[]}),
+    'vault.choose': (create,migrate) => { if(runner.isAlive()) throw new Error('请先安全停止队列，等待当前任务完成'); return ctx.chooseVault(!!create,!!migrate) },
+    'loras.list': () => loras().list(),
+    'loras.save': (r) => loras().save(plain(r) as never),
+    'loras.scan': async () => {
+      const result=await dialog.showOpenDialog(ctx.window()!,{title:'选择 LoRA 目录（可多选，扫描不会移动模型）',properties:['openDirectory','multiSelections']})
+      const roots=result.canceled ? (store.getSetting('lora_roots' as never) as unknown as string[] || []) : result.filePaths
+      store.setSetting('lora_roots',roots); return loras().scan(roots)
+    },
+    'loras.preview': async (id) => {
+      const result=await dialog.showOpenDialog(ctx.window()!,{properties:['openFile'],filters:[{name:'图片',extensions:['png','jpg','jpeg','webp']}]})
+      if(!result.canceled && result.filePaths[0]) await loras().preview(str(id),result.filePaths[0])
+    },
+    'loras.image': async(id) => {
+      const r=(await loras().list()).find(r=>r.id===str(id))
+      if(!r?.preview || !/^loras[\\/]previews[\\/][a-f0-9-]+\.image$/i.test(r.preview)) return null
+      return nativeImage.createFromPath(join(ctx.dataDir,r.preview)).resize({width:400}).toDataURL()
+    },
+    'loras.open': async(id) => { const r=(await loras().list()).find(r=>r.id===str(id)); if(r) shell.showItemInFolder(r.path) },
+    'library.load':  () => { store.files?.scan(); return libraryOf(store) },
     'settings.set': (key, value) => store.setSetting(str(key), settingValue(str(key), value)),
 
     'templates.save': (rec) => ({ id: store.save('templates', record('templates', rec)) }),

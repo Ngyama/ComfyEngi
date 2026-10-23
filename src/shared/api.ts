@@ -1,6 +1,7 @@
 // Renderer ↔ 主进程 的 IPC 契约。Preload 只暴露这里列出的方法，主进程逐个校验参数。
 
 import type {
+  LoraResource,
   Character,
   Library,
   Message,
@@ -24,6 +25,15 @@ export type SaveResult = { id: number }
 export type Plan = PlanResult & { units: PlanUnit[] }
 
 export interface Api {
+  'vault.info'(): {root:string|null; errors:string[]}
+  'vault.choose'(create:boolean, migrate:boolean): void
+  'loras.list'(): LoraResource[]
+  'loras.scan'(): string[]
+  'loras.save'(row:LoraResource): void
+  'loras.preview'(id:string): void
+  'loras.image'(id:string): string|null
+  'loras.open'(id:string): void
+
   'library.load'(): Library
   'settings.set'(key: keyof Settings, value: unknown): void
 
@@ -90,6 +100,7 @@ export type ApiMethod = keyof Api
 
 /** Preload 暴露的方法白名单 */
 export const API_METHODS: ApiMethod[] = [
+  'vault.info', 'vault.choose', 'loras.list', 'loras.scan', 'loras.save', 'loras.preview', 'loras.image', 'loras.open',
   'library.load', 'settings.set',
   'templates.save', 'templates.remove', 'templates.duplicate', 'templates.reorder',
   'characters.save', 'characters.remove', 'characters.duplicate',

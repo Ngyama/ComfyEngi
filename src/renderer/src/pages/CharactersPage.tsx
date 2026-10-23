@@ -1,6 +1,6 @@
 // 角色库：角色资料、LoRA，以及该角色专属的服装模板。
 
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Copy, Plus, Shirt, Trash2, Users, X } from 'lucide-react'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
@@ -14,9 +14,12 @@ import { cn } from '@/lib/utils'
 import type { Character, Lora, Outfit } from '@shared/types'
 
 function LoraEditor({ value, onChange }: { value: Lora[]; onChange: (v: Lora[]) => void }) {
+  const [resources,setResources]=useState<import('@shared/types').LoraResource[]>([])
+  useEffect(()=>{void api['loras.list']().then(setResources).catch(()=>{})},[])
   const set = (i: number, p: Partial<Lora>) => onChange(value.map((l, j) => (j === i ? { ...l, ...p } : l)))
   return (
     <div className="space-y-2">
+      <select className="bg-background p-2 rounded-lg text-xs w-full" value="" onChange={e=>{const r=resources.find(r=>r.id===e.target.value);if(r)onChange([...value,{resource_id:r.id,name:r.comfyName||r.name,strength:r.recommendedWeight}])}}><option value="">从 LoRA Manager 添加资源…</option>{resources.filter(r=>!r.missing).map(r=><option key={r.id} value={r.id}>{r.name}</option>)}</select>
       {value.map((l, i) => (
         <div key={i} className="flex items-center gap-2">
           <span className="w-12 shrink-0 text-[11px] text-muted-foreground">槽位 {i + 1}</span>
@@ -37,7 +40,7 @@ function LoraEditor({ value, onChange }: { value: Lora[]; onChange: (v: Lora[]) 
         <Plus /> 添加 LoRA
       </Button>
       <p className="text-[11px] leading-relaxed text-muted-foreground">
-        在「设置 → 工作流」中把「角色 LoRA 名称 / 强度」映射到 LoRA 节点后才会写入；角色没有某个槽位时，该槽位强度写 0、名称保持原值。若习惯在 Prompt 中写 &lt;lora:…&gt;，直接写进基础 Prompt 即可。
+        在「设置 → 工作流」中把「角色 LoRA 名称 / 强度」映射到 LoRA 节点后才会写入；映射的角色槽位必须全部配置，空槽位会阻止入队。若习惯在 Prompt 中写 &lt;lora:…&gt;，直接写进基础 Prompt 即可。
       </p>
     </div>
   )
@@ -65,7 +68,7 @@ function OutfitCard({ o, selected, onClick }: { o: Outfit; selected: boolean; on
 
 function OutfitEditor({ o, onDeleted }: { o: Outfit; onDeleted: () => void }) {
   const { draft, patch, flush } = useDraft<Outfit>(o, o.id, async (v) => {
-    await call(api['outfits.save']({ id: v.id, name: v.name, positive: v.positive, negative: v.negative, note: v.note }))
+    await call(api['outfits.save']({ id: v.id, _revision: v._revision, name: v.name, positive: v.positive, negative: v.negative, note: v.note }))
     await reloadLib()
   })
   if (!draft) return null
@@ -113,7 +116,7 @@ function CharacterDetail({ c, onDeleted }: { c: Character; onDeleted: () => void
   const [tab, setTab] = useState('profile')
   const [selOutfit, setSelOutfit] = useState<number | null>(null)
   const { draft, patch, flush } = useDraft<Character>(c, c.id, async (v) => {
-    await call(api['characters.save']({ id: v.id, name: v.name, tag: v.tag, positive: v.positive, negative: v.negative, loras: v.loras.filter((l) => l.name.trim()), note: v.note }))
+    await call(api['characters.save']({ id: v.id, _revision: v._revision, name: v.name, tag: v.tag, positive: v.positive, negative: v.negative, loras: v.loras.filter((l) => l.name.trim()), note: v.note }))
     await reloadLib()
   })
   const outfits = (lib?.outfits ?? []).filter((o) => o.character_id === c.id)

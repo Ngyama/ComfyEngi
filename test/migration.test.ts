@@ -56,7 +56,7 @@ describe('旧数据库迁移', () => {
 
   it('设置、执行队列与运行记录原样读取', () => {
     const { store } = openLegacy()
-    expect(store.settings()).toEqual(expected.settings)
+    expect(store.settings()).toEqual({ lora_roots: [], ...expected.settings })
     const runs = store.listRuns(true)
     expect(runs.map((r) => [r.id, r.name, r.status, r.counts])).toEqual(expected.runs.map((r: { id: number; name: string; status: string; counts: unknown }) => [r.id, r.name, r.status, r.counts]))
     expect(store.listUnits(runs[0].id)).toEqual(expected.units)
