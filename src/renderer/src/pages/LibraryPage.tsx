@@ -374,7 +374,7 @@ export default function LibraryPage() {
             )
           }
         />
-        <div className="flex flex-wrap items-center gap-3 px-6 pb-3">
+        <div className="flex flex-wrap items-center gap-3 px-6 pb-2.5">
           <div className="flex rounded-xl bg-tint/[0.04] p-1">
             {TABS.map(([k, label]) => (
               <button
@@ -410,7 +410,7 @@ export default function LibraryPage() {
           )}
           <SearchBox value={q} onChange={setQ} placeholder="搜索名称…" className="ml-auto w-64" />
         </div>
-        <div className="min-h-0 flex-1 overflow-y-auto px-6 pb-6">
+        <div className="min-h-0 flex-1 overflow-y-auto px-6 pt-0.5 pb-6">
           {kind ? <Grid key={kind} kind={kind} sel={sel} onSelect={setSel} q={q} /> : <DuoPanel sel={sel} onSelect={setSel} q={q} />}
         </div>
       </div>
