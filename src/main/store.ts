@@ -257,12 +257,23 @@ export class Store {
     return Number(r.lastInsertRowid)
   }
 
+  /** 主体位的子体位（类似角色的服装：复制、删除主体位时一起处理） */
+  private subpositionsOf(table: TableName, id: number): Template[] {
+    if (table !== 'templates' || (this.get('templates', id) as Template | null)?.kind !== 'position') return []
+    return this.list('templates').filter((t) => t.kind === 'subposition' && t.parent_id === id)
+  }
+
   remove(table: TableName, id: number) {
+    const subs = this.subpositionsOf(table, id)
     if (this.files && FILE_TABLES.includes(table)) {
       if (table === 'characters') for (const o of this.listOutfits(id)) this.files.remove('outfits',o.id)
+      for (const t of subs) this.files.remove('templates', t.id) // 移入工作区回收站 .comfyengi/trash，可找回
       this.files.remove(table,id); return
     }
-    this.run(`DELETE FROM ${table} WHERE id=?`, id)
+    this.tx(() => {
+      for (const t of subs) this.run('DELETE FROM templates WHERE id=?', t.id)
+      this.run(`DELETE FROM ${table} WHERE id=?`, id)
+    })
   }
 
   setOrder(table: TableName, ids: number[]) {
@@ -284,6 +295,12 @@ export class Store {
           void _old
           this.save('outfits', { ...rest, character_id: newId })
         }
+      }
+      for (const t of this.subpositionsOf(table, id)) {
+        const { id: _old, _revision: _rev, ...rest } = t
+        void _old
+        void _rev
+        this.save('templates', { ...rest, parent_id: newId })
       }
       return newId
     })

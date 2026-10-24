@@ -260,8 +260,13 @@ export function expandTask(data: TaskData, lib: PlanLibrary, settings: Settings,
       if (!it.pose_id && !it.position_id) errors.push(`${where}：未选择动作`)
       return
     }
-    const sub = tpl(it.subposition_id)
+    let sub = tpl(it.subposition_id)
     if (it.subposition_id && !sub) errors.push(`${where}：子体位已被删除`)
+    // 子体位始终从属于主体位：不属于所选主体位时报错（不能入队），预览中也不拼入它
+    if (sub && position && sub.parent_id !== position.id) {
+      errors.push(`${where}：子体位「${sub.name}」不属于主体位「${position.name}」`)
+      sub = null
+    }
     const acts = (it.act_ids ?? []).map((x) => tpl(x)).filter((t): t is Template => !!t)
     if (acts.length !== (it.act_ids ?? []).length) errors.push(`${where}：有行为素材已被删除`)
     const label = position ? (sub ? `${position.name} · ${sub.name}` : position.name) : pose!.name

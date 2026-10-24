@@ -3,7 +3,7 @@
 // 旧文件中的分类、标签、适用对象、备注等字段不在界面中显示，保存时也不会写入（原值保留）。
 // 旧版男性描述与镜头不在素材库中显示：数据与任务引用保持不变，镜头在套图任务中选择和新建。
 
-import { useState, type ReactNode } from 'react'
+import { useState } from 'react'
 import { ChevronDown, ChevronRight, Copy, GripVertical, Plus, Shapes, Trash2, X } from 'lucide-react'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
@@ -17,7 +17,7 @@ import { PLACEHOLDER_HELP } from '@shared/prompt'
 import { TEMPLATE_KINDS, type Template, type TemplateKind } from '@shared/types'
 
 type Tab = 'global' | 'scene' | 'action' | 'expression'
-type Sub = 'pose' | 'duo'
+type Sub = 'pose' | 'duo' | 'act'
 const TABS: [Tab, string][] = [
   ['global', '全局'],
   ['scene', '场景'],
@@ -28,15 +28,16 @@ const SUBS: Partial<Record<Tab, [Sub, string][]>> = {
   action: [
     ['pose', '单人动作'],
     ['duo', '双人互动'],
+    ['act', '行为'],
   ],
 }
 const HINTS: Record<TemplateKind, string> = {
   global: '画质、画风等通用 Prompt。每个套图任务选择其中一个。',
   scene: '可复用的环境 Prompt（卧室、教室、街道等）。与剧情库不同：场景只描述环境，在任务中按动作选择。',
   pose: '单人动作（旧版「姿态」模板都在这里）。在套图任务中可以分配给主角色或第二角色。',
-  position: '双人主体位，例如正常位、骑乘位。',
+  position: '双人主体位，例如正常位、骑乘位。每个主体位有一段基础 Prompt，并可以有多个子体位作为补充。',
   subposition: '子体位是主体位的补充 Prompt（例如抬腿），生成时拼在主体位之后，可以只写差异部分。',
-  act: '行为是独立的可复用素材（拥抱、接吻等），可以与任意主体位叠加。',
+  act: '双人互动的行为（拥抱、接吻等）：独立的可复用素材，不属于某个主体位，在任务中可与任意主体位叠加多个。',
   expression: '表情 Prompt。在套图任务中分配给主角色（可多选，平均分配张数）或第二角色。',
   male: '男性描述（兼容素材）：分类为「基础」的可作为任务的男性基础描述；旧版的男性动作 / 表情模板仍可在任务的男性设置中选择。',
   camera: '镜头（兼容素材）：仍可在任务的动作详情中选择，POV 不会自动启用男性出场。',
@@ -52,9 +53,8 @@ const REF_FIELDS: Record<TemplateKind, string[]> = {
   male: ['male_base_id', 'male_ids'],
   camera: ['camera_id'],
 }
-/** 这些类型编辑负面 Prompt 与备注；单人动作 / 表情 / 场景只有名称与正面（旧文件已有负面时仍显示，避免看不见却仍在生效） */
-const WITH_NEGATIVE: TemplateKind[] = ['global', 'position', 'subposition', 'act']
-const WITH_NOTE: TemplateKind[] = ['position', 'subposition', 'act']
+/** 只有全局 Prompt 编辑负面 Prompt；其他素材只有名称与正面（旧文件中的负面仍会使用，如实显示并可清空） */
+const WITH_NEGATIVE: TemplateKind[] = ['global']
 
 function TemplateCard({ t, selected, onClick, sortable }: { t: Template; selected: boolean; onClick: () => void; sortable: boolean }) {
   const s = useSortableItem(String(t.id))
@@ -82,13 +82,12 @@ function TemplateCard({ t, selected, onClick, sortable }: { t: Template; selecte
 export function TemplateEditor({ t, onClose, onDeleted }: { t: Template; onClose: () => void; onDeleted: () => void }) {
   const lib = useLib((s) => s.lib)
   const kind = t.kind
-  const [showNeg] = useState(() => WITH_NEGATIVE.includes(kind) || !!t.negative)
-  const showNote = WITH_NOTE.includes(kind)
+  const showNeg = WITH_NEGATIVE.includes(kind)
   const { draft, patch, flush } = useDraft<Template>(t, t.id, async (v) => {
-    // 只写入界面上可编辑的字段；分类、标签、适用对象等旧字段不发送，文件中的原值保持不变
+    // 只写入界面上可编辑的字段；分类、标签、适用对象、备注等旧字段不发送，文件中的原值保持不变。
+    // 负面 Prompt 只有全局编辑；其他素材只在用户点击「清空」旧负面时发送
     const rec: Record<string, unknown> = { id: v.id, _revision: v._revision, name: v.name, positive: v.positive }
-    if (showNeg) rec.negative = v.negative
-    if (showNote) rec.note = v.note
+    if (showNeg || v.negative !== t.negative) rec.negative = v.negative
     if (kind === 'subposition') rec.parent_id = v.parent_id ?? null
     await call(api['templates.save'](rec as never))
     await reloadLib()
@@ -133,7 +132,7 @@ export function TemplateEditor({ t, onClose, onDeleted }: { t: Template; onClose
               title: `删除「${draft.name}」？`,
               description:
                 (used.length ? `以下套图任务正在使用它：${used.join('、')}\n删除后这些任务会提示引用失效。\n` : '') +
-                (children.length ? `它下面的 ${children.length} 个子体位不会被删除，会显示在「未归属的子体位」中。\n` : '') +
+                (children.length ? `它下面的 ${children.length} 个子体位也会一起删除（移入工作区回收站 .comfyengi/trash）。\n` : '') +
                 '已生成的运行记录不受影响。',
               confirmText: '删除',
               destructive: true,
@@ -169,21 +168,10 @@ export function TemplateEditor({ t, onClose, onDeleted }: { t: Template; onClose
           </div>
         )}
         <PromptField label="正面 Prompt" value={draft.positive} onChange={(v) => patch({ positive: v })} placeholder={`原样保存，不做任何格式转换。可用占位符 ${PLACEHOLDER_HELP}`} minRows={5} copy />
-        {showNeg && (
-          <PromptField
-            label={WITH_NEGATIVE.includes(kind) ? '负面 Prompt' : '负面 Prompt（旧数据，仍会使用，可清空）'}
-            value={draft.negative}
-            onChange={(v) => patch({ negative: v })}
-            placeholder="可留空"
-            minRows={2}
-            copy
-          />
-        )}
-        {showNote && (
-          <div>
-            <FieldLabel>备注</FieldLabel>
-            <TextInput value={draft.note} onChange={(v) => patch({ note: v })} placeholder="可选" />
-          </div>
+        {showNeg ? (
+          <PromptField label="负面 Prompt" value={draft.negative} onChange={(v) => patch({ negative: v })} placeholder="通用负面 Prompt，可留空。新任务的负面 Prompt 统一来自这里" minRows={2} copy />
+        ) : (
+          <LegacyNegative value={draft.negative} onClear={() => patch({ negative: '' })} />
         )}
         {kind === 'pose' && (
           <div className="rounded-xl bg-tint/[0.025] p-3 ring-1 ring-tint/[0.08]">
@@ -234,89 +222,264 @@ function Grid({ kind, sel, onSelect, q }: { kind: TemplateKind; sel: number | nu
   )
 }
 
-function Row({ id, t, selected, depth, onClick, right, toggle }: { id: string; t: Template; selected: boolean; depth: number; onClick: () => void; right?: ReactNode; toggle?: ReactNode }) {
-  const s = useSortableItem(id)
+/** 旧数据中的负面 Prompt：不再提供编辑框，但仍会用于生成，这里如实显示并允许清空（不会自动清空） */
+function LegacyNegative({ value, onClear }: { value: string; onClear: () => void }) {
+  if (!value) return null
   return (
-    <div ref={s.setNodeRef} style={s.style} className={cn('group flex items-center gap-1.5 rounded-lg py-1.5 pr-2 hover:bg-tint/[0.04]', selected && 'bg-tint/[0.08]', s.isDragging && 'shadow-xl shadow-tint/15')} data-testid={`${t.kind}-row`}>
-      <span style={{ width: depth * 18 }} className="shrink-0" />
-      <button type="button" {...s.attributes} {...s.listeners} className="cursor-grab text-muted-foreground/40 hover:text-muted-foreground" aria-label="拖动排序">
-        <GripVertical className="size-3.5" />
+    <div className="flex items-start gap-2 rounded-lg bg-inset px-3 py-2 text-[11.5px] text-muted-foreground" data-testid="legacy-negative">
+      <span className="min-w-0 flex-1 break-all">
+        旧版负面 Prompt（仍会用于生成）：<span className="font-mono text-foreground/80">{value}</span>
+      </span>
+      <button type="button" className="shrink-0 hover:text-destructive" onClick={onClear}>
+        清空
       </button>
-      {toggle ?? <span className="w-4" />}
-      <button type="button" onClick={onClick} className="flex min-w-0 flex-1 items-center gap-2 text-left">
-        <span className={cn('truncate text-[13px]', depth === 0 && 'font-medium')}>{t.name || '（未命名）'}</span>
-        <span className="min-w-0 truncate font-mono text-[11px] text-muted-foreground">{t.positive}</span>
-      </button>
-      {right}
     </div>
   )
 }
 
-/** 双人互动：左侧主体位（含子体位），右侧可复用的行为 */
+/** 名称 + 正面 Prompt 的保存：只发送这两个字段；负面 Prompt 只在用户清空时发送，其他旧字段原样保留 */
+function useTemplateDraft(t: Template) {
+  return useDraft<Template>(t, t.id, async (v) => {
+    const rec: Record<string, unknown> = { id: v.id, _revision: v._revision, name: v.name, positive: v.positive }
+    if (v.negative !== t.negative) rec.negative = v.negative
+    await call(api['templates.save'](rec as never))
+    await reloadLib()
+  })
+}
+
+// ---------------------------------------------------------------- 双人互动：主体位 + 子体位（类似角色与服装）
+
+function PositionRow({ p, subs, selected, onClick }: { p: Template; subs: number; selected: boolean; onClick: () => void }) {
+  const s = useSortableItem(String(p.id))
+  return (
+    <div ref={s.setNodeRef} style={s.style} className={cn('flex items-center gap-1.5 rounded-xl py-2 pr-2 pl-1 hover:bg-tint/[0.04]', selected && 'bg-tint/[0.07]', s.isDragging && 'shadow-xl shadow-tint/15')} data-testid="position-row">
+      <button type="button" {...s.attributes} {...s.listeners} className="cursor-grab text-muted-foreground/40 hover:text-muted-foreground" aria-label="拖动排序">
+        <GripVertical className="size-3.5" />
+      </button>
+      <button type="button" onClick={onClick} className="min-w-0 flex-1 text-left">
+        <div className="truncate text-[13px] font-medium">{p.name || '（未命名）'}</div>
+        <div className="truncate text-[11px] text-muted-foreground">{subs ? `${subs} 个子体位` : '没有子体位'}</div>
+      </button>
+    </div>
+  )
+}
+
+function SubpositionRow({ t, open, onToggle, onDeleted }: { t: Template; open: boolean; onToggle: () => void; onDeleted: () => void }) {
+  const s = useSortableItem(String(t.id))
+  return (
+    <div ref={s.setNodeRef} style={s.style} className={cn('rounded-xl bg-tint/[0.03] ring-1 ring-tint/[0.08]', open && 'bg-tint/[0.045] ring-tint/[0.16]', s.isDragging && 'shadow-2xl shadow-tint/15')} data-testid="subposition-row">
+      <div className="flex items-center gap-2 px-2 py-2">
+        <button type="button" {...s.attributes} {...s.listeners} className="cursor-grab text-muted-foreground/50 hover:text-muted-foreground" aria-label="拖动排序">
+          <GripVertical className="size-4" />
+        </button>
+        <button type="button" onClick={onToggle} className="flex min-w-0 flex-1 items-center gap-2 text-left">
+          {open ? <ChevronDown className="size-4 shrink-0 text-muted-foreground" /> : <ChevronRight className="size-4 shrink-0 text-muted-foreground" />}
+          <span className="shrink-0 text-[13px] font-medium">{t.name || '（未命名）'}</span>
+          {!open && <span className="min-w-0 truncate font-mono text-[11px] text-muted-foreground">{t.positive || '（空）'}</span>}
+        </button>
+      </div>
+      {open && (
+        <div className="px-3 pb-3">
+          <SubpositionEditor t={t} onDeleted={onDeleted} />
+        </div>
+      )}
+    </div>
+  )
+}
+
+function SubpositionEditor({ t, onDeleted }: { t: Template; onDeleted: () => void }) {
+  const { draft, patch, flush } = useTemplateDraft(t)
+  if (!draft) return null
+  return (
+    <div className="space-y-2">
+      <div className="flex items-center gap-2">
+        <TextInput value={draft.name} onChange={(v) => patch({ name: v })} className="font-medium" />
+        <Button
+          variant="ghost"
+          size="icon-sm"
+          aria-label="复制子体位"
+          onClick={async () => {
+            flush()
+            await call(api['templates.duplicate'](t.id))
+            await reloadLib()
+          }}
+        >
+          <Copy />
+        </Button>
+        <Button
+          variant="ghost"
+          size="icon-sm"
+          aria-label="删除子体位"
+          className="hover:text-destructive"
+          onClick={async () => {
+            const used = await api.references('subposition_id', t.id)
+            if (!(await confirm({ title: `删除子体位「${draft.name}」？`, description: used.length ? `以下套图任务正在使用它：${used.join('、')}\n删除后这些任务会提示引用失效。` : undefined, confirmText: '删除', destructive: true }))) return
+            await call(api['templates.remove'](t.id))
+            await reloadLib()
+            onDeleted()
+          }}
+        >
+          <Trash2 />
+        </Button>
+      </div>
+      <PromptField value={draft.positive} onChange={(v) => patch({ positive: v })} placeholder="补充 Prompt：拼在主体位基础 Prompt 之后（原样保存），可以只写差异部分" minRows={2} />
+      <LegacyNegative value={draft.negative} onClear={() => patch({ negative: '' })} />
+    </div>
+  )
+}
+
+function PositionDetail({ p, onDeleted }: { p: Template; onDeleted: () => void }) {
+  const lib = useLib((s) => s.lib)
+  const subs = templatesOf(lib, 'subposition').filter((s) => s.parent_id === p.id)
+  const [open, setOpen] = useState<number | null>(null)
+  const { draft, patch, flush } = useTemplateDraft(p)
+  if (!draft) return null
+  return (
+    <div className="max-w-3xl space-y-6" data-testid="position-detail">
+      <div className="flex items-center gap-3">
+        <div className="min-w-0 flex-1">
+          <div className="truncate text-[16px] font-semibold">{draft.name || '（未命名）'}</div>
+          <div className="text-xs text-muted-foreground">主体位 · {subs.length} 个子体位</div>
+        </div>
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={async () => {
+            flush()
+            const r = await call(api['templates.duplicate'](p.id))
+            if (r) {
+              await reloadLib()
+              toast.success('已复制主体位（含子体位）')
+            }
+          }}
+        >
+          <Copy /> 复制
+        </Button>
+        <Button
+          variant="ghost"
+          size="sm"
+          className="hover:text-destructive"
+          onClick={async () => {
+            const used = [...new Set([...(await api.references('position_id', p.id)), ...(await Promise.all(subs.map((s) => api.references('subposition_id', s.id)))).flat()])]
+            const ok = await confirm({
+              title: `删除主体位「${draft.name}」${subs.length ? `及其 ${subs.length} 个子体位` : ''}？`,
+              description: (used.length ? `以下套图任务正在使用它们：${used.join('、')}\n删除后这些任务会提示引用失效。\n` : '') + '文件会移入工作区的回收站（.comfyengi/trash），已生成的运行记录不受影响。',
+              confirmText: '删除',
+              destructive: true,
+            })
+            if (!ok) return
+            await call(api['templates.remove'](p.id))
+            await reloadLib()
+            onDeleted()
+          }}
+        >
+          <Trash2 /> 删除
+        </Button>
+      </div>
+      <div>
+        <FieldLabel>名称</FieldLabel>
+        <TextInput value={draft.name} onChange={(v) => patch({ name: v })} />
+      </div>
+      <div className="space-y-2">
+        <PromptField label="基础 Prompt" value={draft.positive} onChange={(v) => patch({ positive: v })} placeholder={`主体位的基础 Prompt（原样保存）。可用占位符 ${PLACEHOLDER_HELP}`} minRows={3} copy />
+        <LegacyNegative value={draft.negative} onClear={() => patch({ negative: '' })} />
+      </div>
+      <section>
+        <FieldLabel
+          hint="补充在基础 Prompt 之后；生成时可以只选主体位。拖动调整顺序，点击展开编辑"
+          right={
+            <Button
+              size="xs"
+              variant="ghost"
+              onClick={async () => {
+                const r = await call(api['templates.save']({ kind: 'subposition', name: `子体位${subs.length + 1}`, parent_id: p.id } as never))
+                if (r) {
+                  await reloadLib()
+                  setOpen(r.id)
+                }
+              }}
+            >
+              <Plus /> 新建子体位
+            </Button>
+          }
+        >
+          {`子体位${subs.length ? ` · ${subs.length}` : ''}`}
+        </FieldLabel>
+        <div className="space-y-1.5">
+          <SortableArea
+            items={subs}
+            getId={(t) => String(t.id)}
+            onReorder={async (_f, _t, next) => {
+              await call(api['templates.reorder'](next.map((t) => t.id)))
+              await reloadLib()
+            }}
+          >
+            {subs.map((t) => (
+              <SubpositionRow key={t.id} t={t} open={open === t.id} onToggle={() => setOpen(open === t.id ? null : t.id)} onDeleted={() => setOpen(null)} />
+            ))}
+          </SortableArea>
+          {!subs.length && <div className="rounded-xl border border-dashed border-tint/[0.16] px-4 py-5 text-center text-xs text-muted-foreground">还没有子体位。子体位是这个主体位的补充 Prompt（例如抬腿），只属于这个主体位。</div>}
+        </div>
+      </section>
+    </div>
+  )
+}
+
+/** 双人互动：左侧主体位列表，右侧主体位详情（基础 Prompt 与子体位）。行为在「行为」中独立管理 */
 function DuoPanel({ sel, onSelect, q }: { sel: number | null; onSelect: (id: number | null) => void; q: string }) {
   const lib = useLib((s) => s.lib)
-  const [open, setOpen] = useState<Set<number>>(new Set())
   const positions = templatesOf(lib, 'position')
   const subs = templatesOf(lib, 'subposition')
-  const ok = (t: Template) => matchesName(t, q)
-  const childrenOf = (pid: number) => subs.filter((s) => s.parent_id === pid)
+  const [pid, setPid] = useState<number | null>(null)
   const orphans = subs.filter((s) => !positions.some((p) => p.id === s.parent_id))
-  const shown = positions.filter((p) => ok(p) || childrenOf(p.id).some(ok))
-  const create = async (kind: TemplateKind, extra: Record<string, unknown> = {}) => {
-    const r = await call(api['templates.save']({ kind, name: `新${TEMPLATE_KINDS[kind]}`, ...extra } as never))
+  const shown = positions.filter((p) => matchesName(p, q) || subs.some((s) => s.parent_id === p.id && matchesName(s, q)))
+  const cur = positions.find((p) => p.id === pid) ?? shown[0] ?? null
+  const create = async () => {
+    const r = await call(api['templates.save']({ kind: 'position', name: '新主体位' }))
     if (!r) return
     await reloadLib()
-    onSelect(r.id)
-  }
-  const reorder = async (next: Template[]) => {
-    await call(api['templates.reorder'](next.map((t) => t.id)))
-    await reloadLib()
+    onSelect(null)
+    setPid(r.id)
   }
   return (
-    <div className="grid min-h-0 grid-cols-[minmax(0,1fr)_minmax(0,1.2fr)] gap-6">
-      <section>
-        <FieldLabel hint={HINTS.position} right={<Button size="xs" variant="ghost" onClick={() => void create('position')}><Plus /> 新建主体位</Button>}>
-          主体位 · 子体位
+    <div className="flex gap-6">
+      <section className="w-[240px] shrink-0">
+        <FieldLabel
+          right={
+            <Button size="xs" variant="ghost" onClick={() => void create()}>
+              <Plus /> 新建主体位
+            </Button>
+          }
+        >
+          主体位
         </FieldLabel>
         <div className="space-y-0.5">
-          <SortableArea items={shown} getId={(t) => `p${t.id}`} disabled={!!q} onReorder={(_f, _t, next) => void reorder(next)}>
-            {shown.map((p) => {
-              const kids = childrenOf(p.id).filter((c) => ok(c) || ok(p))
-              const isOpen = open.has(p.id) || !!q
-              return (
-                <div key={p.id}>
-                  <Row
-                    id={`p${p.id}`}
-                    t={p}
-                    depth={0}
-                    selected={sel === p.id}
-                    onClick={() => onSelect(p.id)}
-                    toggle={
-                      <button type="button" className={cn('grid size-4 place-items-center text-muted-foreground', !kids.length && 'invisible')} onClick={() => setOpen((s) => (s.has(p.id) ? new Set([...s].filter((x) => x !== p.id)) : new Set([...s, p.id])))} aria-label="展开子体位">
-                        {isOpen ? <ChevronDown className="size-3.5" /> : <ChevronRight className="size-3.5" />}
-                      </button>
-                    }
-                    right={
-                      <button type="button" className="hidden shrink-0 text-[11px] text-muted-foreground group-hover:block hover:text-primary" onClick={() => { setOpen((s) => new Set([...s, p.id])); void create('subposition', { parent_id: p.id }) }}>
-                        + 子体位
-                      </button>
-                    }
-                  />
-                  {isOpen && kids.length > 0 && (
-                    <SortableArea items={kids} getId={(t) => `s${t.id}`} disabled={!!q} onReorder={(_f, _t, next) => void reorder(next)}>
-                      {kids.map((c) => (
-                        <Row key={c.id} id={`s${c.id}`} t={c} depth={1} selected={sel === c.id} onClick={() => onSelect(c.id)} />
-                      ))}
-                    </SortableArea>
-                  )}
-                </div>
-              )
-            })}
+          <SortableArea
+            items={shown}
+            getId={(t) => String(t.id)}
+            disabled={!!q}
+            onReorder={async (_f, _t, next) => {
+              await call(api['templates.reorder'](next.map((t) => t.id)))
+              await reloadLib()
+            }}
+          >
+            {shown.map((p) => (
+              <PositionRow
+                key={p.id}
+                p={p}
+                subs={subs.filter((s) => s.parent_id === p.id).length}
+                selected={!sel && cur?.id === p.id}
+                onClick={() => {
+                  onSelect(null)
+                  setPid(p.id)
+                }}
+              />
+            ))}
           </SortableArea>
           {!positions.length && <div className="rounded-xl border border-dashed border-tint/[0.16] p-4 text-center text-xs text-muted-foreground">还没有主体位</div>}
           {orphans.length > 0 && (
             <div className="pt-3">
-              <div className="px-2 pb-1 text-[11px] text-warning">未归属的子体位（所属主体位已删除，可在编辑中重新指定）</div>
+              <div className="px-2 pb-1 text-[11px] text-warning">未归属的子体位（旧版本中主体位已被删除），点击后重新指定所属主体位</div>
               {orphans.map((c) => (
                 <button key={c.id} type="button" onClick={() => onSelect(c.id)} className={cn('block w-full truncate rounded-lg px-3 py-1.5 text-left text-[13px] hover:bg-tint/[0.04]', sel === c.id && 'bg-tint/[0.08]')}>
                   {c.name}
@@ -326,12 +489,13 @@ function DuoPanel({ sel, onSelect, q }: { sel: number | null; onSelect: (id: num
           )}
         </div>
       </section>
-      <section>
-        <FieldLabel hint={HINTS.act} right={<Button size="xs" variant="ghost" onClick={() => void create('act')}><Plus /> 新建行为</Button>}>
-          行为
-        </FieldLabel>
-        <Grid kind="act" sel={sel} onSelect={onSelect} q={q} />
-      </section>
+      <div className="min-w-0 flex-1">
+        {cur ? (
+          <PositionDetail key={cur.id} p={cur} onDeleted={() => setPid(null)} />
+        ) : (
+          <EmptyState icon={<Shapes />} title={q ? '没有匹配的主体位' : '还没有主体位'} description={HINTS.position} />
+        )}
+      </div>
     </div>
   )
 }
@@ -343,7 +507,7 @@ export default function LibraryPage() {
   const [q, setQ] = useState('')
   const [sel, setSel] = useState<number | null>(null)
   const curSub = SUBS[tab] ? sub[tab] : null
-  const kind: TemplateKind | null = tab === 'action' ? (curSub === 'duo' ? null : 'pose') : tab
+  const kind: TemplateKind | null = tab === 'action' ? (curSub === 'duo' ? null : curSub === 'act' ? 'act' : 'pose') : tab
   const cur = sel ? lib?.templates.find((t) => t.id === sel) : undefined
   const count = (k: TemplateKind) => templatesOf(lib, k).length
   const tabCount: Record<Tab, number> = {
@@ -365,7 +529,7 @@ export default function LibraryPage() {
       <div className="flex min-w-0 flex-1 flex-col">
         <PageHeader
           title="素材库"
-          description={kind ? HINTS[kind] : '双人互动由主体位（可带子体位）与可叠加的行为组成。'}
+          description={kind ? HINTS[kind] : '双人互动 = 主体位基础 Prompt + 可选的子体位补充 Prompt + 可叠加的行为（在「行为」中独立管理）。'}
           actions={
             kind && (
               <Button size="sm" onClick={add}>

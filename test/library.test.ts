@@ -190,3 +190,77 @@ describe('Prompt 组合', () => {
     void newTaskData
   })
 })
+
+describe('主体位与子体位（类似角色与服装）', () => {
+  it('只选主体位、加子体位、叠加多个行为：按 主体位 → 子体位 → 行为 原样拼接，预览与写入节点的值一致', () => {
+    const s = newStore()
+    const f = fixtures(s)
+    const wf = s.save('workflows', { name: 'wf', api_json: SAMPLE_WORKFLOW, mapping: SAMPLE_MAPPING })
+    const items = [
+      { ...newInteractionItem(f.missionary), count: 1 },
+      { ...newInteractionItem(f.missionary, f.legsUp), count: 1 },
+      { ...newInteractionItem(f.missionary, f.legsUp), act_ids: [f.kiss, f.hug], count: 1 },
+    ]
+    const tid = s.save('tasks', { name: 't', data: f.lib.task(items, { workflow_id: wf }) })
+    const p = planForTask(s, s.get('tasks', tid)!)
+    expect(p.errors).toEqual([])
+    expect(p.units.map((u) => u.modules.interaction[0])).toEqual(['missionary, (on back:1.2)', 'missionary, (on back:1.2), legs up', 'missionary, (on back:1.2), legs up, kiss, hug, {embrace|cuddle}'])
+    expect(p.units.map((u) => u.item_label)).toEqual(['正常位', '正常位 · 抬腿', '正常位 · 抬腿'])
+    for (const u of p.units) expect(u.inputs!.find((x) => x.source === 'positive')!.value).toBe(u.positive)
+  })
+
+  it('子体位不属于所选主体位时提示错误，不生成错误的组合', () => {
+    const s = newStore()
+    const f = fixtures(s)
+    const r = expandTask(f.lib.task([{ ...newInteractionItem(f.cowgirl, f.legsUp), count: 1 }]), loadPlanLibrary(s), s.settings())
+    expect(r.errors[0]).toContain('子体位「抬腿」不属于主体位「骑乘位」')
+    expect(r.units[0].positive).not.toContain('legs up')
+    f.lib.addWorkflow()
+    const t = f.lib.makeTask([{ ...newInteractionItem(f.cowgirl, f.legsUp), count: 1 }])
+    expect(enqueueTask(s, t).runId).toBeNull()
+  })
+
+  it('重命名、修改 Prompt 不破坏任务引用；复制主体位会一起复制子体位', () => {
+    const s = newStore()
+    const f = fixtures(s)
+    const data = f.lib.task([{ ...newInteractionItem(f.missionary, f.legsUp), count: 1 }])
+    s.save('templates', { id: f.missionary, name: '传教士位', positive: 'missionary' })
+    s.save('templates', { id: f.legsUp, name: '双腿抬起', positive: 'legs up, spread legs' })
+    const u = expandTask(data, loadPlanLibrary(s), s.settings()).units[0]
+    expect(u.item_label).toBe('传教士位 · 双腿抬起')
+    expect(u.modules.interaction[0]).toBe('missionary, legs up, spread legs')
+    const copy = s.duplicate('templates', f.missionary)!
+    const kids = s.list('templates').filter((t) => t.kind === 'subposition' && t.parent_id === copy)
+    expect(kids.map((k) => [k.name, k.positive])).toEqual([['双腿抬起', 'legs up, spread legs']])
+    expect(s.list('templates').filter((t) => t.kind === 'subposition' && t.parent_id === f.missionary).length).toBe(1)
+  })
+
+  it('删除主体位时子体位一起移入工作区回收站（不是直接删除），引用它们的任务给出提示', () => {
+    const root = tempDir()
+    createVault(root)
+    const s = openVault(root)
+    const pos = s.save('templates', { kind: 'position', name: '正常位', positive: 'missionary' })
+    const sub = s.save('templates', { kind: 'subposition', name: '抬腿', positive: 'legs up', parent_id: pos })
+    const other = s.save('templates', { kind: 'subposition', name: '其他', positive: 'x', parent_id: 999999 })
+    s.remove('templates', pos)
+    expect(s.get('templates', sub)).toBeNull()
+    expect(s.get('templates', other)).not.toBeNull()
+    const trash = readdirSync(join(root, '.comfyengi', 'trash'))
+    expect(trash.length).toBe(2)
+    expect(trash.map((f) => readFileSync(join(root, '.comfyengi', 'trash', f), 'utf8')).some((t) => t.includes('legs up'))).toBe(true)
+    const r = expandTask({ ...newTaskData(), items: [{ ...newInteractionItem(pos, sub), count: 1 }] }, loadPlanLibrary(s), s.settings())
+    expect(r.errors.some((e) => e.includes('主体位已被删除'))).toBe(true)
+    s.close()
+  })
+
+  it('只保存名称与正面 Prompt 时保留旧负面 Prompt；旧负面仍参与生成，新素材的负面只来自全局', () => {
+    const s = newStore()
+    const f = fixtures(s)
+    const old = s.save('templates', { kind: 'position', name: '旧体位', positive: 'old_pos', negative: 'OLD_NEG' })
+    s.save('templates', { id: old, name: '旧体位改名', positive: 'old_pos2' })
+    expect(s.get('templates', old)).toMatchObject({ name: '旧体位改名', positive: 'old_pos2', negative: 'OLD_NEG' })
+    const neg = (pid: number) => expandTask(f.lib.task([{ ...newInteractionItem(pid), count: 1 }]), loadPlanLibrary(s), s.settings()).units[0].negative
+    expect(neg(old)).toBe('lowres, bad anatomy, OLD_NEG')
+    expect(neg(f.missionary)).toBe('lowres, bad anatomy')
+  })
+})
