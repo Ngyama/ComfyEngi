@@ -452,17 +452,18 @@ function ImportTriggersDialog({ resource, base, onClose, onConfirm }: { resource
   const valid = outfits.filter((o) => o.name.trim() && o.positive.trim())
   return (
     <Dialog open onOpenChange={(o) => !o && onClose()}>
-      <DialogContent className="sm:max-w-2xl">
-        <DialogHeader>
+      {/* 高度不超过窗口（上下各留 1rem）；标题与按钮固定，中间内容独立滚动 */}
+      <DialogContent className="flex max-h-[calc(100dvh-2rem)] flex-col sm:max-w-2xl" data-testid="import-dialog">
+        <DialogHeader className="shrink-0">
           <DialogTitle>导入触发词</DialogTitle>
           <DialogDescription>来自「{loraTitle(resource)}」的 metadata。确认前可以编辑；不会修改 LoRA 的 metadata.json。</DialogDescription>
         </DialogHeader>
-        <div className="space-y-4">
+        <div className="-mx-1 min-h-0 min-w-0 flex-1 space-y-4 overflow-y-auto overscroll-contain px-1 py-0.5" data-testid="import-body">
           <div>
             <FieldLabel hint="点击插入到下方选中的位置">触发词</FieldLabel>
             <div className="flex flex-wrap gap-1.5">
               {words.map((w) => (
-                <button key={w} type="button" onClick={() => add(w)} className={cn('rounded-full px-2.5 py-1 font-mono text-[11.5px] ring-1', existing.has(w.trim().toLowerCase()) ? 'bg-tint/[0.03] text-muted-foreground ring-tint/[0.096]' : 'bg-primary/10 text-primary ring-primary/25 hover:bg-primary/20')} title={existing.has(w.trim().toLowerCase()) ? '已在基础 Prompt 中' : '点击插入'}>
+                <button key={w} type="button" onClick={() => add(w)} className={cn('max-w-full rounded-full px-2.5 py-1 text-left font-mono text-[11.5px] break-all ring-1', existing.has(w.trim().toLowerCase()) ? 'bg-tint/[0.03] text-muted-foreground ring-tint/[0.096]' : 'bg-primary/10 text-primary ring-primary/25 hover:bg-primary/20')} title={existing.has(w.trim().toLowerCase()) ? '已在基础 Prompt 中' : '点击插入'}>
                   {w}
                 </button>
               ))}
@@ -471,7 +472,7 @@ function ImportTriggersDialog({ resource, base, onClose, onConfirm }: { resource
           <div className={cn('rounded-xl p-3 ring-1', target < 0 ? 'ring-primary/50' : 'ring-tint/[0.096]')} onClick={() => setTarget(-1)}>
             <FieldLabel hint="加在基础 Prompt 开头，已存在的标签不会重复">加入基础 Prompt</FieldLabel>
             <PromptField value={text} onChange={setText} minRows={2} placeholder="（不加入基础 Prompt）" />
-            {result.skipped.length > 0 && <div className="mt-1 text-[11px] text-muted-foreground">已存在、将跳过：{result.skipped.join(', ')}</div>}
+            {result.skipped.length > 0 && <div className="mt-1 text-[11px] break-all text-muted-foreground">已存在、将跳过：{result.skipped.join(', ')}</div>}
           </div>
           {outfits.map((o, i) => (
             <div key={i} className={cn('space-y-2 rounded-xl p-3 ring-1', target === i ? 'ring-primary/50' : 'ring-tint/[0.096]')} onClick={() => setTarget(i)}>
@@ -490,11 +491,11 @@ function ImportTriggersDialog({ resource, base, onClose, onConfirm }: { resource
           </Button>
           <div className="rounded-xl bg-inset p-3">
             <FieldLabel>导入后的基础 Prompt</FieldLabel>
-            <pre className="font-mono text-[12px] whitespace-pre-wrap text-foreground/85" data-testid="import-preview">{result.text || '（空）'}</pre>
-            {valid.length > 0 && <div className="mt-2 text-[11px] text-muted-foreground">将新建服装：{valid.map((o) => o.name).join('、')}（不会修改已有服装）</div>}
+            <pre className="font-mono text-[12px] whitespace-pre-wrap text-foreground/85 [overflow-wrap:anywhere]" data-testid="import-preview">{result.text || '（空）'}</pre>
+            {valid.length > 0 && <div className="mt-2 text-[11px] break-all text-muted-foreground">将新建服装：{valid.map((o) => o.name).join('、')}（不会修改已有服装）</div>}
           </div>
         </div>
-        <DialogFooter>
+        <DialogFooter className="shrink-0">
           <Button variant="ghost" onClick={onClose}>
             取消
           </Button>
