@@ -121,7 +121,9 @@ export default function App() {
             <div className="flex-1" />
             <RunnerMini />
           </nav>
-          <main className="min-w-0 flex-1 pr-2 pb-2">
+          {/* pt-0.5：面板的描边是外侧 1px 阴影；系统窗口按钮（titleBarOverlay，高 40px）是覆盖在网页上的原生层，
+              面板紧贴 40px 时右上角那段描边会被按钮遮住 */}
+          <main className="min-w-0 flex-1 pt-0.5 pr-2 pb-2">
             <div className="relative h-full overflow-hidden rounded-2xl bg-background shadow-[var(--panel-shadow)]">
               {ready && <Current />}
             </div>

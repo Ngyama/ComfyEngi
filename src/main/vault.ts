@@ -56,6 +56,8 @@ export function openVault(root:string) {
   const config = JSON.parse(readFileSync(join(root,'.comfyengi','vault.json'),'utf8'))
   if (config.version !== 1) throw new Error('不支持的工作区版本')
   const library = new FileLibrary(root)
+  // 旧版「数字 ID-UUID.md」文件名迁移为可读名称（只改文件名，失败时保留原名，记录在 .comfyengi/rename-log.jsonl）
+  library.migrateNames()
   const store = new Store(join(root,'data','comfyengi.db'),{backupDir:join(root,'data','backups')})
   store.files=library; return store
 }

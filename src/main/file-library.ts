@@ -1,8 +1,21 @@
 import { createHash, randomUUID } from 'node:crypto'
-import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, writeFileSync } from 'node:fs'
-import { join } from 'node:path'
+import { appendFileSync, existsSync, linkSync, mkdirSync, readFileSync, readdirSync, renameSync, unlinkSync, writeFileSync } from 'node:fs'
+import { basename, dirname, join } from 'node:path'
 export const FILE_TABLES = ['templates', 'characters', 'outfits', 'stories', 'workflows']
 type Row = Record<string, any>
+
+// Markdown 文件名与显示名称一致（稳定 ID 保存在文件内部，文件名只是可读标签）
+const ILLEGAL = /[<>:"/\\|?*\u0000-\u001f]/g
+const RESERVED = /^(con|prn|aux|nul|com[1-9]|lpt[1-9])$/i
+/** 旧版文件名：数字 ID + 随机 UUID */
+export const LEGACY_NAME = /^\d+-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.md$/i
+export function safeFileName(name: string): string {
+  let s = String(name ?? '').normalize('NFC').replace(ILLEGAL, '_').replace(/\s+/g, ' ').trim()
+  s = [...s].slice(0, 80).join('').replace(/[. ]+$/, '').trim()
+  if (!s) s = '未命名'
+  if (RESERVED.test(s.split('.')[0])) s += '_'
+  return s
+}
 export function atomic(file: string, value: string) {
   const tmp = file + '.' + randomUUID() + '.tmp'
   writeFileSync(tmp, value, { flag: 'wx' }); renameSync(tmp, file)
@@ -32,7 +45,82 @@ export class FileLibrary {
   entries = new Map<string, { path: string; row: Row; revision: string }>()
   private revisions = new Map<string, Set<string>>()
   errors: string[] = []
+  /** 非致命提示（例如重命名失败、已保留原文件名） */
+  notices: string[] = []
   constructor(public root: string) { this.scan() }
+
+  /** 期望的文件名（不含扩展名与重名序号）。服装带上所属角色名，避免各角色的同名服装难以区分 */
+  private baseName(row: Row): string {
+    if (row.type === 'outfits') return safeFileName(`${this.entries.get(`characters:${row.character_id}`)?.row.name || '未命名'} - ${row.name || '未命名'}`)
+    return safeFileName(row.name)
+  }
+  private fits(path: string, base: string): boolean {
+    const b = basename(path).replace(/\.md$/, '').normalize('NFC')
+    return b === base || (b.startsWith(base) && /^ \(\d+\)$/.test(b.slice(base.length)))
+  }
+  /** 同目录下未被占用的文件名：大小写不敏感比较（Windows），重名时追加 (2)、(3)… */
+  private freePath(dir: string, base: string, self?: string): string {
+    const taken = new Set(readdirSync(dir).map((f) => f.normalize('NFC').toLowerCase()))
+    const own = self ? basename(self).normalize('NFC').toLowerCase() : null
+    for (let n = 1; ; n++) {
+      const name = `${base}${n > 1 ? ` (${n})` : ''}.md`
+      if (!taken.has(name.toLowerCase()) || name.toLowerCase() === own) return join(dir, name)
+    }
+  }
+  /**
+   * 把条目的文件改名为 target，绝不覆盖其他文件：优先用硬链接（目标存在时直接失败）再删除旧名；
+   * 文件被外部修改过、目标已存在或任何一步失败时保留原文件名，内容不受影响。
+   */
+  private move(key: string, target: string): boolean {
+    const e = this.entries.get(key)
+    if (!e || e.path === target) return true
+    const from = e.path
+    try {
+      if (hash(readFileSync(from, 'utf8')) !== e.revision) throw new Error('文件已被外部修改')
+      if (from.toLowerCase() === target.toLowerCase()) {
+        // 只改大小写：经临时名两步改名，第二步失败时改回
+        const tmp = `${from}.${randomUUID()}.renaming`
+        renameSync(from, tmp)
+        try { renameSync(tmp, target) } catch (err) { renameSync(tmp, from); throw err }
+      } else {
+        let linked = false
+        try { linkSync(from, target); linked = true } catch (err) {
+          if ((err as NodeJS.ErrnoException).code === 'EEXIST') throw new Error('目标文件已存在')
+        }
+        if (linked) {
+          try { unlinkSync(from) } catch (err) { unlinkSync(target); throw err }
+        } else {
+          // 文件系统不支持硬链接（如 exFAT）：先确认目标不存在再改名
+          if (existsSync(target)) throw new Error('目标文件已存在')
+          renameSync(from, target)
+        }
+      }
+      e.path = target
+      try {
+        mkdirSync(join(this.root, '.comfyengi'), { recursive: true })
+        appendFileSync(join(this.root, '.comfyengi', 'rename-log.jsonl'), JSON.stringify({ time: new Date().toISOString(), key, from, to: target }) + '\n')
+      } catch { /* 日志写入失败不影响改名 */ }
+      return true
+    } catch (err) {
+      this.notices.push(`未能把 ${from} 重命名为 ${basename(target)}，已保留原文件名：${(err as Error).message}`)
+      return false
+    }
+  }
+  /** 让 Markdown 文件名与名称一致（名称未变化时不动） */
+  private syncName(key: string): boolean {
+    const e = this.entries.get(key)
+    if (!e || !e.path.endsWith('.md')) return true
+    const base = this.baseName(e.row)
+    if (this.fits(e.path, base)) return true
+    return this.move(key, this.freePath(dirname(e.path), base, e.path))
+  }
+  /** 迁移旧版「数字 ID-UUID.md」文件名：只改文件名，内容、稳定 ID 与引用关系不变。返回改名数量 */
+  migrateNames(): number {
+    let n = 0
+    const keys = [...this.entries.entries()].filter(([, e]) => LEGACY_NAME.test(basename(e.path))).sort(([a], [b]) => Number(b.startsWith('characters')) - Number(a.startsWith('characters'))).map(([k]) => k)
+    for (const key of keys) if (this.syncName(key)) n++
+    return n
+  }
   changed() {
     try {
       const paths=[...files(join(this.root,'prompts')),...files(join(this.root,'workflows'))].filter(p=>/\.(md|json)$/.test(p))
@@ -74,12 +162,17 @@ export class FileLibrary {
     if (table === 'outfits' && !this.entries.has(`characters:${row.character_id}`)) throw new Error('服装角色不存在')
     const dir = table === 'templates' ? `prompts/${({pose:'poses',expression:'expressions',camera:'cameras',male:'male',global:'global',scene:'scenes',position:'positions',subposition:'positions',act:'acts'} as Row)[row.kind] || 'global'}` : table === 'workflows' ? 'workflows' : `prompts/${table}`
     mkdirSync(join(this.root,dir),{recursive:true})
-    const path = old?.path || join(this.root,dir,`${id}-${randomUUID()}.${table==='workflows'?'json':'md'}`)
+    const path = old?.path || (table === 'workflows' ? join(this.root,dir,`${id}-${randomUUID()}.json`) : this.freePath(join(this.root,dir), this.baseName(row)))
     if (!old && existsSync(path)) throw new Error('目标文件已存在')
     const text = table === 'workflows' ? JSON.stringify(row,null,2) : encode(row)
     const key = `${table}:${id}`
     if (old) { const revs=this.revisions.get(key)??new Set<string>(); revs.add(old.revision); this.revisions.set(key,revs) }
     atomic(path,text); this.entries.set(`${table}:${id}`,{path,row,revision:hash(text)})
+    // 先保存内容，再按名称改文件名；改名失败只保留原文件名，不影响已保存的内容
+    if (old && old.row.name !== row.name) {
+      this.syncName(key)
+      if (table === 'characters') for (const [k, e] of this.entries) if (e.row.type === 'outfits' && e.row.character_id === id) this.syncName(k)
+    }
     return id
   }
   remove(table:string,id:number) {

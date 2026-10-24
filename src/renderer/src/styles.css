@@ -35,7 +35,7 @@
   --tint: oklch(0.42 0.045 8);
   --inset: oklch(0.972 0.009 8);
   --overlay: oklch(0.3 0.03 8 / 28%);
-  --panel-shadow: 0 0 0 1px oklch(0.42 0.04 8 / 8%), 0 10px 36px -14px oklch(0.45 0.08 8 / 22%);
+  --panel-shadow: 0 0 0 1px oklch(0.42 0.04 8 / 8%), 0 12px 32px -18px oklch(0.45 0.08 8 / 24%); /* 向上只延伸 2px（32 - 18 - 12），不会被顶部的系统窗口按钮层截断 */
 }
 
 @theme inline {
