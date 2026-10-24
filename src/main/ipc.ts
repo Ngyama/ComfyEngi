@@ -118,6 +118,7 @@ function libraryOf(store: Store): Library {
       errors: validateMapping(w.api_json ?? {}, w.mapping ?? []).filter(([l]) => l === 'error').length,
     })),
     tasks: store.list('tasks').map((t) => ({ id: t.id, name: t.name })),
+    characterFolders: store.files?.folders() ?? [],
     settings: store.settings(),
   }
 }
@@ -140,6 +141,7 @@ const firstOutput = (u: RunUnit | null) => {
 
 export function registerIpc(ctx: IpcContext) {
   const { store, runner } = ctx
+  const vault = () => { if (!store.files) throw new Error('角色文件夹需要先打开工作区'); return store.files }
   const loras = () => { if (!store.files) throw new Error('请先打开工作区'); return new LoraManager(store.files.root) }
   const handlers: { [K in ApiMethod]: (...args: unknown[]) => unknown } = {
     'vault.info': () => ({root:store.files?.root??null,errors:store.files?.errors??[]}),
@@ -202,6 +204,11 @@ export function registerIpc(ctx: IpcContext) {
     'characters.save': (rec) => ({ id: store.save('characters', record('characters', rec)) }),
     'characters.remove': (id) => store.remove('characters', int(id)),
     'characters.duplicate': (id) => ({ id: store.duplicate('characters', int(id)) }),
+    'characters.create': (name, folder) => ({ id: vault().save('characters', { name: str(name, '名称') }, { folder: str(folder, '文件夹') }) }),
+    'characters.move': (id, folder) => vault().moveCharacter(int(id), str(folder, '文件夹')),
+    'folders.create': (parent, name) => vault().createFolder(str(parent, '文件夹'), str(name, '名称')),
+    'folders.rename': (folder, name) => vault().renameFolder(str(folder, '文件夹'), str(name, '名称')),
+    'folders.remove': (folder) => vault().removeFolder(str(folder, '文件夹')),
     'outfits.save': (rec) => ({ id: store.save('outfits', record('outfits', rec)) }),
     'outfits.remove': (id) => store.remove('outfits', int(id)),
     'outfits.duplicate': (id) => ({ id: store.duplicate('outfits', int(id)) }),

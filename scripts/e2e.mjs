@@ -6,7 +6,7 @@
 //       可选 --shots <目录> 指定截图输出位置
 // 数据使用临时目录（从旧版数据库样本复制，同时验证旧数据迁移），不会触碰真实用户数据。
 
-import { copyFileSync, mkdirSync, mkdtempSync, readdirSync } from 'node:fs'
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
@@ -99,6 +99,13 @@ try {
   const cards = win.locator('[aria-roledescription="sortable"]')
   check('旧任务的 2 个姿态以卡片显示', (await cards.count()) === 2, String(await cards.count()))
   await shot('01-plan')
+  const cardGap = await win.evaluate(() => {
+    const card = document.querySelector('[aria-roledescription="sortable"]')
+    let sc = card.parentElement
+    while (sc && getComputedStyle(sc).overflowY !== 'auto') sc = sc.parentElement
+    return card.getBoundingClientRect().top - (sc.getBoundingClientRect().top + sc.clientTop)
+  })
+  check('动作序列第一张卡片的顶部描边不被滚动容器裁剪', cardGap >= 1, `${cardGap}px`)
   const th = await themeCheck('套图任务')
   check('亮色主题：外壳为浅粉、主容器接近白色、正文为深色', th.body > 0.9 && th.main > 0.95 && th.text < 0.45, `shell ${th.body.toFixed(3)} main ${th.main.toFixed(3)} text ${th.text.toFixed(3)}`)
 
@@ -275,6 +282,39 @@ try {
   await win.waitForTimeout(300)
   check('点击服装在当前页面展开编辑（只有名称与 Positive）', (await win.getByPlaceholder('服装 / 穿着状态 Prompt（原样保存）').count()) === 1 && (await win.getByPlaceholder('可留空').count()) === 0)
   await shot('11-character-outfits')
+  // 角色文件夹（与工作区 prompts/characters 的真实目录一致）与右键菜单
+  const charDir = join(dataDir, 'vault', 'prompts', 'characters')
+  await win.getByRole('button', { name: '新建文件夹' }).click()
+  await win.locator('[data-testid=name-input]').fill('主角')
+  await win.getByRole('button', { name: '创建' }).click()
+  await win.waitForTimeout(400)
+  check('新建角色文件夹：列表与磁盘目录一致', (await win.locator('[data-testid=folder-row]', { hasText: '主角' }).count()) === 1 && existsSync(join(charDir, '主角')))
+  await win.locator('[data-testid=char-row]', { hasText: '角色B' }).click({ button: 'right' })
+  await win.getByRole('menuitem', { name: '移动到…' }).click()
+  await win.locator('[data-testid=move-targets] button', { hasText: '主角' }).click()
+  await win.waitForTimeout(500)
+  check('右键移动角色到文件夹：文件移入对应目录', existsSync(join(charDir, '主角', '角色B.md')) && !existsSync(join(charDir, '角色B.md')))
+  await win.locator('[data-testid=char-row]', { hasText: '角色B' }).click({ button: 'right' })
+  await win.getByRole('menuitem', { name: '重命名' }).click()
+  await win.locator('[data-testid=name-input]').fill('角色B2')
+  await win.getByRole('button', { name: '重命名', exact: true }).click()
+  await win.waitForTimeout(600)
+  const outfitFiles = readdirSync(join(dataDir, 'vault', 'prompts', 'outfits'))
+  check('右键重命名角色：显示名称、角色文件与服装文件名同步', (await win.locator('[data-testid=char-row]', { hasText: '角色B2' }).count()) === 1 && existsSync(join(charDir, '主角', '角色B2.md')) && outfitFiles.includes('角色B2 - B服装1.md'), outfitFiles.join(','))
+  const second = await win.evaluate(async () => {
+    const lib = await window.api['library.load']()
+    const p = await window.api['plan.forTask'](lib.settings.last_task_id ?? lib.tasks[0].id)
+    return { errors: p.errors, name: p.units.find((u) => u.meta.character2)?.meta.character2 }
+  })
+  check('移动、重命名后任务中的第二角色关联不变', second.name === '角色B2' && !second.errors.some((e) => e.includes('第二角色')), JSON.stringify(second))
+  await win.locator('[data-testid=folder-row]', { hasText: '主角' }).click({ button: 'right' })
+  check('非空文件夹不能删除', (await win.getByRole('menuitem', { name: '删除（仅空文件夹）' }).getAttribute('data-disabled')) !== null)
+  await shot('11b-character-folders')
+  await win.keyboard.press('Escape')
+  mkdirSync(join(charDir, '外部整理'))
+  await win.evaluate(() => window.dispatchEvent(new Event('focus')))
+  await win.waitForTimeout(600)
+  check('在资源管理器中新建的文件夹回到窗口后显示', (await win.locator('[data-testid=folder-row]', { hasText: '外部整理' }).count()) === 1)
   await nav('剧情库')
   await win.locator('main button', { hasText: '剧情1' }).first().click()
   await shot('12-stories')

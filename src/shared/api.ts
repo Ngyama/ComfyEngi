@@ -49,6 +49,12 @@ export interface Api {
   'characters.save'(rec: Partial<Character>): SaveResult
   'characters.remove'(id: number): void
   'characters.duplicate'(id: number): SaveResult
+  /** 角色文件夹（与工作区 prompts/characters 下的真实目录一致；路径用 / 分隔，'' 为根目录） */
+  'characters.create'(name: string, folder: string): SaveResult
+  'characters.move'(id: number, folder: string): void
+  'folders.create'(parent: string, name: string): string
+  'folders.rename'(folder: string, name: string): string
+  'folders.remove'(folder: string): void
   'outfits.save'(rec: Partial<Outfit>): SaveResult
   'outfits.remove'(id: number): void
   'outfits.duplicate'(id: number): SaveResult
@@ -108,7 +114,7 @@ export const API_METHODS: ApiMethod[] = [
   'vault.info', 'vault.choose', 'loras.list', 'loras.roots', 'loras.addRoot', 'loras.removeRoot', 'loras.scan', 'loras.save', 'loras.preview', 'loras.clearPreview', 'loras.image', 'loras.saveFrame', 'loras.open',
   'library.load', 'settings.set',
   'templates.save', 'templates.remove', 'templates.duplicate', 'templates.reorder',
-  'characters.save', 'characters.remove', 'characters.duplicate',
+  'characters.save', 'characters.remove', 'characters.duplicate', 'characters.create', 'characters.move', 'folders.create', 'folders.rename', 'folders.remove',
   'outfits.save', 'outfits.remove', 'outfits.duplicate', 'outfits.reorder',
   'stories.save', 'stories.remove', 'stories.duplicate', 'references',
   'workflows.get', 'workflows.import', 'workflows.reimport', 'workflows.save', 'workflows.remove', 'workflows.onlineCheck',

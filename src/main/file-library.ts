@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto'
-import { appendFileSync, existsSync, linkSync, mkdirSync, readFileSync, readdirSync, renameSync, unlinkSync, writeFileSync } from 'node:fs'
-import { basename, dirname, join } from 'node:path'
+import { appendFileSync, existsSync, linkSync, mkdirSync, readFileSync, readdirSync, renameSync, rmdirSync, statSync, unlinkSync, writeFileSync } from 'node:fs'
+import { basename, dirname, join, relative, sep } from 'node:path'
 export const FILE_TABLES = ['templates', 'characters', 'outfits', 'stories', 'workflows']
 type Row = Record<string, any>
 
@@ -47,6 +47,7 @@ export class FileLibrary {
   errors: string[] = []
   /** 非致命提示（例如重命名失败、已保留原文件名） */
   notices: string[] = []
+  private folderSig = ''
   constructor(public root: string) { this.scan() }
 
   /** 期望的文件名（不含扩展名与重名序号）。服装带上所属角色名，避免各角色的同名服装难以区分 */
@@ -121,10 +122,93 @@ export class FileLibrary {
     for (const key of keys) if (this.syncName(key)) n++
     return n
   }
+  // ---------------- 角色文件夹：与 prompts/characters 下的真实目录一致，只用于组织（不写入角色文件）
+
+  private get charRoot() { return join(this.root, 'prompts', 'characters') }
+  /** 解析界面传来的文件夹相对路径（'/' 分隔，'' 为根目录）：不允许 .. 、非法字符或越出角色目录 */
+  private folderPath(rel: string, mustExist = true): string {
+    const segs = String(rel ?? '').split('/').filter(Boolean)
+    for (const s of segs) if (s === '.' || s === '..' || /[<>:"/\\|?*\u0000-\u001f]/.test(s)) throw new Error(`无效的文件夹路径：${rel}`)
+    const p = join(this.charRoot, ...segs)
+    if (mustExist && !(existsSync(p) && statSync(p).isDirectory())) throw new Error(`文件夹不存在：${rel || '（根目录）'}，可能已在外部被移动，请刷新`)
+    return p
+  }
+  private relFolder(dir: string): string {
+    const r = relative(this.charRoot, dir)
+    return r && !r.startsWith('..') ? r.split(sep).join('/') : ''
+  }
+  /** 所有角色文件夹（含空文件夹与子文件夹），跳过以 . 开头的隐藏目录 */
+  folders(): string[] {
+    const out: string[] = []
+    const walk = (dir: string) => {
+      if (!existsSync(dir)) return
+      for (const e of readdirSync(dir, { withFileTypes: true })) {
+        if (!e.isDirectory() || e.name.startsWith('.')) continue
+        out.push(this.relFolder(join(dir, e.name)))
+        walk(join(dir, e.name))
+      }
+    }
+    walk(this.charRoot)
+    return out.sort((a, b) => a.localeCompare(b, 'zh'))
+  }
+  /** 同一目录下是否已有同名项目（文件或文件夹，大小写不敏感） */
+  private taken(dir: string, name: string, self?: string): boolean {
+    const n = name.normalize('NFC').toLowerCase()
+    return readdirSync(dir).some((f) => f.normalize('NFC').toLowerCase() === n && f !== self)
+  }
+  createFolder(parent: string, name: string): string {
+    const dir = this.folderPath(parent)
+    const n = safeFileName(name)
+    if (this.taken(dir, n)) throw new Error(`「${n}」已存在`)
+    mkdirSync(join(dir, n))
+    return this.relFolder(join(dir, n))
+  }
+  /** 重命名文件夹（只改最后一段名称）：不覆盖已存在的同名项目；文件内容与稳定 ID 不变 */
+  renameFolder(rel: string, name: string): string {
+    if (!String(rel ?? '').split('/').filter(Boolean).length) throw new Error('不能重命名根目录')
+    const from = this.folderPath(rel)
+    const n = safeFileName(name)
+    const to = join(dirname(from), n)
+    if (to === from) return rel
+    if (this.taken(dirname(from), n, basename(from))) throw new Error(`「${n}」已存在`)
+    if (from.toLowerCase() === to.toLowerCase()) {
+      const tmp = `${from}.${randomUUID()}.renaming`
+      renameSync(from, tmp)
+      try { renameSync(tmp, to) } catch (err) { renameSync(tmp, from); throw err }
+    } else {
+      if (existsSync(to)) throw new Error(`「${n}」已存在`)
+      renameSync(from, to)
+    }
+    try {
+      appendFileSync(join(this.root, '.comfyengi', 'rename-log.jsonl'), JSON.stringify({ time: new Date().toISOString(), folder: true, from, to }) + '\n')
+    } catch { /* 日志写入失败不影响改名 */ }
+    this.scan()
+    return this.relFolder(to)
+  }
+  /** 只删除空文件夹（非递归）：文件夹里有任何文件或子文件夹时拒绝，不会删除其中的角色 */
+  removeFolder(rel: string) {
+    if (!String(rel ?? '').split('/').filter(Boolean).length) throw new Error('不能删除根目录')
+    const p = this.folderPath(rel)
+    const n = readdirSync(p).length
+    if (n) throw new Error(`文件夹「${rel}」不为空（包含 ${n} 个项目），请先移出其中的角色或子文件夹`)
+    rmdirSync(p)
+  }
+  /** 把角色文件移到另一个文件夹：只移动该角色的 Markdown（服装文件独立保存、按稳定 ID 关联，不受影响），不覆盖同名文件 */
+  moveCharacter(id: number, folder: string) {
+    this.scan()
+    const key = `characters:${id}`
+    const e = this.entries.get(key)
+    if (!e) throw new Error('角色已被删除，请刷新')
+    const dir = this.folderPath(folder)
+    if (dirname(e.path) === dir) return
+    if (!this.move(key, this.freePath(dir, this.baseName(e.row)))) throw new Error(this.notices[this.notices.length - 1] ?? '移动失败')
+  }
+
   changed() {
     try {
       const paths=[...files(join(this.root,'prompts')),...files(join(this.root,'workflows'))].filter(p=>/\.(md|json)$/.test(p))
       if(paths.length!==this.entries.size) return true
+      if(this.folders().join('\n')!==this.folderSig) return true
       return [...this.entries.values()].some(e=>!existsSync(e.path)||hash(readFileSync(e.path,'utf8'))!==e.revision)
     } catch { return true }
   }
@@ -149,9 +233,12 @@ export class FileLibrary {
     if (errors.length) throw new Error(errors.join('\n'))
     for (const [key,e] of next) if (this.entries.get(key)?.revision !== e.revision) this.revisions.delete(key)
     this.entries = next
+    this.folderSig = this.folders().join('\n')
   }
-  list(table: string): Row[] { return [...this.entries.values()].filter(e => e.row.type === table).map(e => ({...structuredClone(e.row), _revision:e.revision})).sort((a:Row,b:Row) => (a.sort??0)-(b.sort??0)||a.id-b.id) }
-  save(table: string, rec: Row): number {
+  /** 角色额外带上所在文件夹 _folder（由文件位置决定，以 _ 开头，不会写入文件） */
+  list(table: string): Row[] { return [...this.entries.values()].filter(e => e.row.type === table).map(e => ({...structuredClone(e.row), _revision:e.revision, ...(table === 'characters' ? {_folder:this.relFolder(dirname(e.path))} : {})})).sort((a:Row,b:Row) => (a.sort??0)-(b.sort??0)||a.id-b.id) }
+  /** opts.folder：新建角色时放入的文件夹（已存在的角色保持原位置） */
+  save(table: string, rec: Row, opts: { folder?: string } = {}): number {
     this.scan()
     const old = rec.id ? this.entries.get(`${table}:${rec.id}`) : undefined
     if (rec.id && !old) throw new Error('资源已被删除，请刷新')
@@ -159,10 +246,12 @@ export class FileLibrary {
     const id = rec.id || Math.max(Date.now(), ...this.list(table).map(r => r.id + 1))
     const row: Row = {name:'',positive:'',negative:'',note:'',sort:0,tag:'',category:'',tags:'',loras:[],scenes:[], ...old?.row,...rec,id,type:table}
     delete row._revision
+    delete row._folder
     if (table === 'outfits' && !this.entries.has(`characters:${row.character_id}`)) throw new Error('服装角色不存在')
     const dir = table === 'templates' ? `prompts/${({pose:'poses',expression:'expressions',camera:'cameras',male:'male',global:'global',scene:'scenes',position:'positions',subposition:'positions',act:'acts'} as Row)[row.kind] || 'global'}` : table === 'workflows' ? 'workflows' : `prompts/${table}`
     mkdirSync(join(this.root,dir),{recursive:true})
-    const path = old?.path || (table === 'workflows' ? join(this.root,dir,`${id}-${randomUUID()}.json`) : this.freePath(join(this.root,dir), this.baseName(row)))
+    const newDir = table === 'characters' && opts.folder ? this.folderPath(opts.folder) : join(this.root,dir)
+    const path = old?.path || (table === 'workflows' ? join(this.root,dir,`${id}-${randomUUID()}.json`) : this.freePath(newDir, this.baseName(row)))
     if (!old && existsSync(path)) throw new Error('目标文件已存在')
     const text = table === 'workflows' ? JSON.stringify(row,null,2) : encode(row)
     const key = `${table}:${id}`

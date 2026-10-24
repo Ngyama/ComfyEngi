@@ -59,6 +59,8 @@ export interface Lora {
 
 export interface Character extends Timestamps {
   id: number
+  /** 所在文件夹（由文件位置决定，只读，不写入文件） */
+  _folder?: string
   name: string
   tag: string
   positive: string
@@ -337,6 +339,8 @@ export type RunnerEvent =
 
 export interface Library {
   templates: Template[]
+  /** 角色文件夹（只在工作区模式下存在） */
+  characterFolders?: string[]
   characters: Character[]
   outfits: Outfit[]
   stories: Story[]
