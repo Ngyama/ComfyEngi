@@ -1,13 +1,12 @@
 // 套图任务的 LoRA 配置：LoRA 是工作流参数（写入 LoRA Loader 节点的 lora_name / strength_model / strength_clip），不拼入 Prompt。
-// 每张卡片是一个逻辑 LoRA 配置项（槽位）：角色 LoRA 默认来自角色库，可在本任务中调整权重、替换或禁用；任务级 LoRA 直接在这里添加。
+// 每张卡片是一个逻辑 LoRA 配置项（槽位）：角色 LoRA 默认来自角色库，可在本任务中调整权重、替换或停用；任务级 LoRA 直接在这里添加。
 // 一个配置项可以绑定多个 Loader 节点（例如两次采样），绑定保存在工作流的节点映射中（与设置页的映射是同一份数据）。
+// 界面只调整一个统一权重：同时写入 strength_model 与 strength_clip（底层两个字段保持不变）。
 
 import { useEffect, useState } from 'react'
-import { AlertCircle, Link2, Plus, RotateCcw, Trash2 } from 'lucide-react'
+import { AlertCircle, Link2, Plus, Power, Replace, RotateCcw, Trash2 } from 'lucide-react'
 import { toast } from 'sonner'
-import { Button } from '@/components/ui/button'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
-import { Switch } from '@/components/ui/switch'
 import { LoraPicker, useLoraResources } from '@/components/lora'
 import { api, call } from '@/lib/api'
 import { reloadLib, useLib, useNav, usePlan } from '@/lib/stores'
@@ -22,8 +21,11 @@ const SUPPORT: Record<LoraLoaderInfo['support'], [string, string]> = {
   partial: ['仅部分支持', 'bg-warning/10 text-warning'],
 }
 
+/** 本地文件名（不含扩展名与目录），与 LoRA 管理中的本地命名一致 */
+const fileStem = (name: string) => (name.split(/[\\/]/).pop() ?? name).replace(/\.(safetensors|ckpt|pt|bin)$/i, '')
+
 /** 权重输入：失去焦点或回车时提交 */
-function Weight({ label, value, onChange, disabled }: { label: string; value: number; onChange: (v: number) => void; disabled?: boolean }) {
+function Weight({ value, onChange, disabled }: { value: number; onChange: (v: number) => void; disabled?: boolean }) {
   const [v, setV] = useState(String(value))
   useEffect(() => setV(String(value)), [value])
   const commit = () => {
@@ -32,22 +34,26 @@ function Weight({ label, value, onChange, disabled }: { label: string; value: nu
     else setV(String(value))
   }
   return (
-    <label className="flex items-center gap-1 text-[11px] text-muted-foreground">
-      {label}
-      <input
-        type="number"
-        step={0.05}
-        value={v}
-        disabled={disabled}
-        onChange={(e) => setV(e.target.value)}
-        onBlur={commit}
-        onKeyDown={(e) => e.key === 'Enter' && commit()}
-        aria-label={`${label} 权重`}
-        className="h-6 w-14 rounded-md bg-tint/[0.04] px-1.5 text-right font-mono text-[11.5px] text-foreground ring-1 ring-tint/[0.112] outline-none focus:ring-primary/50 disabled:opacity-50"
-      />
-    </label>
+    <input
+      type="number"
+      step={0.05}
+      value={v}
+      disabled={disabled}
+      onChange={(e) => setV(e.target.value)}
+      onBlur={commit}
+      onKeyDown={(e) => e.key === 'Enter' && commit()}
+      aria-label="权重"
+      title="权重（同时用于 Model 与 Clip）"
+      className="h-6 w-[52px] rounded-md bg-tint/[0.04] px-1.5 text-right font-mono text-[11.5px] text-foreground ring-1 ring-tint/[0.112] outline-none focus:ring-primary/50 disabled:opacity-50"
+    />
   )
 }
+
+const IconBtn = ({ label, onClick, className, children, ...rest }: { label: string; onClick?: () => void; className?: string; children: React.ReactNode } & Record<string, unknown>) => (
+  <button type="button" aria-label={label} title={label} onClick={onClick} className={cn('grid size-6 shrink-0 place-items-center rounded-md text-muted-foreground hover:bg-tint/[0.06] hover:text-foreground disabled:opacity-40 [&_svg]:size-3.5', className)} {...rest}>
+    {children}
+  </button>
+)
 
 /** 槽位绑定的 Loader：勾选即把该节点的 lora_name 与全部强度输入映射到此槽位 */
 function BindingPopover({ prefix, title, wf, onChanged }: { prefix: string; title: string; wf: Workflow | null; onChanged: () => void }) {
@@ -67,12 +73,19 @@ function BindingPopover({ prefix, title, wf, onChanged }: { prefix: string; titl
   return (
     <Popover>
       <PopoverTrigger asChild>
-        <button type="button" disabled={!wf} data-testid="lora-binding" className={cn('inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[11px] hover:bg-tint/[0.05] disabled:opacity-50', nodes.length ? 'text-muted-foreground' : 'text-warning')}>
-          <Link2 className="size-3" />
-          {wf ? (nodes.length ? `绑定 ${nodes.length} 个 Loader` : '未绑定 Loader') : '未选择工作流'}
+        <button
+          type="button"
+          disabled={!wf}
+          data-testid="lora-binding"
+          aria-label="绑定的 LoRA Loader"
+          title={wf ? (nodes.length ? `已绑定 ${nodes.length} 个 Loader，点击查看或修改` : '未绑定 LoRA Loader，点击绑定') : '请先在右上角选择工作流'}
+          className={cn('inline-flex h-6 shrink-0 items-center gap-0.5 rounded-md px-1 text-[11px] text-muted-foreground hover:bg-tint/[0.06] hover:text-foreground disabled:opacity-40', wf && !nodes.length && 'text-warning')}
+        >
+          <Link2 className="size-3.5" />
+          {wf && nodes.length > 0 && <span className="tabular-nums">{nodes.length}</span>}
         </button>
       </PopoverTrigger>
-      <PopoverContent align="start" className="w-[380px] p-2">
+      <PopoverContent align="end" className="w-[380px] p-2">
         <div className="px-2 pt-1 pb-2 text-[11.5px] text-muted-foreground">
           「{title}」写入哪些 LoRA Loader（工作流「{wf?.name}」）。可以绑定多个，例如两次采样各自的 Loader；未绑定的 Loader 保持工作流原值。
         </div>
@@ -114,69 +127,76 @@ function BindingPopover({ prefix, title, wf, onChanged }: { prefix: string; titl
 
 interface CardProps {
   prefix: string
-  title: string
-  badge: string
-  lora: { name: string; resource_id?: string; model: number; clip: number; enabled: boolean } | null
+  /** 来源说明（主角色 · 名称 / 第二角色 · 名称 / 任务） */
+  source: string
+  /** 卡片状态标记：已调整等 */
+  tag?: string
+  lora: { name: string; resource_id?: string; weight: number; enabled: boolean } | null
   resources: LoraResource[]
   wf: Workflow | null
   onWfChanged: () => void
   onPick: (r: LoraResource) => void
   onEnabled: (v: boolean) => void
-  onWeights: (model: number, clip: number) => void
+  onWeight: (v: number) => void
   onReset?: () => void
   onRemove?: () => void
-  onTitle?: (v: string) => void
-  note?: string
 }
 
-function LoraCard({ prefix, title, badge, lora, resources, wf, onWfChanged, onPick, onEnabled, onWeights, onReset, onRemove, onTitle, note }: CardProps) {
+/** 紧凑的 LoRA 素材卡：封面、本地文件名、来源、统一权重、绑定 / 替换 / 启停 / 删除图标 */
+function LoraCard({ prefix, source, tag, lora, resources, wf, onWfChanged, onPick, onEnabled, onWeight, onReset, onRemove }: CardProps) {
   const r = lora ? (lora.resource_id ? resources.find((x) => x.id === lora.resource_id) : resources.find((x) => x.comfyName === lora.name || x.name === lora.name)) : undefined
-  const bound = (wf?.mapping ?? []).some((m) => m.source === `${prefix}_name`)
-  const off = !lora?.enabled
+  const bound = new Set((wf?.mapping ?? []).filter((m) => m.source === `${prefix}_name`).map((m) => String(m.node))).size
+  const has = !!lora?.name
+  const on = has && !!lora?.enabled
+  const name = r ? fileStem(r.name) : has ? fileStem(lora!.name) : ''
+  const meta = r && loraTitle(r) !== name ? loraTitle(r) : ''
+  const warn = on && wf && !bound ? '已启用但未绑定 LoRA Loader：不能入队。点击链接图标绑定，或停用此 LoRA' : ''
   return (
-    <div className={cn('flex w-[300px] shrink-0 flex-col gap-2 rounded-xl bg-card p-2.5 ring-1 ring-tint/[0.08]', off && 'opacity-70')} data-testid="lora-card" data-prefix={prefix}>
-      <div className="flex gap-2.5">
-        {r ? <LoraThumb r={r} width={96} className="h-12 w-9 rounded-md" /> : <div className="h-12 w-9 shrink-0 rounded-md bg-inset" />}
-        <div className="min-w-0 flex-1">
-          <div className="flex items-center gap-1.5">
-            {onTitle ? (
-              <input value={title} onChange={(e) => onTitle(e.target.value)} className="min-w-0 flex-1 truncate bg-transparent text-[11px] text-muted-foreground outline-none focus:text-foreground" aria-label="配置项名称" />
-            ) : (
-              <span className="min-w-0 flex-1 truncate text-[11px] text-muted-foreground">{title}</span>
-            )}
-            <span className="shrink-0 rounded bg-tint/[0.06] px-1 text-[10px] text-muted-foreground">{badge}</span>
-          </div>
-          <div className="truncate text-[13px] font-medium" title={lora?.name}>
-            {lora?.name ? (r ? loraTitle(r) : lora.name) : <span className="text-muted-foreground">未选择 LoRA</span>}
-          </div>
-          {note && <div className="truncate text-[10.5px] text-muted-foreground">{note}</div>}
+    <div
+      className={cn('flex min-w-0 items-center gap-2.5 rounded-xl bg-card p-2 ring-1 transition', on ? 'ring-primary/45' : 'opacity-55 ring-tint/[0.08]')}
+      data-testid="lora-card"
+      data-prefix={prefix}
+      data-enabled={on || undefined}
+      data-bound={bound}
+    >
+      {r ? <LoraThumb r={r} width={96} className={cn('h-12 w-9 rounded-md', !on && 'grayscale')} /> : <div className="h-12 w-9 shrink-0 rounded-md bg-inset" />}
+      <div className="min-w-0 flex-1">
+        <div className="flex items-center gap-1">
+          <span className={cn('truncate text-[13px] font-medium', !has && 'text-muted-foreground')} title={[name, meta, lora?.name].filter(Boolean).join('\n')} data-testid="lora-title">
+            {has ? name : '未选择 LoRA'}
+          </span>
+          {warn && (
+            <span title={warn} aria-label={warn} data-testid="lora-warning" className="shrink-0 text-destructive">
+              <AlertCircle className="size-3.5" />
+            </span>
+          )}
         </div>
-        <Switch checked={!off} disabled={!lora?.name} onCheckedChange={onEnabled} aria-label="启用" />
+        <div className="truncate text-[11px] text-muted-foreground">
+          {source}
+          {tag && <span className="text-primary"> · {tag}</span>}
+          {has && !lora!.enabled && ' · 已停用'}
+        </div>
       </div>
-      <div className="flex items-center gap-2">
-        <Weight label="Model" value={lora?.model ?? 1} onChange={(v) => onWeights(v, lora?.clip ?? v)} disabled={!lora?.name} />
-        <Weight label="Clip" value={lora?.clip ?? 1} onChange={(v) => onWeights(lora?.model ?? v, v)} disabled={!lora?.name} />
-        <div className="flex-1" />
+      <div className="flex shrink-0 items-center gap-0.5">
+        <Weight value={lora?.weight ?? 1} onChange={onWeight} disabled={!has} />
+        <BindingPopover prefix={prefix} title={name || source} wf={wf} onChanged={onWfChanged} />
         <LoraPicker resources={resources} onPick={onPick}>
-          <Button size="xs" variant="ghost">{lora?.name ? '替换' : '选择'}</Button>
+          <IconBtn label={has ? '替换 LoRA' : '选择 LoRA'}>{has ? <Replace /> : <Plus />}</IconBtn>
         </LoraPicker>
+        {has && (
+          <IconBtn label={lora!.enabled ? '停用' : '启用'} onClick={() => onEnabled(!lora!.enabled)} className={cn(lora!.enabled && 'text-primary')}>
+            <Power />
+          </IconBtn>
+        )}
         {onReset && (
-          <Button size="icon-xs" variant="ghost" title="恢复角色库默认" aria-label="恢复角色库默认" onClick={onReset}>
+          <IconBtn label="恢复角色库默认" onClick={onReset}>
             <RotateCcw />
-          </Button>
+          </IconBtn>
         )}
         {onRemove && (
-          <Button size="icon-xs" variant="ghost" className="hover:text-destructive" title="删除" aria-label="删除任务 LoRA" onClick={onRemove}>
+          <IconBtn label="删除任务 LoRA" onClick={onRemove} className="hover:text-destructive">
             <Trash2 />
-          </Button>
-        )}
-      </div>
-      <div className="flex items-center gap-1">
-        <BindingPopover prefix={prefix} title={title} wf={wf} onChanged={onWfChanged} />
-        {!off && lora?.name && wf && !bound && (
-          <span className="inline-flex items-center gap-1 text-[10.5px] text-destructive">
-            <AlertCircle className="size-3" /> 启用但未绑定，不能入队
-          </span>
+          </IconBtn>
         )}
       </div>
     </div>
@@ -218,8 +238,10 @@ export function LoraPanel() {
       x.task_loras = list
     })
   const pickName = (r: LoraResource) => ({ resource_id: r.id, name: r.comfyName || r.name })
+  // 统一权重：同时写入 Model 与 Clip
+  const both = (w: number) => ({ strength_model: w, strength_clip: w })
 
-  const charCards = (kind: 'lora' | 'second_lora', charId: number | null | undefined, who: string, note?: string) => {
+  const charCards = (kind: 'lora' | 'second_lora', charId: number | null | undefined, who: string) => {
     const c = charId ? lib.characters.find((x) => x.id === charId) : undefined
     if (!c) return []
     const base: (Lora | null)[] = (c.loras ?? []).filter((l) => l.name)
@@ -228,21 +250,20 @@ export function LoraPanel() {
       const prefix = `${kind}${i + 1}`
       const o = ov[prefix]
       const name = o?.name ?? l?.name ?? ''
-      const lora = name ? { name, resource_id: o?.name ? o.resource_id : l?.resource_id, model: o?.strength_model ?? l?.strength ?? 1, clip: o?.strength_clip ?? o?.strength_model ?? l?.strength_clip ?? l?.strength ?? 1, enabled: o ? o.enabled : true } : null
+      const lora = name ? { name, resource_id: o?.name ? o.resource_id : l?.resource_id, weight: o?.strength_model ?? l?.strength ?? 1, enabled: o ? o.enabled : true } : null
       return (
         <LoraCard
           key={prefix}
           prefix={prefix}
-          title={`${who}「${c.name}」${base.length > 1 ? ` LoRA ${i + 1}` : ''}`}
-          badge={o ? '本任务已调整' : l ? '角色默认' : '角色未设置'}
-          note={note}
+          source={`${who} · ${c.name}${base.length > 1 ? ` · ${i + 1}` : ''}${l ? '' : '（角色未设置）'}`}
+          tag={o ? '已调整' : undefined}
           lora={lora}
           resources={resources}
           wf={wf}
           onWfChanged={() => setNonce((n) => n + 1)}
-          onPick={(r) => setOv(prefix, { ...pickName(r), strength_model: r.recommendedWeight, strength_clip: r.recommendedWeight })}
+          onPick={(r) => setOv(prefix, { ...pickName(r), ...both(r.recommendedWeight) })}
           onEnabled={(v) => setOv(prefix, { enabled: v })}
-          onWeights={(m, cl) => setOv(prefix, { strength_model: m, strength_clip: cl })}
+          onWeight={(w) => setOv(prefix, both(w))}
           onReset={o ? () => setOv(prefix, null) : undefined}
         />
       )
@@ -253,46 +274,44 @@ export function LoraPanel() {
   const addTask = (r: LoraResource) => {
     if (!freeSlot) return
     update((x) => {
-      x.task_loras = [...(x.task_loras ?? []), { slot: freeSlot, label: `任务 LoRA ${freeSlot}`, enabled: true, ...pickName(r), strength_model: r.recommendedWeight, strength_clip: r.recommendedWeight }]
+      x.task_loras = [...(x.task_loras ?? []), { slot: freeSlot, label: `任务 LoRA ${freeSlot}`, enabled: true, ...pickName(r), ...both(r.recommendedWeight) }]
     })
-    toast.success('已添加任务 LoRA', { description: '请在卡片上绑定它要写入的 LoRA Loader。' })
+    toast.success('已添加任务 LoRA', { description: '点击卡片上的链接图标，绑定它要写入的 LoRA Loader。' })
   }
 
   return (
-    <div className="px-6 pb-4">
+    <div className="@container px-6 pb-4">
       <div className="mb-1.5 flex items-center gap-2">
         <span className="text-[11px] font-medium tracking-wide text-muted-foreground uppercase">LoRA</span>
         <span className="text-[11px] text-muted-foreground/70">写入工作流的 LoRA Loader 节点，作用于整套图</span>
+        <div className="flex-1" />
+        {freeSlot && (
+          <LoraPicker resources={resources} onPick={addTask}>
+            <button type="button" data-testid="add-task-lora" className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-[12px] text-muted-foreground hover:bg-tint/[0.05] hover:text-primary">
+              <Plus className="size-3.5" /> 添加 LoRA
+            </button>
+          </LoraPicker>
+        )}
       </div>
-      <div className="scrollbar-none -mx-1 flex gap-2 overflow-x-auto px-1 py-0.5" data-testid="lora-panel">
+      {/* 稳定网格：容器宽度足够时每行 3 个，中等 2 个，较窄 1 个；不会横向溢出 */}
+      <div className="grid grid-cols-1 gap-2 @2xl:grid-cols-2 @5xl:grid-cols-3" data-testid="lora-panel">
         {charCards('lora', d.character_id, '主角色')}
-        {charCards('second_lora', d.second_character_id, '第二角色', '只在启用第二角色的动作中加载')}
+        {charCards('second_lora', d.second_character_id, '第二角色')}
         {taskLoras.map((t) => (
           <LoraCard
             key={`task_lora${t.slot}`}
             prefix={`task_lora${t.slot}`}
-            title={t.label}
-            badge="任务 LoRA"
-            lora={t.name ? { name: t.name, resource_id: t.resource_id, model: t.strength_model, clip: t.strength_clip, enabled: t.enabled } : null}
+            source="任务 LoRA"
+            lora={t.name ? { name: t.name, resource_id: t.resource_id, weight: t.strength_model, enabled: t.enabled } : null}
             resources={resources}
             wf={wf}
             onWfChanged={() => setNonce((n) => n + 1)}
             onPick={(r) => setTask(t.slot, pickName(r))}
             onEnabled={(v) => setTask(t.slot, { enabled: v })}
-            onWeights={(m, c) => setTask(t.slot, { strength_model: m, strength_clip: c })}
+            onWeight={(w) => setTask(t.slot, both(w))}
             onRemove={() => setTask(t.slot, null)}
-            onTitle={(v) => setTask(t.slot, { label: v })}
           />
         ))}
-        {freeSlot && (
-          <LoraPicker resources={resources} onPick={addTask}>
-            <button type="button" data-testid="add-task-lora" className="flex w-[150px] shrink-0 flex-col items-center justify-center gap-1 rounded-xl border border-dashed border-tint/[0.16] text-[12px] text-muted-foreground hover:border-primary/40 hover:text-primary">
-              <Plus className="size-4" />
-              添加任务 LoRA
-              <span className="text-[10.5px] opacity-70">画风、辅助、背景等</span>
-            </button>
-          </LoraPicker>
-        )}
       </div>
     </div>
   )
