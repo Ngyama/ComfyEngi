@@ -50,7 +50,12 @@ export interface Template extends Timestamps {
 export interface Lora {
   resource_id?: string
   name: string
+  /** Model 权重（写入映射到 strength_model 等输入） */
   strength: number
+  /** Clip 权重（写入映射到 strength_clip 的输入）；没有时与 strength 相同 */
+  strength_clip?: number
+  /** 任务中临时禁用：映射的 Loader 强度写 0，名称保持工作流原值 */
+  disabled?: boolean
   /** 参与生成的触发词（用户勾选，按勾选顺序），与角色基础 Prompt 组合，不写入原 metadata.json */
   trigger_words?: string[]
   /** 用户手动添加的自定义触发词（可勾选或不勾选） */
@@ -144,6 +149,27 @@ export interface TaskItem {
   scene_id?: number | null
 }
 
+/** 任务对角色默认 LoRA 的调整（键为槽位：lora1 = 主角色，second_lora1 = 第二角色） */
+export interface LoraOverride {
+  enabled: boolean
+  /** 替换为其他 LoRA（不填则沿用角色库中的 LoRA） */
+  resource_id?: string
+  name?: string
+  strength_model?: number
+  strength_clip?: number
+}
+
+/** 任务级 LoRA（画风、辅助、背景等）：槽位 slot 对应工作流映射中的「任务 LoRA n」 */
+export interface TaskLora {
+  slot: number
+  label: string
+  enabled: boolean
+  resource_id?: string
+  name: string
+  strength_model: number
+  strength_clip: number
+}
+
 export interface TaskData {
   character_id: number | null
   story_id: number | null
@@ -157,6 +183,9 @@ export interface TaskData {
   scene_id?: number | null
   /** 第二角色（与主角色来自同一个角色库，可不选择）。character_id 即主角色 */
   second_character_id?: number | null
+  /** LoRA 配置：LoRA 是工作流参数（写入 LoRA Loader 节点），不拼入 Prompt */
+  lora_overrides?: Record<string, LoraOverride>
+  task_loras?: TaskLora[]
 }
 
 export interface Task extends Timestamps {
@@ -253,6 +282,8 @@ export interface PlanUnit {
   loras: Lora[]
   /** 第二角色出场时的 LoRA（映射到「第二角色 LoRA n」） */
   loras2?: Lora[]
+  /** 任务级 LoRA（映射到「任务 LoRA n」，n = slot） */
+  task_loras?: (Lora & { slot: number; label: string })[]
   meta: UnitMeta
   index: number
   seed: number

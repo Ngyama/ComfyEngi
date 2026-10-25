@@ -71,7 +71,11 @@ describe('角色库兼容性', () => {
     s.save('characters', { id: lib.charA, loras })
     s.save('characters', { id: lib.charA, name: '只改名称', positive: 'p', loras: s.get('characters', lib.charA)!.loras, note: '' })
     expect(s.get('characters', lib.charA)!.loras).toEqual(loras)
-    const plan = planForTask(s, task())
+    // 槽位 2、3 没有绑定 Loader：启用时不能入队（不静默丢弃），在任务中禁用后即可生成
+    expect(planForTask(s, task()).errors.filter((e) => e.includes('没有绑定 LoRA Loader')).length).toBe(2)
+    const t = task()
+    s.save('tasks', { id: t.id, data: { ...t.data, lora_overrides: { lora2: { enabled: false }, lora3: { enabled: false } } } })
+    const plan = planForTask(s, s.get('tasks', t.id)!)
     expect(plan.errors).toEqual([])
     const v = Object.fromEntries(plan.units[0].inputs!.map((x) => [x.source, x.value]))
     expect([v.lora1_name, v.lora1_strength]).toEqual(['charA.safetensors', 0.8])

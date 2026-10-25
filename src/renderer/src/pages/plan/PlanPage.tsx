@@ -37,6 +37,7 @@ import { expandTask, newInteractionItem, newItem, newTaskData } from '@shared/pl
 import type { Plan } from '@shared/api'
 import type { PlanUnit, TaskItem } from '@shared/types'
 import { PlanPreviewDialog, TaskSettingsDialog } from './dialogs'
+import { LoraPanel } from './LoraPanel'
 import { CharacterPicker, GlobalPicker, PosePicker, StoryPicker, WorkflowMenu, type NewAction } from './pickers'
 import { PoseDetail } from './PoseDetail'
 
@@ -411,6 +412,8 @@ export default function PlanPage() {
     let lost = 0
     update((x) => {
       x.character_id = cid
+      // 换角色后，本任务对旧角色 LoRA 的调整不再适用
+      if (x.lora_overrides) x.lora_overrides = Object.fromEntries(Object.entries(x.lora_overrides).filter(([k]) => !k.startsWith('lora')))
       for (const it of x.items) {
         if (!it.outfit_id) continue
         const nid = byName.get(old.get(it.outfit_id) ?? '\u0000') ?? null
@@ -431,6 +434,7 @@ export default function PlanPage() {
     let lost = 0
     update((x) => {
       x.second_character_id = cid
+      if (x.lora_overrides) x.lora_overrides = Object.fromEntries(Object.entries(x.lora_overrides).filter(([k]) => !k.startsWith('second_lora')))
       for (const it of x.items) {
         if (cid === null) it.second_enabled = false
         else if (prevId === null && it.position_id) it.second_enabled = true
@@ -527,6 +531,9 @@ export default function PlanPage() {
             onClick={() => setPicker('char2')}
           />
         </div>
+
+        {/* LoRA 配置（工作流参数） */}
+        <LoraPanel />
 
         {/* 动作序列 */}
         <div className="flex items-center gap-2 px-6 pb-1.5">

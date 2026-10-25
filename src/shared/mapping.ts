@@ -5,6 +5,8 @@ import { compose, MODULE_LABELS } from './prompt'
 import type { ApiNode, ApiWorkflow, InputValue, MappingEntry, Message, OutputFile, Settings } from './types'
 
 export const MAX_LORA_SLOTS = 4
+/** 任务级 LoRA（画风、辅助、背景等）最多几个槽位 */
+export const MAX_TASK_LORAS = 6
 
 export const SOURCES: [string, string][] = [
   ['positive', '正面 Prompt'],
@@ -19,6 +21,11 @@ export const SOURCES: [string, string][] = [
     [`second_lora${i + 1}_name`, `第二角色 LoRA ${i + 1} 名称`] as [string, string],
     [`second_lora${i + 1}_strength`, `第二角色 LoRA ${i + 1} 强度`] as [string, string],
   ]).flat(),
+  // 任务级 LoRA：在套图任务的 LoRA 配置中添加（不属于角色库）
+  ...Array.from({ length: MAX_TASK_LORAS }, (_, i) => [
+    [`task_lora${i + 1}_name`, `任务 LoRA ${i + 1} 名称`] as [string, string],
+    [`task_lora${i + 1}_strength`, `任务 LoRA ${i + 1} 强度`] as [string, string],
+  ]).flat(),
   ['filename_prefix', '输出文件前缀'],
 ]
 export const SOURCE_LABELS: Record<string, string> = Object.fromEntries(SOURCES)
@@ -27,6 +34,56 @@ export const DEFAULT_PREFIX_TEMPLATE = 'ComfyEngi/{任务}/{序号}_{姿态}'
 export const PREFIX_HELP = '{任务} {角色名} {剧情} {姿态} {服装} {表情} {镜头} {序号} {种子} {日期}'
 
 export class ComfyError extends Error {}
+
+// ---------------------------------------------------------------- LoRA 槽位
+// 一个逻辑 LoRA 配置项 = 一个映射来源前缀（lora1 / second_lora1 / task_lora1），可以绑定多个 Loader 节点：
+// 同一来源映射到多个节点时，生成时会把同一个 LoRA 与权重写入所有这些节点（例如两次采样各有一个 Loader）。
+// 强度来源写到哪个输入决定写入 Model 还是 Clip 权重：输入名包含 clip 时写 Clip 权重，否则写 Model 权重。
+
+export type LoraSlotKind = 'lora' | 'second_lora' | 'task_lora'
+export function parseLoraSource(src: string): { prefix: string; kind: LoraSlotKind; slot: number; field: 'name' | 'strength' } | null {
+  const m = /^(lora|second_lora|task_lora)(\d+)_(name|strength)$/.exec(src)
+  return m ? { prefix: `${m[1]}${m[2]}`, kind: m[1] as LoraSlotKind, slot: Number(m[2]), field: m[3] as 'name' | 'strength' } : null
+}
+export const isClipInput = (input: string) => /clip/i.test(input)
+
+type SlotLora = { name: string; strength: number; strength_clip?: number; disabled?: boolean }
+type LoraUnit = { loras?: SlotLora[]; loras2?: SlotLora[]; task_loras?: (SlotLora & { slot: number })[] }
+/** 某个槽位在这张图中实际要加载的 LoRA；未出场、未配置或已禁用时为 undefined */
+export function slotLora(unit: LoraUnit, kind: LoraSlotKind, slot: number): SlotLora | undefined {
+  const l = kind === 'lora' ? unit.loras?.[slot - 1] : kind === 'second_lora' ? unit.loras2?.[slot - 1] : unit.task_loras?.find((t) => t.slot === slot)
+  return l && !l.disabled && l.name ? l : undefined
+}
+
+/** 能识别的 LoRA Loader：标准节点完全支持；带 lora_name 与 strength_* 的自定义节点按同样方式写入；只有 lora_name 的为部分支持 */
+export const STANDARD_LORA_LOADERS = ['LoraLoader', 'LoraLoaderModelOnly']
+export interface LoraLoaderInfo {
+  node: string
+  title: string
+  class_type: string
+  support: 'standard' | 'compatible' | 'partial'
+  lora_name: string
+  strengths: string[]
+}
+export function findLoraLoaders(api: ApiWorkflow): LoraLoaderInfo[] {
+  const out: LoraLoaderInfo[] = []
+  for (const nid of sortNodeIds(Object.keys(api ?? {}))) {
+    const node = api[nid]
+    const inputs = node?.inputs ?? {}
+    if (typeof inputs.lora_name !== 'string') continue
+    const strengths = Object.keys(inputs).filter((k) => /^strength/.test(k) && typeof inputs[k] === 'number')
+    const support = STANDARD_LORA_LOADERS.includes(node.class_type) ? 'standard' : strengths.length ? 'compatible' : 'partial'
+    out.push({ node: nid, title: nodeTitle(node), class_type: node.class_type, support, lora_name: inputs.lora_name as string, strengths })
+  }
+  return out
+}
+/** 把一个 Loader 绑定到槽位时需要的映射：名称 + 该节点上的全部强度输入 */
+export function loraBindingEntries(prefix: string, loader: LoraLoaderInfo): MappingEntry[] {
+  return [
+    { source: `${prefix}_name`, node: loader.node, input: 'lora_name', modules: [], template: '' },
+    ...loader.strengths.map((input) => ({ source: `${prefix}_strength`, node: loader.node, input, modules: [], template: '' })),
+  ]
+}
 
 // ---------------------------------------------------------------- 工作流导入
 
@@ -261,8 +318,9 @@ export interface ValueUnit extends PrefixUnit {
   modules: Record<string, [string, string]>
   positive: string
   negative: string
-  loras: { name: string; strength: number }[]
-  loras2?: { name: string; strength: number }[]
+  loras: SlotLora[]
+  loras2?: SlotLora[]
+  task_loras?: (SlotLora & { slot: number })[]
 }
 
 /** 计算每个映射目标要写入的值。预览与实际提交都调用这个函数，保证一致。值为 null 表示保持工作流原值 */
@@ -272,7 +330,6 @@ export function mappingValues(
   settings: Pick<Settings, 'compose_order' | 'pos_separator' | 'neg_separator' | 'trim_modules'>,
   dateStr?: string,
 ): InputValue[] {
-  const loras = unit.loras ?? []
   return mapping.map((e) => {
     const src = e.source
     let value: unknown = null
@@ -282,13 +339,12 @@ export function mappingValues(
       value = src === 'positive' ? pos : neg
     } else if (src === 'seed') {
       value = Math.trunc(unit.seed)
-    } else if (src.startsWith('lora') || src.startsWith('second_lora')) {
-      // 第二角色未出场（或该槽位没有 LoRA）时名称保持工作流原值、强度写 0
-      const list = src.startsWith('second_') ? (unit.loras2 ?? []) : loras
-      const m = /lora(\d+)_/.exec(src)
-      const slot = (m ? parseInt(m[1], 10) : 1) - 1
-      if (src.endsWith('_name')) value = slot < list.length ? list[slot].name : null
-      else value = slot < list.length ? Number(list[slot].strength ?? 1.0) : 0.0
+    } else if (parseLoraSource(src)) {
+      // 槽位在这张图中没有要加载的 LoRA（未出场、已禁用）时：名称保持工作流原值、强度写 0
+      const p = parseLoraSource(src)!
+      const l = slotLora(unit, p.kind, p.slot)
+      if (p.field === 'name') value = l ? l.name : null
+      else value = l ? Number(isClipInput(e.input) ? (l.strength_clip ?? l.strength ?? 1.0) : (l.strength ?? 1.0)) : 0.0
     } else if (src === 'filename_prefix') {
       value = renderPrefix(e.template || DEFAULT_PREFIX_TEMPLATE, unit, dateStr)
     }

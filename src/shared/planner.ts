@@ -6,6 +6,7 @@
 import { compose, fillPlaceholders, joinParts, unescapeSeparator } from './prompt'
 import type {
   Character,
+  Lora,
   Modules,
   Outfit,
   PlanUnit,
@@ -148,7 +149,29 @@ export function expandTask(data: TaskData, lib: PlanLibrary, settings: Settings,
   if (data.male_base_id && !maleBase) errors.push('所选男性基础模板已被删除')
   const char2 = (data.second_character_id != null && lib.characters.get(data.second_character_id)) || null
   if (data.second_character_id && !char2) errors.push('所选第二角色已被删除')
-  const loras2 = char2 ? (char2.loras ?? []).filter((l) => l.name) : []
+  // LoRA：角色库中的 LoRA 是默认值，任务中的调整（禁用、替换、权重）覆盖它；任务级 LoRA 作用于整套图。
+  // 没有任何调整时与角色库完全相同（旧任务的计划不变）
+  const withOverrides = (list: Lora[], kind: 'lora' | 'second_lora'): Lora[] => {
+    const ov = data.lora_overrides ?? {}
+    const base = list.length ? list : ov[`${kind}1`]?.name ? [{ name: '', strength: 1 }] : []
+    return base.map((l, i) => {
+      const o = ov[`${kind}${i + 1}`]
+      if (!o) return l
+      const out: Lora = { ...l }
+      if (o.name) {
+        out.name = o.name
+        out.resource_id = o.resource_id
+      }
+      if (o.strength_model != null) out.strength = o.strength_model
+      if (o.strength_clip != null) out.strength_clip = o.strength_clip
+      if (!o.enabled) out.disabled = true
+      return out
+    })
+  }
+  const loras2 = withOverrides(char2 ? (char2.loras ?? []).filter((l) => l.name) : [], 'second_lora')
+  const taskLoras = (data.task_loras ?? []).filter((t) => t.enabled).map((t) => ({ name: t.name, resource_id: t.resource_id, strength: t.strength_model, strength_clip: t.strength_clip, slot: t.slot, label: t.label }))
+  for (const t of taskLoras) if (!t.name) errors.push(`任务 LoRA「${t.label}」已启用但还没有选择模型`)
+  if (new Set(taskLoras.map((t) => t.slot)).size !== taskLoras.length) errors.push('任务 LoRA 的槽位重复，请删除后重新添加')
 
   const checkOutfit = (oid: number | null | undefined, where: string, owner: Character | null = char): Outfit | null => {
     if (!oid) return null
@@ -171,7 +194,7 @@ export function expandTask(data: TaskData, lib: PlanLibrary, settings: Settings,
   })
 
   const charName = char?.name ?? ''
-  const loras = char ? (char.loras ?? []).filter((l) => l.name) : []
+  const loras = withOverrides(char ? (char.loras ?? []).filter((l) => l.name) : [], 'lora')
 
   const add = (
     section: 'story' | 'pose',
@@ -198,6 +221,7 @@ export function expandTask(data: TaskData, lib: PlanLibrary, settings: Settings,
     }
     // 第二角色的 LoRA 只在其出场时加入；字段只在有内容时写入，旧任务的计划结构不变
     if (withSecond && loras2.length) u.loras2 = loras2
+    if (taskLoras.length) u.task_loras = taskLoras
     units.push(u)
   }
 

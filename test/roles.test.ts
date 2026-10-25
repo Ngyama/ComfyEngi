@@ -138,7 +138,7 @@ describe('第二角色 LoRA 与工作流映射', () => {
     f.lib.addWorkflow()
     const t = f.lib.makeTask([f.lib.item('睡觉', null, [], 1, { second_enabled: true })], '双人', { second_character_id: f.charM })
     const p = planForTask(s, t)
-    expect(p.errors.some((e) => e.includes('第二角色「男角色」的 LoRA「charM.safetensors」没有映射到工作流'))).toBe(true)
+    expect(p.errors.some((e) => e.includes('第二角色「男角色」的 LoRA「charM.safetensors」已启用，但当前工作流没有绑定 LoRA Loader'))).toBe(true)
     expect(enqueueTask(s, t).runId).toBeNull()
   })
 
@@ -168,17 +168,19 @@ describe('第二角色 LoRA 与工作流映射', () => {
     const f = setup(s)
     f.lib.addWorkflow(MAP2.filter((m) => m.source !== 'second_lora1_strength'), WF2)
     const p = planForTask(s, f.lib.makeTask([f.lib.item('睡觉', null, [], 1)], 't', { second_character_id: f.charM }))
-    expect(p.errors.some((e) => e.includes('只映射了名称'))).toBe(true)
+    expect(p.errors.some((e) => e.includes('第二角色 LoRA 1 在部分图片中没有要加载的 LoRA') && e.includes('Loader 11 无法安全禁用'))).toBe(true)
   })
 
-  it('主角色 LoRA 没有映射时给出警告；Prompt 节点只拼接部分模块时提示未包含的第二角色模块', () => {
+  it('主角色 LoRA 没有绑定 Loader 时不能入队（可在任务中禁用）；Prompt 节点只拼接部分模块时提示未包含的第二角色模块', () => {
     const s = newStore()
     const f = setup(s)
     const map = SAMPLE_MAPPING.filter((m) => !m.source.startsWith('lora')).map((m) => (m.source === 'positive' ? { ...m, modules: ['global', 'character', 'content'] } : m))
     f.lib.addWorkflow(map)
-    const p = planForTask(s, f.lib.makeTask([f.lib.item('睡觉', null, [], 1, { second_enabled: true })], 't', { second_character_id: f.lib.charB }))
+    const t = f.lib.makeTask([f.lib.item('睡觉', null, [], 1, { second_enabled: true })], 't', { second_character_id: f.lib.charB })
+    expect(planForTask(s, t).errors.some((e) => e.includes('主角色「角色A」的 LoRA「charA.safetensors」已启用，但当前工作流没有绑定 LoRA Loader'))).toBe(true)
+    s.save('tasks', { id: t.id, data: { ...t.data, lora_overrides: { lora1: { enabled: false } } } })
+    const p = planForTask(s, s.get('tasks', t.id)!)
     expect(p.errors).toEqual([])
-    expect(p.warnings.some((w) => w.includes('主角色「角色A」的 LoRA「charA.safetensors」没有映射'))).toBe(true)
     expect(p.warnings.some((w) => w.includes('没有包含模块「第二角色」'))).toBe(true)
   })
 

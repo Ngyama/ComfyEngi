@@ -77,7 +77,8 @@ describe('旧数据库迁移', () => {
       // 组合顺序按需求改为新的默认顺序；这里用旧版顺序计算，验证内容（各模块、Seed、写入值）与旧版完全一致
       const plan = planForTask(store, store.get('tasks', Number(tid))!, { ...store.settings(), compose_order: expected.settings.compose_order }, '20260101')
       expect(plan.errors).toEqual(exp.errors)
-      expect(plan.warnings).toEqual(exp.warnings)
+      // 新增的提示：旧工作流只映射了 strength_model，strength_clip 会保持工作流原值（行为与旧版相同，只是现在会明确提示）
+      expect(plan.warnings.filter((w) => !w.includes('没有映射，这些权重会保持工作流原值'))).toEqual(exp.warnings)
       expect(plan.units.length).toBe(exp.units.length)
       plan.units.forEach((u, i) => {
         const e = exp.units[i]

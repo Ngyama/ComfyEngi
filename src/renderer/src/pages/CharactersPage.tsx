@@ -2,14 +2,12 @@
 // 角色标签、角色负面 Prompt、LoRA 权重、服装负面 / 备注不再显示；保存时不发送这些字段，旧内容原样保留。
 // 触发词不再作为隐藏的额外 Prompt 拼接：通过「导入触发词」在确认后写入可编辑的基础 Prompt / 新服装。
 
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useState } from 'react'
 import { AlertTriangle, ChevronDown, ChevronRight, ChevronsUpDown, Copy, Folder, FolderInput, FolderOpen, FolderPlus, GripVertical, Pencil, Plus, Shirt, Trash2, Unlink, UserPlus, Users, X } from 'lucide-react'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
-import { Command, CommandEmpty, CommandInput, CommandItem, CommandList } from '@/components/ui/command'
 import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuSeparator, ContextMenuTrigger } from '@/components/ui/context-menu'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
-import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { Avatar, EmptyState, FieldLabel, PromptField, SearchBox, TextInput } from '@/components/common'
 import { SortableArea, useSortableItem } from '@/components/sortable'
 import { DndContext, DragOverlay, PointerSensor, pointerWithin, useDraggable, useDroppable, useSensor, useSensors, type DragEndEvent } from '@dnd-kit/core'
@@ -18,85 +16,9 @@ import { hueOf, matches, useDraft } from '@/lib/hooks'
 import { confirm, reloadLib, useLib } from '@/lib/stores'
 import { cn } from '@/lib/utils'
 import { LoraThumb, loraTitle } from '@/pages/LorasPage'
+import { folderOf, LoraPicker, useLoraResources } from '@/components/lora'
 import { prependTags, promptTags } from '@shared/prompt'
 import type { Character, Lora, LoraResource, Outfit } from '@shared/types'
-
-// ---------------------------------------------------------------- LoRA 资源（复用 LoRA Manager 的数据接口）
-
-let resourceCache: LoraResource[] | null = null
-function useLoraResources() {
-  const [rows, setRows] = useState<LoraResource[]>(resourceCache ?? [])
-  const refresh = async () => {
-    const r = await api['loras.list']().catch(() => null)
-    if (r) {
-      resourceCache = r
-      setRows(r)
-    }
-  }
-  useEffect(() => {
-    void refresh()
-  }, [])
-  return { rows, refresh }
-}
-
-const fileStem = (r: LoraResource) => r.name.replace(/\.safetensors$/i, '')
-const folderOf = (r: LoraResource) => r.folder || r.root.replace(/[\\/]+$/, '').split(/[\\/]/).pop() || ''
-
-/** 可搜索的 LoRA 选择器：同时匹配本地文件名与 metadata 中的模型名称 */
-function LoraPicker({ resources, onPick, children }: { resources: LoraResource[]; onPick: (r: LoraResource) => void; children: React.ReactNode }) {
-  const [open, setOpen] = useState(false)
-  const [q, setQ] = useState('')
-  useEffect(() => {
-    if (open) setQ('')
-  }, [open])
-  const list = useMemo(() => {
-    const words = q.toLowerCase().split(/\s+/).filter(Boolean)
-    return resources
-      .filter((r) => !r.missing && !r.offline)
-      .filter((r) => {
-        const hay = `${r.name} ${r.sidecar?.modelName ?? ''} ${r.folder}`.toLowerCase()
-        return words.every((w) => hay.includes(w))
-      })
-      .sort((a, b) => loraTitle(a).localeCompare(loraTitle(b), 'zh'))
-  }, [resources, q])
-  const shown = list.slice(0, 60)
-  return (
-    <Popover open={open} onOpenChange={setOpen}>
-      <PopoverTrigger asChild>{children}</PopoverTrigger>
-      <PopoverContent className="w-[420px] p-0" align="start">
-        <Command shouldFilter={false}>
-          <CommandInput value={q} onValueChange={setQ} placeholder="搜索文件名或模型名称…" />
-          <CommandList className="max-h-[380px]">
-            <CommandEmpty>{resources.length ? '没有匹配的 LoRA' : '还没有扫描到 LoRA，请先在「LoRA 管理」中添加目录'}</CommandEmpty>
-            {shown.map((r) => (
-              <CommandItem
-                key={r.id}
-                value={r.id}
-                onSelect={() => {
-                  onPick(r)
-                  setOpen(false)
-                }}
-                className="gap-3 py-1.5"
-                data-testid="lora-picker-item"
-              >
-                <LoraThumb r={r} width={96} className="h-12 w-9 rounded-md" />
-                <div className="min-w-0 flex-1">
-                  <div className="truncate text-[13px]">{loraTitle(r)}</div>
-                  <div className="truncate text-[11px] text-muted-foreground">
-                    {folderOf(r)}
-                    {r.sidecar?.modelName && r.sidecar.modelName !== fileStem(r) ? ` · ${fileStem(r)}` : ''}
-                  </div>
-                </div>
-                {r.sidecar?.baseModel && <span className="shrink-0 rounded bg-tint/[0.06] px-1.5 py-0.5 text-[10px] text-muted-foreground">{r.sidecar.baseModel}</span>}
-              </CommandItem>
-            ))}
-            {list.length > shown.length && <div className="px-3 py-2 text-center text-[11px] text-muted-foreground">还有 {list.length - shown.length} 个结果，请输入更多关键词</div>}
-          </CommandList>
-        </Command>
-      </PopoverContent>
-    </Popover>
-  )
-}
 
 /** 角色的 LoRA：最多关联一个；旧版多 LoRA 数据保持原样并明确提示 */
 function LoraSection({ loras, resources, onChange, onResourceChanged, onImport }: { loras: Lora[]; resources: LoraResource[]; onChange: (v: Lora[]) => void; onResourceChanged: () => void; onImport: (r: LoraResource) => void }) {
@@ -113,7 +35,7 @@ function LoraSection({ loras, resources, onChange, onResourceChanged, onImport }
         <div className="flex items-start gap-2 text-xs leading-relaxed text-warning">
           <AlertTriangle className="mt-0.5 size-3.5 shrink-0" />
           <span>
-            这是旧版保存的 {loras.length} 个 LoRA（多槽位配置），生成时仍按原样全部使用，不会被修改。新版每个角色只关联一个 LoRA；如需改为单个，请点击「改为单个 LoRA」。
+            这是旧版保存的 {loras.length} 个 LoRA（多槽位配置），新任务仍会全部带入（可在套图任务的 LoRA 配置中逐个调整或禁用），不会被修改。新版每个角色只关联一个 LoRA；如需改为单个，请点击「改为单个 LoRA」。
           </span>
         </div>
         {loras.map((l, i) => {
@@ -322,7 +244,7 @@ function CharacterDetail({ c, resources, refreshResources, onDeleted }: { c: Cha
         <div className="min-w-0 flex-1">
           <div className="truncate text-[16px] font-semibold">{draft.name || '（未命名）'}</div>
           <div className="text-xs text-muted-foreground">
-            {outfits.length} 套服装 · {loras.length ? (loras.length > 1 ? `${loras.length} 个 LoRA（旧配置）` : '1 个 LoRA') : '未关联 LoRA'}
+            {outfits.length} 套服装 · {loras.length ? (loras.length > 1 ? `${loras.length} 个 LoRA（旧配置）` : '1 个 LoRA') : '未设置默认 LoRA'}
           </div>
         </div>
         <Button
@@ -358,7 +280,7 @@ function CharacterDetail({ c, resources, refreshResources, onDeleted }: { c: Cha
             <TextInput value={draft.name} onChange={(v) => patch({ name: v })} />
           </Section>
 
-          <Section title="LoRA" hint="最多关联一个；模型名称写入工作流中映射的 LoRA 节点">
+          <Section title="默认 LoRA" hint="角色通常对应的 LoRA。新任务自动带入；实际使用的模型、权重与是否启用在套图任务的 LoRA 配置中调整">
             <LoraSection loras={loras} resources={resources} onChange={(v) => patch({ loras: v })} onResourceChanged={refreshResources} onImport={setImporting} />
           </Section>
 
@@ -891,7 +813,7 @@ export default function CharactersPage() {
         {cur ? (
           <CharacterDetail key={`${cur.id}:${nonce}`} c={cur} resources={resources} refreshResources={refresh} onDeleted={() => setSel(null)} />
         ) : (
-          <EmptyState icon={<Users />} title={lib?.characters.length ? '选择一个角色' : '还没有角色'} description="角色包含 LoRA、触发词、基础 Prompt 与专属的服装模板；在套图任务中选择角色后会自动载入。右键角色或文件夹可以重命名、移动和删除。" />
+          <EmptyState icon={<Users />} title={lib?.characters.length ? '选择一个角色' : '还没有角色'} description="角色包含默认 LoRA、基础 Prompt 与专属的服装模板；在套图任务中选择角色后会自动载入，LoRA 的实际使用在任务中调整。右键角色或文件夹可以重命名、移动和删除。" />
         )}
       </div>
     </div>

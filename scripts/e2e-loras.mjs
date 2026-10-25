@@ -426,6 +426,26 @@ try {
   await win.locator('nav button', { hasText: 'LoRA' }).click()
   await win.locator('[data-testid=lora-card]', { hasText: 'Alice' }).click()
   await shot('l05-small')
+  // 套图任务的任务级 LoRA：从 LoRA Manager 选择；未绑定 Loader 时不能入队；不拼入 Prompt
+  await win.locator('nav button', { hasText: '套图任务' }).click()
+  await win.waitForTimeout(600)
+  await win.locator('[data-testid=add-task-lora]').click()
+  await win.getByPlaceholder('搜索文件名或模型名称…').fill('ink')
+  await win.waitForTimeout(300)
+  await win.locator('[data-testid=lora-picker-item]').first().click()
+  await win.waitForTimeout(900)
+  const taskCard = win.locator('[data-testid=lora-card][data-prefix=task_lora1]')
+  check('添加任务级 LoRA：显示为任务 LoRA，未绑定时明确提示', (await taskCard.count()) === 1 && (await taskCard.innerText()).includes('任务 LoRA') && (await taskCard.innerText()).includes('未绑定 Loader'), (await taskCard.innerText()).replace(/\n/g, ' | '))
+  const tp = await win.evaluate(async () => {
+    const lib = await window.api['library.load']()
+    return window.api['plan.forTask'](lib.settings.last_task_id ?? lib.tasks[0].id)
+  })
+  check('任务 LoRA 未绑定 Loader 时阻止入队，且不写入 Prompt', tp.errors.some((e) => e.includes('任务 LoRA「任务 LoRA 1」') && e.includes('没有绑定 LoRA Loader')) && tp.units.every((u) => !u.positive.includes('<lora:')), tp.errors.join(' / '))
+  await shot('c05-task-lora')
+  await taskCard.getByRole('button', { name: '删除任务 LoRA' }).click()
+  await win.waitForTimeout(500)
+  check('删除任务 LoRA', (await win.locator('[data-testid=lora-card][data-prefix=task_lora1]').count()) === 0)
+
   check('没有渲染进程错误', errors.length === 0, errors.slice(0, 3).join(' / '))
 } catch (e) {
   console.error(e)
