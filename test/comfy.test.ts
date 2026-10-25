@@ -9,10 +9,10 @@ import {
   loadApiWorkflow,
   mappingErrors,
   newEntry,
-  suggestMapping,
   validateMapping,
 } from '@shared/mapping'
 import type { RunnerEvent } from '@shared/types'
+import { analyzeWorkflow } from '@shared/workflow-analysis'
 import { ComfyClient, ComfyConnectionError, EventStream, type ComfyEvent, type EventSource } from '../src/main/comfy-client'
 import { enqueueTask, planForTask } from '../src/main/plan'
 import { Runner } from '../src/main/runner'
@@ -46,11 +46,11 @@ describe('工作流导入与映射', () => {
     expect(mappingErrors(SAMPLE_WORKFLOW, SAMPLE_MAPPING)).toEqual([])
   })
 
-  it('自动识别建议只作为候选，输出前缀默认不勾选', () => {
-    const sug = suggestMapping(SAMPLE_WORKFLOW)
-    const got = sug.filter((s) => s.checked).map((s) => `${s.entry.source}:${s.entry.node}.${s.entry.input}`)
-    expect(got).toEqual(expect.arrayContaining(['positive:6.text', 'negative:7.text', 'seed:3.seed']))
-    expect(sug.filter((s) => s.entry.source === 'filename_prefix').every((s) => !s.checked)).toBe(true)
+  it('自动识别建议只作为候选：结构明确的默认勾选，LoRA Loader 需要确认', () => {
+    const sug = analyzeWorkflow(SAMPLE_WORKFLOW).suggestions
+    const got = sug.filter((s) => s.checked).flatMap((s) => s.entries).map((e) => `${e.source}:${e.node}.${e.input}`)
+    expect(got).toEqual(expect.arrayContaining(['positive:6.text', 'negative:7.text', 'seed:3.seed', 'filename_prefix:9.filename_prefix']))
+    expect(sug.filter((s) => s.group === 'lora').every((s) => !s.checked)).toBe(true)
   })
 
   it('只修改映射的输入，原工作流不被改动', () => {

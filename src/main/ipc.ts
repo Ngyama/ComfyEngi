@@ -260,7 +260,7 @@ export function registerIpc(ctx: IpcContext) {
       try {
         const obj = await new ComfyClient(s.comfy_url).objectInfo()
         const inputsList = store.list('characters').map((c) =>
-          mappingValues({ loras: (c.loras ?? []).filter((l) => l.name), modules: {}, positive: '', negative: '', seed: 0, meta: {}, index: 0 }, wf.mapping, s),
+          mappingValues({ loras: (c.loras ?? []).filter((l) => l.name), modules: {}, positive: '', negative: '', seed: 0, meta: {}, index: 0 }, wf.mapping, s, undefined, wf.api_json),
         )
         return [...validateMapping(wf.api_json, wf.mapping), ...checkAgainstObjectInfo(wf.api_json, inputsList, obj as never)]
       } catch (e) {

@@ -6,7 +6,7 @@ import type { ApiNode, ApiWorkflow, InputValue, MappingEntry, Message, OutputFil
 
 export const MAX_LORA_SLOTS = 4
 /** 任务级 LoRA（画风、辅助、背景等）最多几个槽位 */
-export const MAX_TASK_LORAS = 6
+export const MAX_TASK_LORAS = 12
 
 export const SOURCES: [string, string][] = [
   ['positive', '正面 Prompt'],
@@ -39,6 +39,8 @@ export class ComfyError extends Error {}
 // 一个逻辑 LoRA 配置项 = 一个映射来源前缀（lora1 / second_lora1 / task_lora1），可以绑定多个 Loader 节点：
 // 同一来源映射到多个节点时，生成时会把同一个 LoRA 与权重写入所有这些节点（例如两次采样各有一个 Loader）。
 // 强度来源写到哪个输入决定写入 Model 还是 Clip 权重：输入名包含 clip 时写 Clip 权重，否则写 Model 权重。
+// 多 LoRA Loader（例如 Lora Loader (LoraManager)，loras.__value__ 是一组 LoRA 记录）用「列表绑定」：
+// 槽位可以追加为新条目，或替换列表中的某个条目；没有绑定的条目（工作流中固定的 LoRA）保持原样。
 
 export type LoraSlotKind = 'lora' | 'second_lora' | 'task_lora'
 export function parseLoraSource(src: string): { prefix: string; kind: LoraSlotKind; slot: number; field: 'name' | 'strength' } | null {
@@ -54,31 +56,127 @@ export function slotLora(unit: LoraUnit, kind: LoraSlotKind, slot: number): Slot
   const l = kind === 'lora' ? unit.loras?.[slot - 1] : kind === 'second_lora' ? unit.loras2?.[slot - 1] : unit.task_loras?.find((t) => t.slot === slot)
   return l && !l.disabled && l.name ? l : undefined
 }
+/**
+ * 槽位在这张图中的状态：active 要加载；inactive 不加载（停用、角色没有 LoRA、第二角色未出场），绑定的 Loader 需要禁用；
+ * absent 只用于任务 LoRA：本任务没有配置这个槽位，绑定的 Loader 保持工作流原值（不影响其他任务的绑定）
+ */
+export function slotState(unit: LoraUnit, kind: LoraSlotKind, slot: number): 'active' | 'inactive' | 'absent' {
+  if (slotLora(unit, kind, slot)) return 'active'
+  if (kind === 'task_lora' && !unit.task_loras?.some((t) => t.slot === slot)) return 'absent'
+  return 'inactive'
+}
 
-/** 能识别的 LoRA Loader：标准节点完全支持；带 lora_name 与 strength_* 的自定义节点按同样方式写入；只有 lora_name 的为部分支持 */
+/** ComfyUI 的 LoRA 名称（可能带目录与扩展名）→ 多 LoRA Loader 使用的名称（文件名，不含扩展名） */
+export const loraStem = (name: string) => (String(name).split(/[\\/]/).pop() ?? String(name)).replace(/\.(safetensors|ckpt|pt|bin)$/i, '')
+
+export interface StackEntry {
+  name: string
+  strength: number
+  clipStrength: number
+  active: boolean
+}
+/** 多 LoRA Loader 的 LoRA 列表（loras.__value__）；不是这种结构时为 null */
+export function loraStackOf(node: ApiNode | undefined): Record<string, unknown>[] | null {
+  const v = (node?.inputs?.loras as { __value__?: unknown } | undefined)?.__value__
+  return Array.isArray(v) ? (v as Record<string, unknown>[]) : null
+}
+const num = (v: unknown, d: number) => (Number.isFinite(Number(v)) && v !== '' && v !== null ? Number(v) : d)
+export function parseStack(list: Record<string, unknown>[]): StackEntry[] {
+  return list.map((e) => {
+    const strength = num(e.strength, 1)
+    return { name: String(e.name ?? ''), strength, clipStrength: num(e.clipStrength, strength), active: !!e.active }
+  })
+}
+
+/** 列表绑定：input 为 loras，template 为 stack:append 或 stack:replace:<条目名称> */
+export const isStackBinding = (e: Pick<MappingEntry, 'input' | 'template'>) => e.input === 'loras' && (e.template ?? '').startsWith('stack:')
+export const stackReplaceTarget = (e: Pick<MappingEntry, 'template'>) => ((e.template ?? '').startsWith('stack:replace:') ? (e.template ?? '').slice('stack:replace:'.length) : null)
+export function stackBindingEntry(prefix: string, node: string, replace: string | null = null): MappingEntry {
+  return { source: `${prefix}_name`, node, input: 'loras', modules: [], template: replace ? `stack:replace:${replace}` : 'stack:append' }
+}
+
+/**
+ * 计算多 LoRA Loader 写入后的列表：从工作流原列表出发，按绑定逐个处理。
+ * - 替换：active → 写入名称与权重并启用；inactive → 该条目停用（名称不变）；absent（任务未配置）→ 保持原样
+ * - 追加：active → 追加新条目；列表中已有同名条目时直接更新它，避免重复加载；inactive / absent → 不追加
+ * 其余条目（没有绑定的固定 LoRA）原样保留。
+ */
+export function applyLoraStack(orig: Record<string, unknown>[], bindings: MappingEntry[], unit: LoraUnit): Record<string, unknown>[] {
+  const list = orig.map((e) => ({ ...e }))
+  const find = (name: string) => list.findIndex((x) => String(x.name ?? '').toLowerCase() === name.toLowerCase())
+  for (const b of bindings) {
+    const p = parseLoraSource(b.source)
+    if (!p) continue
+    const state = slotState(unit, p.kind, p.slot)
+    if (state === 'absent') continue
+    const l = slotLora(unit, p.kind, p.slot)
+    const values = l ? { name: loraStem(l.name), strength: l.strength, clipStrength: l.strength_clip ?? l.strength, active: true } : null
+    const target = stackReplaceTarget(b)
+    const origIndex = target ? orig.findIndex((x) => String(x.name ?? '').toLowerCase() === target.toLowerCase()) : -1
+    if (target && origIndex >= 0) {
+      list[origIndex] = values ? { ...list[origIndex], ...values } : { ...list[origIndex], active: false }
+    } else if (values) {
+      const i = find(values.name)
+      if (i >= 0) list[i] = { ...list[i], ...values }
+      else list.push({ ...values, expanded: false, selected: false, locked: false })
+    }
+  }
+  return list
+}
+/** 与 LoRA 列表对应的 <lora:名称:权重> 文本（插件执行时只读取列表；文本只为保持两者一致） */
+export function loraStackText(list: Record<string, unknown>[]): string {
+  const f = (n: number) => String(Math.round(n * 100) / 100)
+  return parseStack(list)
+    .map((e) => `<lora:${e.name}:${f(e.strength)}${Math.abs(e.clipStrength - e.strength) > 0.001 ? `:${f(e.clipStrength)}` : ''}>`)
+    .join(' ')
+}
+
+/**
+ * 能识别的 LoRA Loader：
+ * - standard：LoraLoader / LoraLoaderModelOnly，完全支持；
+ * - compatible：带 lora_name 与 strength_* 数值输入的自定义节点，按同样方式写入；
+ * - partial：只有 lora_name，权重无法控制；
+ * - stack：多 LoRA Loader（loras.__value__ 为 LoRA 记录列表），按列表绑定写入；
+ * - unknown：类型名看起来与 LoRA 有关、但结构无法识别的节点，需要手动映射（不会被静默忽略）。
+ */
 export const STANDARD_LORA_LOADERS = ['LoraLoader', 'LoraLoaderModelOnly']
 export interface LoraLoaderInfo {
   node: string
   title: string
   class_type: string
-  support: 'standard' | 'compatible' | 'partial'
+  support: 'standard' | 'compatible' | 'partial' | 'stack' | 'unknown'
   lora_name: string
   strengths: string[]
+  /** 多 LoRA Loader 中的原有条目 */
+  entries?: StackEntry[]
 }
 export function findLoraLoaders(api: ApiWorkflow): LoraLoaderInfo[] {
   const out: LoraLoaderInfo[] = []
   for (const nid of sortNodeIds(Object.keys(api ?? {}))) {
     const node = api[nid]
     const inputs = node?.inputs ?? {}
-    if (typeof inputs.lora_name !== 'string') continue
-    const strengths = Object.keys(inputs).filter((k) => /^strength/.test(k) && typeof inputs[k] === 'number')
-    const support = STANDARD_LORA_LOADERS.includes(node.class_type) ? 'standard' : strengths.length ? 'compatible' : 'partial'
-    out.push({ node: nid, title: nodeTitle(node), class_type: node.class_type, support, lora_name: inputs.lora_name as string, strengths })
+    const base = { node: nid, title: nodeTitle(node), class_type: node.class_type }
+    const stack = loraStackOf(node)
+    if (stack) {
+      const entries = parseStack(stack)
+      out.push({ ...base, support: 'stack', lora_name: entries.map((e) => e.name).join('、'), strengths: [], entries })
+      continue
+    }
+    if (typeof inputs.lora_name === 'string') {
+      const strengths = Object.keys(inputs).filter((k) => /^strength/.test(k) && typeof inputs[k] === 'number')
+      const support = STANDARD_LORA_LOADERS.includes(node.class_type) ? 'standard' : strengths.length ? 'compatible' : 'partial'
+      out.push({ ...base, support, lora_name: inputs.lora_name as string, strengths })
+      continue
+    }
+    // 名称像 LoRA 加载器，但结构无法识别（触发词等辅助节点除外）
+    if (/lora/i.test(node.class_type) && !/trigger|tag|info|stack.*(apply|to)/i.test(node.class_type) && ('model' in inputs || 'clip' in inputs))
+      out.push({ ...base, support: 'unknown', lora_name: '', strengths: [] })
   }
   return out
 }
-/** 把一个 Loader 绑定到槽位时需要的映射：名称 + 该节点上的全部强度输入 */
+/** 把一个 Loader 绑定到槽位时需要的映射：标准 Loader 为名称 + 全部强度输入；多 LoRA Loader 默认追加为新条目 */
 export function loraBindingEntries(prefix: string, loader: LoraLoaderInfo): MappingEntry[] {
+  if (loader.support === 'stack') return [stackBindingEntry(prefix, loader.node)]
   return [
     { source: `${prefix}_name`, node: loader.node, input: 'lora_name', modules: [], template: '' },
     ...loader.strengths.map((input) => ({ source: `${prefix}_strength`, node: loader.node, input, modules: [], template: '' })),
@@ -179,6 +277,16 @@ export function validateMapping(api: ApiWorkflow, mapping: MappingEntry[]): Mess
       return
     }
     const cur = inputs[inp]
+    if (isStackBinding(e)) {
+      // 多 LoRA Loader 的列表绑定：同一节点可以有多个槽位；替换的条目应存在于列表中
+      const stack = loraStackOf(node)
+      if (!stack) out.push(['error', `${tag}：${label} 不是可识别的多 LoRA Loader（没有 loras 列表），请重新绑定`])
+      else {
+        const target = stackReplaceTarget(e)
+        if (target && !parseStack(stack).some((x) => x.name.toLowerCase() === target.toLowerCase())) out.push(['warning', `${tag}：${label} 的 LoRA 列表中没有「${target}」，生成时将改为追加`])
+      }
+      return
+    }
     if (isLink(cur)) {
       out.push(['error', `${tag}：${label} 的「${inp}」当前连接自节点 ${cur[0]}，不是可直接填写的值。请改为映射到上游提供该值的节点。`])
       return
@@ -208,63 +316,6 @@ export function validateMapping(api: ApiWorkflow, mapping: MappingEntry[]): Mess
 
 export function mappingErrors(api: ApiWorkflow, mapping: MappingEntry[]): string[] {
   return validateMapping(api, mapping).filter(([l]) => l === 'error').map(([, m]) => m)
-}
-
-export interface Suggestion {
-  entry: MappingEntry
-  checked: boolean
-  why: string
-}
-
-/** 根据常见节点结构给出映射建议，仅作为供用户勾选确认的候选，不会自动生效 */
-export function suggestMapping(api: ApiWorkflow): Suggestion[] {
-  const out: Suggestion[] = []
-  const seen = new Set<string>()
-  const add = (entry: MappingEntry, checked: boolean, why: string) => {
-    const k = `${entry.node}\u0000${entry.input}`
-    if (seen.has(k)) return
-    seen.add(k)
-    out.push({ entry, checked, why })
-  }
-  const ids = sortNodeIds(Object.keys(api))
-  for (const nid of ids) {
-    const node = api[nid]
-    for (const which of ['positive', 'negative']) {
-      const link = node.inputs?.[which]
-      if (isLink(link)) {
-        const src = api[link[0]]
-        if (src && typeof src.inputs?.text === 'string')
-          add(newEntry(which, link[0], 'text'), true, `节点 ${nid}（${nodeTitle(node)}）的 ${which} 输入来自此节点`)
-      }
-    }
-  }
-  for (const nid of ids) {
-    const node = api[nid]
-    for (const k of ['seed', 'noise_seed']) {
-      if (isInt(node.inputs?.[k])) add(newEntry('seed', nid, k), true, `${nodeTitle(node)} 的 ${k}`)
-    }
-  }
-  let loraSeen = false
-  for (const nid of ids) {
-    const node = api[nid]
-    if (typeof node.inputs?.lora_name === 'string') {
-      add(newEntry('lora1_name', nid, 'lora_name'), !loraSeen, `${nodeTitle(node)}（请确认这是角色 LoRA 而不是风格 LoRA）`)
-      for (const k of ['strength_model', 'strength_clip']) {
-        if (typeof node.inputs[k] === 'number') add(newEntry('lora1_strength', nid, k), !loraSeen, `${nodeTitle(node)} 的 ${k}`)
-      }
-      loraSeen = true
-    }
-  }
-  for (const nid of ids) {
-    const node = api[nid]
-    if (typeof node.inputs?.filename_prefix === 'string')
-      add(
-        newEntry('filename_prefix', nid, 'filename_prefix', [], DEFAULT_PREFIX_TEMPLATE),
-        false,
-        `${nodeTitle(node)}（勾选后将由本软件设置输出文件名前缀）`,
-      )
-  }
-  return out
 }
 
 /** 选择节点后，为该数据来源猜测合适的输入字段 */
@@ -329,8 +380,10 @@ export function mappingValues(
   mapping: MappingEntry[],
   settings: Pick<Settings, 'compose_order' | 'pos_separator' | 'neg_separator' | 'trim_modules'>,
   dateStr?: string,
+  /** 工作流 JSON：多 LoRA Loader 的列表绑定需要以工作流原列表为基础计算 */
+  api?: ApiWorkflow,
 ): InputValue[] {
-  return mapping.map((e) => {
+  const values: InputValue[] = mapping.filter((e) => !isStackBinding(e)).map((e) => {
     const src = e.source
     let value: unknown = null
     if (PROMPT_SOURCES.includes(src)) {
@@ -340,16 +393,28 @@ export function mappingValues(
     } else if (src === 'seed') {
       value = Math.trunc(unit.seed)
     } else if (parseLoraSource(src)) {
-      // 槽位在这张图中没有要加载的 LoRA（未出场、已禁用）时：名称保持工作流原值、强度写 0
+      // inactive（未出场、已停用）：名称保持工作流原值、强度写 0；absent（本任务未配置该任务 LoRA）：全部保持原值
       const p = parseLoraSource(src)!
+      const state = slotState(unit, p.kind, p.slot)
       const l = slotLora(unit, p.kind, p.slot)
-      if (p.field === 'name') value = l ? l.name : null
+      if (state === 'absent') value = null
+      else if (p.field === 'name') value = l ? l.name : null
       else value = l ? Number(isClipInput(e.input) ? (l.strength_clip ?? l.strength ?? 1.0) : (l.strength ?? 1.0)) : 0.0
     } else if (src === 'filename_prefix') {
       value = renderPrefix(e.template || DEFAULT_PREFIX_TEMPLATE, unit, dateStr)
     }
     return { node: String(e.node), input: e.input, source: src, value }
   })
+  // 多 LoRA Loader：同一节点的所有列表绑定合并为一次写入（loras 列表，以及与之对应的 text）
+  const stackNodes = [...new Set(mapping.filter(isStackBinding).map((e) => String(e.node)))]
+  for (const nid of stackNodes) {
+    const node = api?.[nid]
+    const orig = loraStackOf(node)
+    const list = orig ? applyLoraStack(orig, mapping.filter((e) => isStackBinding(e) && String(e.node) === nid), unit) : null
+    values.push({ node: nid, input: 'loras', source: 'lora_stack', value: list ? { ...(node!.inputs.loras as object), __value__: list } : null })
+    if (list && typeof node?.inputs?.text === 'string') values.push({ node: nid, input: 'text', source: 'lora_stack', value: loraStackText(list) })
+  }
+  return values
 }
 
 /** 复制工作流并只写入映射的输入值 */

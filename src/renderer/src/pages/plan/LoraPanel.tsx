@@ -12,13 +12,15 @@ import { api, call } from '@/lib/api'
 import { reloadLib, useLib, useNav, usePlan } from '@/lib/stores'
 import { cn } from '@/lib/utils'
 import { LoraThumb, loraTitle } from '@/pages/LorasPage'
-import { findLoraLoaders, loraBindingEntries, MAX_TASK_LORAS, parseLoraSource, type LoraLoaderInfo } from '@shared/mapping'
-import type { Lora, LoraOverride, LoraResource, TaskLora, Workflow } from '@shared/types'
+import { findLoraLoaders, loraBindingEntries, MAX_TASK_LORAS, parseLoraSource, stackBindingEntry, stackReplaceTarget, type LoraLoaderInfo } from '@shared/mapping'
+import type { Lora, LoraOverride, LoraResource, MappingEntry, TaskLora, Workflow } from '@shared/types'
 
 const SUPPORT: Record<LoraLoaderInfo['support'], [string, string]> = {
   standard: ['标准', 'bg-success/10 text-success'],
   compatible: ['兼容', 'bg-sky-500/10 text-sky-600'],
   partial: ['仅部分支持', 'bg-warning/10 text-warning'],
+  stack: ['多 LoRA 列表', 'bg-primary/10 text-primary'],
+  unknown: ['需手动映射', 'bg-tint/[0.06] text-muted-foreground'],
 }
 
 /** 本地文件名（不含扩展名与目录），与 LoRA 管理中的本地命名一致 */
@@ -55,20 +57,27 @@ const IconBtn = ({ label, onClick, className, children, ...rest }: { label: stri
   </button>
 )
 
-/** 槽位绑定的 Loader：勾选即把该节点的 lora_name 与全部强度输入映射到此槽位 */
+/** 槽位绑定的 Loader：标准 Loader 勾选即映射 lora_name 与全部强度；多 LoRA Loader 选择「追加」或「替换某个条目」 */
 function BindingPopover({ prefix, title, wf, onChanged }: { prefix: string; title: string; wf: Workflow | null; onChanged: () => void }) {
   const go = useNav((s) => s.go)
   const loaders = wf ? findLoraLoaders(wf.api_json) : []
   const mapping = wf?.mapping ?? []
+  const mine = (node: string) => mapping.find((m) => m.source === `${prefix}_name` && String(m.node) === node)
   const nodes = [...new Set(mapping.filter((m) => m.source === `${prefix}_name`).map((m) => String(m.node)))]
   const ownerOf = (node: string) => [...new Set(mapping.filter((m) => String(m.node) === node && parseLoraSource(m.source)?.field === 'name').map((m) => parseLoraSource(m.source)!.prefix))]
-  const toggle = async (ld: LoraLoaderInfo) => {
+  const save = async (next: MappingEntry[]) => {
     if (!wf) return
-    const on = nodes.includes(ld.node)
-    const next = on ? mapping.filter((m) => !(parseLoraSource(m.source)?.prefix === prefix && String(m.node) === ld.node)) : [...mapping, ...loraBindingEntries(prefix, ld)]
     if ((await call(api['workflows.save']({ id: wf.id, mapping: next }))) === undefined) return
     await reloadLib()
     onChanged()
+  }
+  const without = (node: string) => mapping.filter((m) => !(parseLoraSource(m.source)?.prefix === prefix && String(m.node) === node))
+  const toggle = (ld: LoraLoaderInfo) => void save(mine(ld.node) ? without(ld.node) : [...mapping, ...loraBindingEntries(prefix, ld)])
+  /** 多 LoRA Loader：选择同一项再次点击即解除绑定 */
+  const pickStack = (ld: LoraLoaderInfo, replace: string | null) => {
+    const cur = mine(ld.node)
+    const same = cur && (stackReplaceTarget(cur) ?? null) === replace
+    void save(same ? without(ld.node) : [...without(ld.node), stackBindingEntry(prefix, ld.node, replace)])
   }
   return (
     <Popover>
@@ -85,24 +94,57 @@ function BindingPopover({ prefix, title, wf, onChanged }: { prefix: string; titl
           {wf && nodes.length > 0 && <span className="tabular-nums">{nodes.length}</span>}
         </button>
       </PopoverTrigger>
-      <PopoverContent align="end" className="w-[380px] p-2">
+      <PopoverContent align="end" className="w-[400px] p-2">
         <div className="px-2 pt-1 pb-2 text-[11.5px] text-muted-foreground">
-          「{title}」写入哪些 LoRA Loader（工作流「{wf?.name}」）。可以绑定多个，例如两次采样各自的 Loader；未绑定的 Loader 保持工作流原值。
+          「{title}」写入哪些 LoRA Loader（工作流「{wf?.name}」）。可以绑定多个，例如两次采样各自的 Loader；未绑定的 Loader 与列表条目保持工作流原值。
         </div>
-        <div className="max-h-72 space-y-0.5 overflow-y-auto" data-testid="lora-loaders">
+        <div className="max-h-80 space-y-0.5 overflow-y-auto" data-testid="lora-loaders">
           {loaders.map((ld) => {
-            const on = nodes.includes(ld.node)
+            const cur = mine(ld.node)
             const others = ownerOf(ld.node).filter((p) => p !== prefix)
             const [tag, tone] = SUPPORT[ld.support]
+            const head = (
+              <div className="flex items-center gap-1.5 text-[12.5px]">
+                <span className="font-mono text-muted-foreground">#{ld.node}</span>
+                <span className="truncate">{ld.title}</span>
+                <span className={cn('shrink-0 rounded px-1 text-[10px]', tone)}>{tag}</span>
+              </div>
+            )
+            if (ld.support === 'unknown')
+              return (
+                <div key={ld.node} className="rounded-lg px-2 py-1.5 opacity-70">
+                  {head}
+                  <div className="text-[10.5px] text-muted-foreground">结构无法识别，需要在设置中手动映射</div>
+                </div>
+              )
+            if (ld.support === 'stack') {
+              const target = cur ? stackReplaceTarget(cur) : undefined
+              const opt = (replace: string | null, text: React.ReactNode, key: string) => {
+                const on = !!cur && (target ?? null) === replace
+                return (
+                  <button key={key} type="button" onClick={() => pickStack(ld, replace)} data-testid="stack-option" className={cn('flex w-full items-center gap-2 rounded-md px-2 py-1 text-left text-[11.5px] hover:bg-tint/[0.05]', on && 'bg-primary/10 text-primary')}>
+                    <span className={cn('grid size-3.5 shrink-0 place-items-center rounded-full border', on ? 'border-primary bg-primary' : 'border-tint/[0.3]')} />
+                    <span className="min-w-0 truncate">{text}</span>
+                  </button>
+                )
+              }
+              return (
+                <div key={ld.node} className={cn('rounded-lg px-2 py-1.5', cur && 'bg-primary/[0.04]')}>
+                  {head}
+                  <div className="mt-1 space-y-0.5">
+                    {opt(null, '追加为新条目（列表中已有同名时直接更新）', 'append')}
+                    {(ld.entries ?? []).map((e) => opt(e.name, <>替换「{e.name}」<span className="ml-1 font-mono text-muted-foreground">{e.strength}{e.active ? '' : ' · 停用'}</span></>, e.name))}
+                  </div>
+                  {others.length > 0 && <div className="mt-0.5 text-[10.5px] text-warning">也绑定在：{others.join('、')}</div>}
+                </div>
+              )
+            }
+            const on = !!cur
             return (
-              <button key={ld.node} type="button" onClick={() => void toggle(ld)} className={cn('flex w-full items-start gap-2 rounded-lg px-2 py-1.5 text-left hover:bg-tint/[0.05]', on && 'bg-primary/10')}>
+              <button key={ld.node} type="button" onClick={() => toggle(ld)} className={cn('flex w-full items-start gap-2 rounded-lg px-2 py-1.5 text-left hover:bg-tint/[0.05]', on && 'bg-primary/10')}>
                 <span className={cn('mt-0.5 grid size-4 shrink-0 place-items-center rounded border text-[10px]', on ? 'border-primary bg-primary text-primary-foreground' : 'border-tint/[0.3]')}>{on ? '✓' : ''}</span>
                 <div className="min-w-0 flex-1">
-                  <div className="flex items-center gap-1.5 text-[12.5px]">
-                    <span className="font-mono text-muted-foreground">#{ld.node}</span>
-                    <span className="truncate">{ld.title}</span>
-                    <span className={cn('shrink-0 rounded px-1 text-[10px]', tone)}>{tag}</span>
-                  </div>
+                  {head}
                   <div className="truncate font-mono text-[10.5px] text-muted-foreground">
                     {ld.lora_name || '（空）'} · {ld.strengths.length ? ld.strengths.join(' / ') : '没有识别到强度输入'}
                   </div>
@@ -111,7 +153,7 @@ function BindingPopover({ prefix, title, wf, onChanged }: { prefix: string; titl
               </button>
             )
           })}
-          {wf && !loaders.length && <div className="px-2 py-3 text-center text-xs text-muted-foreground">工作流中没有识别到 LoRA Loader（带 lora_name 输入的节点）。</div>}
+          {wf && !loaders.length && <div className="px-2 py-3 text-center text-xs text-muted-foreground">工作流中没有识别到 LoRA Loader。</div>}
         </div>
         <div className="mt-2 border-t border-tint/[0.08] px-2 pt-2 text-[11px] text-muted-foreground">
           自定义节点无法识别时，可以
@@ -271,6 +313,29 @@ export function LoraPanel() {
   }
   const taskLoras = [...(d.task_loras ?? [])].sort((a, b) => a.slot - b.slot)
   const freeSlot = Array.from({ length: MAX_TASK_LORAS }, (_, i) => i + 1).find((n) => !taskLoras.some((t) => t.slot === n))
+  // 把多 LoRA Loader 中尚未交给任务控制的条目导入为任务 LoRA：每个条目绑定为「替换该条目」，之后由任务控制启用与权重
+  const stackLoaders = wf ? findLoraLoaders(wf.api_json).filter((l) => l.support === 'stack') : []
+  const claimed = new Set((wf?.mapping ?? []).filter((m) => m.input === 'loras').map((m) => `${m.node}\u0000${(stackReplaceTarget(m) ?? '').toLowerCase()}`))
+  const importable = stackLoaders.flatMap((ld) => (ld.entries ?? []).filter((e) => !claimed.has(`${ld.node}\u0000${e.name.toLowerCase()}`)).map((e) => ({ ld, e })))
+  const importFromWorkflow = async () => {
+    if (!wf) return
+    const used = new Set(taskLoras.map((t) => t.slot))
+    const free = Array.from({ length: MAX_TASK_LORAS }, (_, i) => i + 1).filter((n) => !used.has(n))
+    const picked = importable.slice(0, free.length)
+    if (!picked.length) return
+    const added: TaskLora[] = picked.map(({ e }, i) => {
+      const r = resources.find((x) => fileStem(x.name).toLowerCase() === e.name.toLowerCase())
+      return { slot: free[i], label: e.name, enabled: e.active, resource_id: r?.id, name: r ? r.comfyName || r.name : e.name, strength_model: e.strength, strength_clip: e.clipStrength }
+    })
+    const mapping = [...wf.mapping, ...picked.map(({ ld, e }, i) => stackBindingEntry(`task_lora${free[i]}`, ld.node, e.name))]
+    if ((await call(api['workflows.save']({ id: wf.id, mapping }))) === undefined) return
+    update((x) => {
+      x.task_loras = [...(x.task_loras ?? []), ...added]
+    })
+    await reloadLib()
+    setNonce((n) => n + 1)
+    toast.success(`已导入 ${added.length} 个 LoRA`, { description: importable.length > picked.length ? `任务 LoRA 槽位已满，还有 ${importable.length - picked.length} 个保持工作流原样` : '现在可以在这里启用、停用或调整它们的权重。' })
+  }
   const addTask = (r: LoraResource) => {
     if (!freeSlot) return
     update((x) => {
@@ -285,6 +350,11 @@ export function LoraPanel() {
         <span className="text-[11px] font-medium tracking-wide text-muted-foreground uppercase">LoRA</span>
         <span className="text-[11px] text-muted-foreground/70">写入工作流的 LoRA Loader 节点，作用于整套图</span>
         <div className="flex-1" />
+        {importable.length > 0 && freeSlot && (
+          <button type="button" data-testid="import-workflow-loras" onClick={() => void importFromWorkflow()} title="把工作流多 LoRA Loader 中的 LoRA 导入为任务 LoRA，由本任务控制启用与权重" className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-[12px] text-muted-foreground hover:bg-tint/[0.05] hover:text-primary">
+            导入工作流中的 LoRA（{importable.length}）
+          </button>
+        )}
         {freeSlot && (
           <LoraPicker resources={resources} onPick={addTask}>
             <button type="button" data-testid="add-task-lora" className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-[12px] text-muted-foreground hover:bg-tint/[0.05] hover:text-primary">

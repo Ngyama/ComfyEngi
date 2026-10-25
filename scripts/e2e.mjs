@@ -381,7 +381,54 @@ try {
   await win.getByRole('button', { name: '编辑节点映射' }).click()
   await win.waitForTimeout(500)
   check('从任务页进入该工作流的节点映射编辑', (await win.getByText('节点输入映射').count()) > 0 && (await win.locator('main').innerText()).includes('imported-api'))
+
+  // 真实工作流样本：ImpactWildcardProcessor + 字符串拼接 / 正则 + Lora Loader (LoraManager) + 两次采样
+  const twoPass = join(dataDir, 'workflow-two-pass.json')
+  copyFileSync(join(root, 'test', 'fixtures', 'workflow-two-pass.json'), twoPass)
+  await app.evaluate(({ dialog }, f) => {
+    dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [f] })
+  }, twoPass)
   await nav('套图任务')
+  await win.locator('[data-testid=workflow-menu]').click()
+  await win.getByRole('button', { name: '导入 API 工作流' }).click()
+  await win.waitForTimeout(800)
+  await win.locator('[data-testid=workflow-menu]').click()
+  await win.getByRole('button', { name: '编辑节点映射' }).click()
+  await win.waitForTimeout(600)
+  await win.getByRole('button', { name: '自动识别' }).click()
+  await win.waitForTimeout(400)
+  const rowState = (g, node) => win.locator(`[data-testid=suggest-row][data-group=${g}][data-node="${node}"] [role=checkbox]`).first().getAttribute("data-state")
+  await shot('19d-auto-detect')
+  check('自动识别：正负 Prompt（#3 / #4）默认勾选，#32 主 Seed 勾选、#107 独立 Seed 不勾选，#121 输出勾选',
+    (await rowState('prompt', '3')) === 'checked' && (await rowState('prompt', '4')) === 'checked' && (await rowState('seed', '32')) === 'checked' && (await rowState('seed', '107')) === 'unchecked' && (await rowState('output', '121')) === 'checked')
+  check('自动识别：多 LoRA Loader #5 需要确认（不默认勾选），并提示触发词节点 #34', (await rowState('lora', '5')) === 'unchecked' && (await win.locator('[data-testid=suggest-notes]').innerText()).includes('#34'))
+  await win.getByRole('button', { name: '应用勾选项' }).click()
+  await win.waitForTimeout(800)
+  check('应用后映射有效', (await win.getByText('映射有效').count()) === 1, (await win.locator('main').innerText()).slice(-300).replace(/\n/g, ' | '))
+  await nav('套图任务')
+  await win.waitForTimeout(500)
+  const importBtn = win.locator('[data-testid=import-workflow-loras]')
+  check('LoRA 配置区可以导入工作流多 LoRA Loader 中的 LoRA', (await importBtn.innerText()).includes('8'), await importBtn.innerText())
+  await importBtn.click()
+  await win.waitForTimeout(1000)
+  const stackNow = async () => {
+    const p = await win.evaluate(async () => {
+      const lib = await window.api['library.load']()
+      return window.api['plan.forTask'](lib.settings.last_task_id ?? lib.tasks[0].id)
+    })
+    return p.units.find((u) => u.section === 'pose').inputs.find((x) => x.node === '5' && x.input === 'loras')?.value.__value__ ?? []
+  }
+  const s1 = await stackNow()
+  check('导入后由任务控制：写入 #5 的 LoRA 列表与原列表一致（8 个，含原来停用的条目）', (await win.locator('[data-testid=lora-card][data-prefix^=task_lora]').count()) === 8 && s1.length === 8 && s1[0].name === 'BlueArchiveStyle_illus_1884029' && s1.filter((e) => e.active).length === 7, JSON.stringify(s1.map((e) => [e.name, e.active])))
+  await win.locator('[data-testid=lora-card][data-prefix=task_lora1]').getByRole('button', { name: '停用' }).click()
+  await win.waitForTimeout(900)
+  const s2 = await stackNow()
+  check('在任务中停用其中一个：#5 的对应条目 active=false，其余不变', s2[0].active === false && s2.slice(1).map((e) => e.active).join() === s1.slice(1).map((e) => e.active).join(), JSON.stringify(s2.map((e) => [e.name, e.active])))
+  await shot('19e-imported-loras')
+  while ((await win.locator('[data-testid=lora-card][data-prefix^=task_lora]').count()) > 0) {
+    await win.locator('[data-testid=lora-card][data-prefix^=task_lora]').first().getByRole('button', { name: '删除任务 LoRA' }).click()
+    await win.waitForTimeout(250)
+  }
   await win.locator('[data-testid=workflow-menu]').click()
   await win.locator('[data-radix-popper-content-wrapper] button', { hasText: '测试工作流' }).last().click()
   await win.waitForTimeout(300)

@@ -2,10 +2,10 @@ import { readFileSync, existsSync } from 'node:fs'
 import { join } from 'node:path'
 // 任务 → 生成计划（预览与入队共用），以及把计划冻结写入执行队列。
 
-import { findLoraLoaders, mappingValues, parseLoraSource, slotLora, SOURCE_LABELS, validateMapping } from '@shared/mapping'
+import { findLoraLoaders, isStackBinding, loraStem, mappingValues, parseLoraSource, slotLora, slotState, SOURCE_LABELS, stackReplaceTarget, validateMapping } from '@shared/mapping'
 import { expandTask, normalizeTaskData, PlanLibrary } from '@shared/planner'
 import { MODULE_LABELS } from '@shared/prompt'
-import type { PlanUnit, Settings, Task, Workflow } from '@shared/types'
+import type { MappingEntry, PlanUnit, Settings, Task, Workflow } from '@shared/types'
 import type { Store } from './store'
 
 export function loadPlanLibrary(store: Store): PlanLibrary {
@@ -33,13 +33,14 @@ export interface FullPlan {
  */
 function checkLoraSlots(wf: Workflow, units: PlanUnit[], errors: string[], warnings: string[], once: (list: string[], msg: string) => void) {
   const loaders = new Map(findLoraLoaders(wf.api_json ?? {}).map((l) => [l.node, l]))
-  const bind = new Map<string, { nodes: Set<string>; strengths: Set<string> }>()
+  const bind = new Map<string, { nodes: Set<string>; strengths: Set<string>; stack: Map<string, MappingEntry> }>()
   for (const m of wf.mapping ?? []) {
     const p = parseLoraSource(m.source)
     if (!p) continue
-    const b = bind.get(p.prefix) ?? { nodes: new Set<string>(), strengths: new Set<string>() }
+    const b = bind.get(p.prefix) ?? { nodes: new Set<string>(), strengths: new Set<string>(), stack: new Map<string, MappingEntry>() }
     if (p.field === 'name') b.nodes.add(String(m.node))
     else b.strengths.add(`${m.node}.${m.input}`)
+    if (isStackBinding(m)) b.stack.set(String(m.node), m)
     bind.set(p.prefix, b)
   }
   const slotTitle = (prefix: string) => (SOURCE_LABELS[`${prefix}_name`] ?? prefix).replace(/ 名称$/, '')
@@ -59,7 +60,16 @@ function checkLoraSlots(wf: Workflow, units: PlanUnit[], errors: string[], warni
         if (!wf.api_json?.[node]) once(errors, `${slotTitle(prefix)} 绑定的节点 ${node} 不存在于当前工作流中，请重新绑定`)
         else if (!ld) once(warnings, `${slotTitle(prefix)} 绑定的节点 ${node}（${wf.api_json[node].class_type}）不是能识别的 LoRA Loader，请人工确认写入的输入是否正确`)
         else if (ld.support === 'partial') once(warnings, `${slotTitle(prefix)} 绑定的节点 ${node}（${ld.class_type}）只识别到 lora_name，权重无法由本软件控制，请人工确认`)
-        else {
+        else if (ld.support === 'unknown') once(warnings, `${slotTitle(prefix)} 绑定的节点 ${node}（${ld.class_type}）的结构无法识别，请人工确认写入是否生效`)
+        else if (ld.support === 'stack') {
+          const e = b.stack.get(node)
+          if (!e) once(errors, `${slotTitle(prefix)} 绑定的节点 ${node} 是多 LoRA Loader，但映射不是列表绑定：请在 LoRA 配置中重新绑定`)
+          else if (!stackReplaceTarget(e)) {
+            const stem = loraStem(slotLora(u, parseLoraSource(`${prefix}_name`)!.kind, parseLoraSource(`${prefix}_name`)!.slot)?.name ?? '')
+            if ((ld.entries ?? []).some((x) => x.name.toLowerCase() === stem.toLowerCase()))
+              once(warnings, `${slotTitle(prefix)} 追加到 Loader ${node} 时，列表中已有同名 LoRA「${stem}」：将直接更新该条目（不会重复加载）`)
+          }
+        } else {
           const missing = ld.strengths.filter((inp) => !b.strengths.has(`${node}.${inp}`))
           if (missing.length) once(warnings, `${slotTitle(prefix)} 绑定的 Loader ${node} 的 ${missing.join('、')} 没有映射，这些权重会保持工作流原值`)
         }
@@ -67,9 +77,12 @@ function checkLoraSlots(wf: Workflow, units: PlanUnit[], errors: string[], warni
     }
     for (const [prefix, b] of bind) {
       if (active.has(prefix) || !b.nodes.size) continue
+      const p = parseLoraSource(`${prefix}_name`)!
+      if (slotState(u, p.kind, p.slot) === 'absent') continue // 本任务没有配置这个任务 LoRA：绑定的 Loader 保持工作流原值
       for (const node of b.nodes) {
         const ld = loaders.get(node)
-        const safe = !!ld && ld.support !== 'partial' && ld.strengths.length > 0 && ld.strengths.every((inp) => b.strengths.has(`${node}.${inp}`))
+        // 多 LoRA Loader 总能安全禁用（停用条目或不追加）；标准 Loader 需要全部强度输入都已映射（写 0）
+        const safe = ld?.support === 'stack' || (!!ld && ld.support !== 'partial' && ld.support !== 'unknown' && ld.strengths.length > 0 && ld.strengths.every((inp) => b.strengths.has(`${node}.${inp}`)))
         if (!safe)
           once(errors, `${slotTitle(prefix)} 在部分图片中没有要加载的 LoRA（未选择、已禁用或第二角色未出场），但绑定的 Loader ${node} 无法安全禁用：请映射它的全部强度输入（将写为 0），或移除这个绑定`)
       }
@@ -122,7 +135,7 @@ export function planForTask(store: Store, task: Task, settings?: Settings, dateS
     const msgs = validateMapping(wf.api_json ?? {}, wf.mapping ?? [])
     for (const [lvl, msg] of msgs) (lvl === 'error' ? errors : warnings).push(`工作流「${wf.name}」${msg}`)
     if (!msgs.some(([l]) => l === 'error')) {
-      for (const u of units) u.inputs = mappingValues(u, wf.mapping, settings, dateStr)
+      for (const u of units) u.inputs = mappingValues(u, wf.mapping, settings, dateStr, wf.api_json)
     }
   }
   if (!units.length && !errors.length) errors.push('计划为空：请选择剧情模板或添加动作')

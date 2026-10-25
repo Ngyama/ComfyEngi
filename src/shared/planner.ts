@@ -169,8 +169,9 @@ export function expandTask(data: TaskData, lib: PlanLibrary, settings: Settings,
     })
   }
   const loras2 = withOverrides(char2 ? (char2.loras ?? []).filter((l) => l.name) : [], 'second_lora')
-  const taskLoras = (data.task_loras ?? []).filter((t) => t.enabled).map((t) => ({ name: t.name, resource_id: t.resource_id, strength: t.strength_model, strength_clip: t.strength_clip, slot: t.slot, label: t.label }))
-  for (const t of taskLoras) if (!t.name) errors.push(`任务 LoRA「${t.label}」已启用但还没有选择模型`)
+  // 停用的任务 LoRA 也保留在计划中（disabled）：绑定的 Loader 要禁用它；任务中没有的槽位则保持工作流原值
+  const taskLoras = (data.task_loras ?? []).map((t) => ({ name: t.name, resource_id: t.resource_id, strength: t.strength_model, strength_clip: t.strength_clip, slot: t.slot, label: t.label, ...(t.enabled ? {} : { disabled: true }) }))
+  for (const t of taskLoras) if (!t.disabled && !t.name) errors.push(`任务 LoRA「${t.label}」已启用但还没有选择模型`)
   if (new Set(taskLoras.map((t) => t.slot)).size !== taskLoras.length) errors.push('任务 LoRA 的槽位重复，请删除后重新添加')
 
   const checkOutfit = (oid: number | null | undefined, where: string, owner: Character | null = char): Outfit | null => {

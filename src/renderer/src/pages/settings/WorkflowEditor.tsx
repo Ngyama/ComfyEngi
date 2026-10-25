@@ -21,11 +21,14 @@ import {
   PREFIX_HELP,
   PROMPT_SOURCES,
   SOURCES,
+  isStackBinding,
+  loraStackOf,
+  parseLoraSource,
+  parseStack,
   sortNodeIds,
-  suggestMapping,
   validateMapping,
-  type Suggestion,
 } from '@shared/mapping'
+import { analyzeWorkflow, mergeMapping, type Suggestion, type WorkflowAnalysis } from '@shared/workflow-analysis'
 import { MODULES, MODULE_LABELS } from '@shared/prompt'
 import type { MappingEntry, Message, Workflow } from '@shared/types'
 
@@ -45,42 +48,68 @@ export function Select({ value, onChange, options, className }: { value: string;
   )
 }
 
-function SuggestDialog({ open, onOpenChange, suggestions, onApply }: { open: boolean; onOpenChange: (o: boolean) => void; suggestions: Suggestion[]; onApply: (e: MappingEntry[]) => void }) {
+const GROUPS: [Suggestion['group'], string][] = [
+  ['prompt', 'Prompt'],
+  ['seed', 'Seed'],
+  ['lora', 'LoRA Loader'],
+  ['output', '输出'],
+]
+
+function SuggestDialog({ open, onOpenChange, analysis, onApply }: { open: boolean; onOpenChange: (o: boolean) => void; analysis: WorkflowAnalysis | null; onApply: (e: MappingEntry[]) => void }) {
+  const suggestions = analysis?.suggestions ?? []
   const [checked, setChecked] = useState<boolean[]>([])
-  useEffect(() => setChecked(suggestions.map((s) => s.checked)), [suggestions])
+  useEffect(() => setChecked(suggestions.map((s) => s.checked)), [analysis]) // eslint-disable-line react-hooks/exhaustive-deps
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-2xl">
-        <DialogHeader>
-          <DialogTitle>自动识别建议</DialogTitle>
-          <DialogDescription>根据节点连接关系找到的候选映射，仅供参考。请逐项确认后再应用；不会修改工作流的其他任何内容。</DialogDescription>
+      <DialogContent className="flex max-h-[calc(100dvh-2rem)] flex-col sm:max-w-3xl">
+        <DialogHeader className="shrink-0">
+          <DialogTitle>自动识别</DialogTitle>
+          <DialogDescription>根据节点类型与连接关系找到的候选。结构明确的项目已默认勾选，有歧义的需要你确认；应用后保存到这个工作流的映射中，之后无需重复设置。</DialogDescription>
         </DialogHeader>
-        <div className="max-h-96 space-y-1 overflow-y-auto">
-          {suggestions.map((s, i) => (
-            <label key={i} className="flex cursor-pointer items-start gap-3 rounded-lg px-2.5 py-2 hover:bg-tint/[0.04]">
-              <Checkbox className="mt-0.5" checked={!!checked[i]} onCheckedChange={(v) => setChecked((c) => c.map((x, j) => (j === i ? !!v : x)))} />
-              <div className="min-w-0 text-[13px]">
-                <div>
-                  <span className="font-medium">{SOURCES.find(([k]) => k === s.entry.source)?.[1]}</span>
-                  <span className="text-muted-foreground"> → </span>
-                  <span className="font-mono text-[12px]">
-                    {s.entry.node}.{s.entry.input}
-                  </span>
+        <div className="-mx-1 min-h-0 flex-1 space-y-4 overflow-y-auto px-1 py-0.5" data-testid="suggest-list">
+          {(analysis?.notes ?? []).length > 0 && (
+            <div className="space-y-1 rounded-lg bg-warning/[0.07] p-3 text-[11.5px] leading-relaxed text-warning" data-testid="suggest-notes">
+              {analysis!.notes.map((n, i) => (
+                <div key={i} className="flex gap-1.5">
+                  <AlertCircle className="mt-0.5 size-3.5 shrink-0" />
+                  <span>{n}</span>
                 </div>
-                <div className="text-[11px] text-muted-foreground">{s.why}</div>
-              </div>
-            </label>
-          ))}
+              ))}
+            </div>
+          )}
+          {GROUPS.map(([g, title]) => {
+            const rows = suggestions.map((s, i) => [s, i] as const).filter(([s]) => s.group === g)
+            if (!rows.length) return null
+            return (
+              <section key={g}>
+                <div className="mb-1 px-1 text-[11px] font-medium tracking-wide text-muted-foreground uppercase">{title}</div>
+                {rows.map(([s, i]) => (
+                  <label key={i} className="flex cursor-pointer items-start gap-3 rounded-lg px-2.5 py-2 hover:bg-tint/[0.04]" data-testid="suggest-row" data-group={g} data-node={s.node}>
+                    <Checkbox className="mt-0.5" checked={!!checked[i]} onCheckedChange={(v) => setChecked((c) => c.map((x, j) => (j === i ? !!v : x)))} />
+                    <div className="min-w-0 flex-1 text-[13px]">
+                      <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
+                        <span className="font-medium">{s.title}</span>
+                        <span className="font-mono text-[11.5px] text-muted-foreground">{s.nodeLabel}</span>
+                        <span className={cn('rounded px-1 text-[10px]', s.confidence === 'high' ? 'bg-success/10 text-success' : 'bg-warning/10 text-warning')}>{s.confidence === 'high' ? '高置信度' : '需确认'}</span>
+                      </div>
+                      <div className="text-[11px] text-muted-foreground">{s.why}</div>
+                      {s.preview && <div className="mt-0.5 truncate font-mono text-[10.5px] text-muted-foreground/80" title={s.preview}>原值：{s.preview}</div>}
+                    </div>
+                  </label>
+                ))}
+              </section>
+            )
+          })}
           {!suggestions.length && <div className="py-6 text-center text-xs text-muted-foreground">没有找到可识别的节点，请在右侧节点列表中手动添加映射。</div>}
         </div>
-        <DialogFooter>
+        <DialogFooter className="shrink-0">
           <Button variant="ghost" onClick={() => onOpenChange(false)}>
             取消
           </Button>
           <Button
             disabled={!checked.some(Boolean)}
             onClick={() => {
-              onApply(suggestions.filter((_, i) => checked[i]).map((s) => s.entry))
+              onApply(suggestions.filter((_, i) => checked[i]).flatMap((s) => s.entries))
               onOpenChange(false)
             }}
           >
@@ -118,7 +147,7 @@ export function WorkflowEditor({ id, onDeleted }: { id: number; onDeleted: () =>
   const [wf, setWf] = useState<Workflow | null>(null)
   const [q, setQ] = useState('')
   const [openNodes, setOpenNodes] = useState<Set<string>>(new Set())
-  const [suggest, setSuggest] = useState<Suggestion[] | null>(null)
+  const [suggest, setSuggest] = useState<WorkflowAnalysis | null>(null)
   const [online, setOnline] = useState<Message[] | null>(null)
   const [checking, setChecking] = useState(false)
   useEffect(() => {
@@ -143,6 +172,8 @@ export function WorkflowEditor({ id, onDeleted }: { id: number; onDeleted: () =>
     const e = next[i]
     if ('node' in p) e.input = guessInput(e.source, api_json[e.node]?.inputs ?? {})
     if ('source' in p && p.source === 'filename_prefix' && !e.template) e.template = DEFAULT_PREFIX_TEMPLATE
+    // LoRA 名称映射到多 LoRA Loader 的 loras 列表：默认追加为新条目
+    if (parseLoraSource(e.source)?.field === 'name' && e.input === 'loras' && loraStackOf(api_json[e.node]) && !isStackBinding(e)) e.template = 'stack:append'
     void saveMapping(next)
   }
   const addFromInput = (nid: string, inp: string) => {
@@ -223,7 +254,7 @@ export function WorkflowEditor({ id, onDeleted }: { id: number; onDeleted: () =>
           <div className="flex items-center gap-2 pb-2">
             <FieldLabel hint="只有这里列出的输入会被写入">节点输入映射</FieldLabel>
             <div className="flex-1" />
-            <Button size="sm" variant="ghost" onClick={() => setSuggest(suggestMapping(api_json))}>
+            <Button size="sm" variant="ghost" onClick={() => setSuggest(analyzeWorkflow(api_json))}>
               <Wand2 /> 自动识别
             </Button>
             <Button size="sm" variant="ghost" onClick={() => void saveMapping([...mapping, newEntry('positive')])}>
@@ -276,6 +307,16 @@ export function WorkflowEditor({ id, onDeleted }: { id: number; onDeleted: () =>
                       </div>
                     ) : e.source.endsWith('_strength') ? (
                       '角色没有该槽位的 LoRA 时写入 0'
+                    ) : isStackBinding(e) ? (
+                      <div className="flex min-w-0 flex-1 items-center gap-2">
+                        <span className="shrink-0">LoRA 列表</span>
+                        <Select
+                          value={e.template ?? 'stack:append'}
+                          onChange={(v) => setEntry(i, { template: v })}
+                          options={[['stack:append', '追加为新条目（同名则更新）'], ...parseStack(loraStackOf(node) ?? []).map((x) => [`stack:replace:${x.name}`, `替换「${x.name}」`] as [string, string])]}
+                          className="min-w-0 flex-1"
+                        />
+                      </div>
                     ) : e.source.endsWith('_name') ? (
                       '角色没有该槽位的 LoRA 时保持工作流原值'
                     ) : (
@@ -359,11 +400,8 @@ export function WorkflowEditor({ id, onDeleted }: { id: number; onDeleted: () =>
       <SuggestDialog
         open={!!suggest}
         onOpenChange={(o) => !o && setSuggest(null)}
-        suggestions={suggest ?? []}
-        onApply={(entries) => {
-          const existing = new Set(mapping.map((e) => `${e.node}\u0000${e.input}`))
-          void saveMapping([...mapping, ...entries.filter((e) => !existing.has(`${e.node}\u0000${e.input}`))])
-        }}
+        analysis={suggest}
+        onApply={(entries) => void saveMapping(mergeMapping(mapping, entries))}
       />
     </div>
   )
