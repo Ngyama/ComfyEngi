@@ -6,9 +6,10 @@
 // 扩展点：将来的「自动筛图」可在 record() 标记 done 之前插入检查步骤。
 
 import { randomUUID } from 'node:crypto'
+import { mkdir, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { applyInputs, ComfyError, extractOutputs, historyError, historyInterrupted } from '@shared/mapping'
-import type { RunnerEvent, RunnerState, RunnerStatus, RunUnit, Settings } from '@shared/types'
+import type { OutputFile, RunnerEvent, RunnerState, RunnerStatus, RunUnit, Settings } from '@shared/types'
 import { ComfyClient, ComfyHTTPError, EventStream, type ComfyApi, type EventSource, type HistoryEntry } from './comfy-client'
 import type { Store } from './store'
 
@@ -267,7 +268,7 @@ export class Runner {
       }
       if (entry) {
         this.log(`补记录：第 ${u.idx + 1} 张（${u.item_label}）已在 ComfyUI 完成`)
-        this.record(u, pid, entry)
+        await this.record(u, pid, entry, client)
       } else if (running.includes(pid) || pending.includes(pid)) {
         this.log(`第 ${u.idx + 1} 张仍在 ComfyUI 队列中，继续等待结果`)
         this.store.updateUnit(u.id, { status: 'submitted' })
@@ -396,7 +397,7 @@ export class Runner {
         lastPoll = now
         try {
           let entry = await client.history(pid)
-          if (entry) return this.record(unit, pid, entry)
+          if (entry) return await this.record(unit, pid, entry, client)
           const [running, pending] = await client.queueIds()
           if (connDown) {
             connDown = false
@@ -408,7 +409,7 @@ export class Runner {
           } else {
             // 先查队列再查历史，两次都找不到才认定丢失（避免完成瞬间的竞态）
             entry = await client.history(pid)
-            if (entry) return this.record(unit, pid, entry)
+            if (entry) return await this.record(unit, pid, entry, client)
             if (++lost >= 2) {
               this.log(`第 ${unit.idx + 1} 张在 ComfyUI 中消失（可能 ComfyUI 重启），将重新提交`)
               this.store.updateUnit(unit.id, { status: 'pending', prompt_id: null })
@@ -434,7 +435,55 @@ export class Runner {
     }
   }
 
-  private record(unit: RunUnit, pid: string, entry: HistoryEntry): Result {
+  /**
+   * 把这张图的最终输出从 ComfyUI 复制到入队时冻结的输出目录（unit.meta.output_dir）。
+   * - ComfyUI 的 filename_prefix 只能指定它自己 output 目录下的子路径，因此由本软件通过 /view 下载后保存，
+   *   ComfyUI 本机或远程运行都适用；ComfyUI 中的原文件不删除、不移动
+   * - 只复制最终输出：映射了「输出文件前缀」的保存节点；没有该映射时为工作流中没有被其他节点使用的保存节点；预览图（temp）不复制
+   * - 不覆盖已有文件（同名时追加 (2)、(3)…）；保存路径与失败原因记录在输出信息中
+   */
+  private async saveOutputs(unit: RunUnit, outputs: OutputFile[], client: ComfyApi) {
+    const dir = unit.meta?.output_dir
+    if (!dir) return
+    let finals = new Set((unit.inputs ?? []).filter((x) => x.source === 'filename_prefix').map((x) => String(x.node)))
+    if (!finals.size) {
+      const wf = (this.store.getRun(unit.run_id)?.workflow_json ?? {}) as Record<string, { inputs?: Record<string, unknown> }>
+      const used = new Set(Object.values(wf).flatMap((n) => Object.values(n.inputs ?? {}).filter((v): v is [string, number] => Array.isArray(v) && typeof v[0] === 'string').map((v) => v[0])))
+      finals = new Set(Object.keys(wf).filter((id) => typeof wf[id].inputs?.filename_prefix === 'string' && !used.has(id)))
+    }
+    const seen = new Set<string>()
+    for (const o of outputs) {
+      if (o.type !== 'output' || (finals.size && !finals.has(o.node))) continue
+      const k = `${o.subfolder}/${o.filename}`
+      if (seen.has(k)) continue
+      seen.add(k)
+      try {
+        const sub = String(o.subfolder ?? '').split(/[\\/]/).filter((p) => p && p !== '.' && p !== '..').map((p) => p.replace(/[<>:"|?*\x00-\x1f]/g, '_'))
+        const name = String(o.filename).split(/[\\/]/).pop()!.replace(/[<>:"|?*\x00-\x1f]/g, '_')
+        if (!name) throw new Error('ComfyUI 没有返回文件名')
+        const target = join(dir, ...sub)
+        await mkdir(target, { recursive: true })
+        const data = await client.fetchImage(o)
+        const dot = name.lastIndexOf('.')
+        const stem = dot > 0 ? name.slice(0, dot) : name
+        const ext = dot > 0 ? name.slice(dot) : ''
+        for (let n = 1; ; n++) {
+          const p = join(target, n > 1 ? `${stem} (${n})${ext}` : name)
+          try {
+            await writeFile(p, data, { flag: 'wx' }) // 不覆盖已有文件
+            o.saved = p
+            break
+          } catch (e) {
+            if ((e as NodeJS.ErrnoException).code !== 'EEXIST' || n > 9999) throw e
+          }
+        }
+      } catch (e) {
+        o.save_error = `复制到 ${dir} 失败：${(e as Error).message}`
+      }
+    }
+  }
+
+  private async record(unit: RunUnit, pid: string, entry: HistoryEntry, client: ComfyApi): Promise<Result> {
     const s = this.store.settings()
     const now = Date.now() / 1000
     const outputs = extractOutputs(entry, s.comfy_output_dir || '', (...p) => join(...p))
@@ -455,9 +504,12 @@ export class Runner {
       return 'failed'
     }
     // 扩展点：将来在这里插入自动筛图（检查 outputs 后决定是否继续后续处理）
+    await this.saveOutputs(unit, outputs, client)
     this.store.updateUnit(unit.id, { status: 'done', outputs, finished_at: now, error: '' })
-    const files = outputs.filter((o) => o.type === 'output').map((o) => o.filename).join(', ') || '无输出文件信息'
+    const files = outputs.filter((o) => o.type === 'output').map((o) => o.saved || o.filename).join(', ') || '无输出文件信息'
     this.log(`第 ${unit.idx + 1} 张完成：${files}`)
+    const failed = outputs.filter((o) => o.save_error)
+    if (failed.length) this.log(`第 ${unit.idx + 1} 张有 ${failed.length} 个文件未能复制到输出目录：${failed[0].save_error}（ComfyUI 中的原文件不受影响）`)
     return 'done'
   }
 }

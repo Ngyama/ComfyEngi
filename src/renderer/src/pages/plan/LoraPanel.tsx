@@ -47,7 +47,7 @@ function Weight({ value, onChange, disabled }: { value: number; onChange: (v: nu
       onKeyDown={(e) => e.key === 'Enter' && commit()}
       aria-label="权重"
       title="权重（同时用于 Model 与 Clip）"
-      className="h-6 w-[52px] rounded-md bg-tint/[0.04] px-1.5 text-right font-mono text-[11.5px] text-foreground ring-1 ring-tint/[0.112] outline-none focus:ring-primary/50 disabled:opacity-50"
+      className="h-6 w-[60px] [appearance:textfield] rounded-md bg-tint/[0.04] px-2 text-right font-mono text-[11.5px] text-foreground tabular-nums ring-1 ring-tint/[0.112] outline-none focus:ring-primary/50 disabled:opacity-50 [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
     />
   )
 }
@@ -266,24 +266,25 @@ function PlacementPopover({ cfg, loaders, current, placement, onSet }: { cfg: Wf
         </button>
       </PopoverTrigger>
       <PopoverContent align="end" className="w-[340px] p-2">
-        <div className="px-2 pt-1 pb-2 text-[11.5px] text-muted-foreground">角色 LoRA 的加载位置。工作流中已有同名 LoRA 时总是关联该条目（不会重复加载）；不会自动覆盖画风等其他 LoRA。</div>
+        <div className="px-2 pt-1 pb-2 text-[11.5px] text-muted-foreground">角色 LoRA 的加载位置。工作流中已有同名 LoRA 时直接使用该条目，不会重复加载。</div>
         <div className="max-h-72 space-y-0.5 overflow-y-auto">
           {opt(!current, '自动：关联同名条目，否则追加到唯一的多 LoRA 列表', () => onSet(null), 'auto')}
-          {stacks.map((l) => opt(!!current && !current.replace && current.node === l.node, `追加到 #${l.node} ${l.title}`, () => onSet({ node: l.node }), `a${l.node}`))}
-          {cfg.entries.map((e) => opt(current?.replace === e.key, <>替换 #{e.node} 的「{fileStem(e.name)}」</>, () => onSet({ node: e.node, replace: e.key }), e.key))}
+          {stacks.map((l) => opt(!!current && !current.replace && current.node === l.node, stacks.length > 1 ? `追加到 ${l.title}` : '追加到工作流 LoRA', () => onSet({ node: l.node }), `a${l.node}`))}
+          {cfg.entries.map((e) => opt(current?.replace === e.key, <>替换「{fileStem(e.name)}」</>, () => onSet({ node: e.node, replace: e.key }), e.key))}
         </div>
       </PopoverContent>
     </Popover>
   )
 }
 
-const placementText = (p: RolePlacement) => (p.kind === 'link' ? `关联 #${p.node} 已有条目` : p.kind === 'append' ? `追加到 #${p.node}` : p.kind === 'replace' ? `替换 #${p.node} 的条目` : '工作流中没有加载位置')
+const placementText = (p: RolePlacement, cfg: WfLoraConfig | null) =>
+  p.kind === 'link' ? '已在工作流 LoRA 中' : p.kind === 'append' ? '追加到工作流 LoRA' : p.kind === 'replace' ? `替换工作流中的「${fileStem(cfg?.entries.find((e) => e.key === p.key)?.name ?? '')}」` : '工作流中没有加载位置'
 
 export function LoraPanel() {
   const lib = useLib((s) => s.lib)
   const { task, update } = usePlan()
   const { rows: resources } = useLoraResources()
-  const wfId = task?.data.workflow_id ?? lib?.settings.default_workflow_id ?? null
+  const wfId = task?.data.workflow_none ? null : (task?.data.workflow_id ?? lib?.settings.default_workflow_id ?? null)
   const [wf, setWf] = useState<Workflow | null>(null)
   const [nonce, setNonce] = useState(0)
   useEffect(() => {
@@ -366,7 +367,7 @@ export function LoraPanel() {
         <LoraCard
           key={prefix}
           cardKey={prefix}
-          source={`${who} · ${c.name}${base.length > 1 ? ` · ${i + 1}` : ''}${l ? '' : '（角色未设置）'}${!advanced && name ? ` · ${placementText(placement)}` : ''}`}
+          source={`${who} · ${c.name}${base.length > 1 ? ` · ${i + 1}` : ''}${l ? '' : '（角色未设置）'}${!advanced && name ? ` · ${placementText(placement, cfg)}` : ''}`}
           tag={o ? '已调整' : undefined}
           lora={lora}
           resources={resources}
@@ -400,11 +401,9 @@ export function LoraPanel() {
     const fed = cons(ld.node)
     return (
       <div key={ld.node} className="contents">
-        <div className="col-span-full flex items-center gap-2 pt-1 text-[11px] text-muted-foreground" data-testid="lora-group" data-node={ld.node}>
-          <span className="font-mono">#{ld.node}</span>
-          <span className="truncate">{ld.title}</span>
-          <span className={cn('shrink-0 rounded px-1 text-[10px]', SUPPORT[ld.support][1])}>{SUPPORT[ld.support][0]}</span>
-          {fed.length > 0 && <span className="truncate">作用于 {fed.map((x) => `#${x}`).join('、')}</span>}
+        <div className="col-span-full flex items-center gap-2 pt-1 text-[11px] text-muted-foreground" data-testid="lora-group" data-node={ld.node} title={fed.length ? `使用它的采样节点：${fed.join('、')}` : undefined}>
+          <span className="font-medium tracking-wide uppercase">工作流 LoRA</span>
+          {loaders.length > 1 && <span className="truncate">{ld.title}</span>}
           <div className="flex-1" />
           {stack && (
             <LoraPicker resources={resources} onPick={addTo(ld.node)}>
@@ -421,7 +420,7 @@ export function LoraPanel() {
             <LoraCard
               key={e.key}
               cardKey={`wf:${e.key}`}
-              source={`#${ld.node} · ${e.orig == null ? '本任务添加' : '工作流'}`}
+              source={e.orig == null ? '本任务添加' : '工作流'}
               tag={e.orig != null && modified ? '已修改' : undefined}
               lora={{ name: e.name, resource_id: e.resource_id, weight: e.strength, enabled: e.enabled }}
               resources={resources}
@@ -435,7 +434,7 @@ export function LoraPanel() {
             />
           )
         })}
-        {!entries.length && <div className="col-span-full rounded-xl border border-dashed border-tint/[0.16] px-3 py-2 text-center text-[11.5px] text-muted-foreground">这个 Loader 中没有其他 LoRA</div>}
+        {!entries.length && <div className="col-span-full rounded-xl border border-dashed border-tint/[0.16] px-3 py-2 text-center text-[11.5px] text-muted-foreground">没有其他工作流 LoRA</div>}
       </div>
     )
   })
@@ -445,7 +444,7 @@ export function LoraPanel() {
     <div className="@container px-6 pb-4">
       <div className="mb-1.5 flex items-center gap-2">
         <span className="text-[11px] font-medium tracking-wide text-muted-foreground uppercase">LoRA</span>
-        <span className="text-[11px] text-muted-foreground/70">{wf ? `读取自工作流「${wf.name}」，在这里的修改只作用于本任务` : '选择工作流后显示其中的 LoRA'}</span>
+        <span className="text-[11px] text-muted-foreground/70">{wf ? '修改只作用于本任务' : '选择工作流后显示工作流 LoRA'}</span>
         <div className="flex-1" />
         {saved && (
           <button type="button" data-testid="reset-lora-config" onClick={resetCfg} className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-[12px] text-muted-foreground hover:bg-tint/[0.05] hover:text-primary">
@@ -455,6 +454,7 @@ export function LoraPanel() {
       </div>
       {/* 稳定网格：容器宽度足够时每行 3 个，中等 2 个，较窄 1 个；不会横向溢出 */}
       <div className="grid grid-cols-1 gap-2 @2xl:grid-cols-2 @5xl:grid-cols-3" data-testid="lora-panel">
+        {(mainCards.length > 0 || secondCards.length > 0) && <div className="col-span-full text-[11px] font-medium tracking-wide text-muted-foreground uppercase">角色 LoRA</div>}
         {mainCards}
         {secondCards}
         {groups}
@@ -483,7 +483,7 @@ export function LoraPanel() {
         <div className="mt-1.5 space-y-0.5 text-[11px] text-muted-foreground">
           {others.map((l) => (
             <div key={l.node}>
-              #{l.node} {l.title}：{mappedLoraNodes(mapping).has(l.node) ? '由工作流的高级映射控制' : l.support === 'partial' ? '只识别到 lora_name，权重无法控制，保持工作流原值' : '结构无法识别，保持工作流原值（需要时请在工作流映射中手动设置）'}
+              {l.title}：{mappedLoraNodes(mapping).has(l.node) ? '由工作流的高级映射控制' : l.support === 'partial' ? '只识别到 lora_name，权重无法控制，保持工作流原值' : '结构无法识别，保持工作流原值（需要时请在工作流映射中手动设置）'}
             </div>
           ))}
         </div>

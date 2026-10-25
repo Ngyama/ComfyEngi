@@ -179,6 +179,8 @@ export interface TaskData {
   workflow_id: number | null
   seed_base: number
   items: TaskItem[]
+  /** 任务中清除了工作流选择（workflow_id 为 null 时原本表示「使用默认工作流」，为兼容旧任务另用这个标记） */
+  workflow_none?: boolean
   /** 默认场景：应用到动作序列中没有单独指定场景的动作（不用于剧情场景） */
   scene_id?: number | null
   /** 第二角色（与主角色来自同一个角色库，可不选择）。character_id 即主角色 */
@@ -188,6 +190,13 @@ export interface TaskData {
   task_loras?: TaskLora[]
   /** 按工作流保存的 LoRA 配置（键为工作流 ID）：工作流中已有的 LoRA 是默认值；切换工作流不会串用 */
   lora_configs?: Record<string, import('./lora-config').WfLoraConfig>
+  /** 输出：dir 为最终图片的复制目录（默认工作区 output/）；prefix 为 ComfyUI 的文件名前缀模板（空则使用工作流映射中的模板） */
+  output?: TaskOutput
+}
+
+export interface TaskOutput {
+  dir?: string
+  prefix?: string
 }
 
 export interface Task extends Timestamps {
@@ -254,6 +263,8 @@ export interface UnitMeta {
   position?: string
   subposition?: string
   acts?: string[]
+  /** 入队时冻结的输出目录：完成后最终图片复制到这里（没有时不复制） */
+  output_dir?: string
   /** 第二角色出场时：角色名、服装、动作、表情 */
   character2?: string
   outfit2?: string
@@ -307,6 +318,10 @@ export interface OutputFile {
   subfolder: string
   type: string
   path: string
+  /** 复制到任务输出目录后的本地路径（只有最终输出图片会复制） */
+  saved?: string
+  /** 复制到任务输出目录失败的原因 */
+  save_error?: string
 }
 
 export interface RunUnit {

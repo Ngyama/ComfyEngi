@@ -41,7 +41,9 @@ export function createVault(root:string, legacy?:string) {
     }
     store.files = library
     const after = store.list('tasks').map(t => planForTask(store!,t,undefined,'2000-01-01'))
-    const comparable = (plans: typeof before) => plans.map(p=>({...p,workflow:p.workflow ? {id:p.workflow.id,name:p.workflow.name,api_json:p.workflow.api_json,mapping:p.workflow.mapping} : null}))
+    // 输出目录由是否在工作区中决定（迁移后才有工作区），不属于迁移比较的内容
+    const noOut = (p: (typeof before)[number]) => p.units.map((u) => { const { output_dir: _o, ...meta } = u.meta; void _o; return { ...u, meta } })
+    const comparable = (plans: typeof before) => plans.map(p=>({...p,units:noOut(p),workflow:p.workflow ? {id:p.workflow.id,name:p.workflow.name,api_json:p.workflow.api_json,mapping:p.workflow.mapping} : null}))
     if (!isDeepStrictEqual(comparable(before),comparable(after))) throw new Error('迁移前后任务计划不同')
     store.tx(() => { for (const t of ['outfits','characters','templates','stories','workflows']) store!.db.exec(`DELETE FROM ${t}`) })
     store.close(); store=undefined

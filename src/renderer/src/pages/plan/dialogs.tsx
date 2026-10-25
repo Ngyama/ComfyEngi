@@ -11,13 +11,28 @@ import { templatesOf, useLib, usePlan } from '@/lib/stores'
 import { cn } from '@/lib/utils'
 import { SOURCE_LABELS } from '@shared/mapping'
 import { randomSeed } from '@shared/planner'
+import { renderPrefix } from '@shared/mapping'
 import type { Plan } from '@shared/api'
 
 export function TaskSettingsDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (o: boolean) => void }) {
   const lib = useLib((s) => s.lib)
   const { task, update } = usePlan()
+  const [vaultRoot, setVaultRoot] = useState<string | null>(null)
+  useEffect(() => {
+    if (open) void api['vault.info']().then((v) => setVaultRoot(v.root)).catch(() => setVaultRoot(null))
+  }, [open])
   if (!task) return null
   const d = task.data
+  const out = d.output ?? {}
+  const setOut = (patch: Partial<NonNullable<typeof d.output>>) =>
+    update((x) => {
+      const next = { ...(x.output ?? {}), ...patch }
+      for (const k of Object.keys(next) as (keyof typeof next)[]) if (!next[k]) delete next[k]
+      x.output = Object.keys(next).length ? next : undefined
+    })
+  const sep = vaultRoot?.includes('\\') ? '\\' : '/'
+  const defaultDir = vaultRoot ? `${vaultRoot.replace(/[\\/]+$/, '')}${sep}output` : ''
+  const prefixPreview = out.prefix ? renderPrefix(out.prefix, { meta: { task: task.name, item: '动作' }, index: 0, seed: d.seed_base }) : ''
   const maleBase = templatesOf(lib, 'male').find((m) => m.id === d.male_base_id)
   const defaultScene = templatesOf(lib, 'scene').find((t) => t.id === d.scene_id)
   return (
@@ -27,7 +42,7 @@ export function TaskSettingsDialog({ open, onOpenChange }: { open: boolean; onOp
           <DialogTitle>任务设置</DialogTitle>
           <DialogDescription>作用于整套图的生成参数。全局 Prompt 在页面顶部选择，工作流在页面右上角选择，场景在每个动作的详情中选择。</DialogDescription>
         </DialogHeader>
-        <div className="space-y-5">
+        <div className="min-w-0 space-y-5">
           {/* 全局 Prompt 在页面顶部选择、工作流在页面右上角选择、场景在每个动作的详情中选择。
               旧任务的默认场景只在已设置时显示（仍会应用到没有单独指定场景的动作），可以清除 */}
           {!!d.scene_id && (
@@ -57,6 +72,31 @@ export function TaskSettingsDialog({ open, onOpenChange }: { open: boolean; onOp
               </div>
             </section>
           )}
+          <section data-testid="task-output">
+            <FieldLabel hint="ComfyUI 先按文件名前缀保存到它自己的 output 目录，完成后本软件把最终图片复制到这里（不覆盖同名文件，不删除 ComfyUI 中的原文件）">输出目录</FieldLabel>
+            <div className="flex gap-2">
+              <TextInput value={out.dir ?? ''} onChange={(v) => setOut({ dir: v })} placeholder={defaultDir ? `默认：${defaultDir}` : '默认：工作区 output/'} mono className="min-w-0 flex-1" />
+              <Button
+                variant="secondary"
+                onClick={async () => {
+                  const dir = await call(api['app.chooseOutputDir']('选择本任务的输出目录'))
+                  if (dir) setOut({ dir })
+                }}
+              >
+                选择…
+              </Button>
+              {out.dir && (
+                <Button variant="ghost" onClick={() => setOut({ dir: '' })}>
+                  恢复默认
+                </Button>
+              )}
+            </div>
+            <div className="mt-3">
+              <FieldLabel hint="写入工作流映射的「输出文件前缀」；/ 分隔子文件夹。可用 %date:yyyy-MM-dd% 以及 {任务} {角色名} {姿态} {序号} {种子} 等">文件名前缀</FieldLabel>
+            </div>
+            <TextInput value={out.prefix ?? ''} onChange={(v) => setOut({ prefix: v })} placeholder="留空则使用工作流映射中的模板，例如 %date:yyyy-MM-dd%/image" mono data-testid="task-prefix" />
+            {prefixPreview && <div className="mt-1 font-mono text-[11px] text-muted-foreground" data-testid="prefix-preview">示例：{prefixPreview}_00001_.png</div>}
+          </section>
           <section>
             <FieldLabel hint="第 N 张的 Seed = 起始 Seed + N − 1，预览中即为实际值">起始 Seed</FieldLabel>
             <div className="flex gap-2">

@@ -360,9 +360,45 @@ export function renderPrefix(template: string, unit: PrefixUnit, dateStr?: strin
   ]
   let out = template || DEFAULT_PREFIX_TEMPLATE
   for (const [k, v] of values) out = out.split(k).join(safe(v))
-  // 允许 / 作为子目录分隔，去掉空段
-  const parts = out.split('\\').join('/').split('/').filter((p) => p.trim() && p !== '.' && p !== '..')
+  // ComfyUI 网页界面风格的 %date:yyyy-MM-dd% 由本软件展开（通过 API 提交时 ComfyUI 不会展开它）
+  out = expandDateTokens(out, dateFrom(dateStr))
+  // 允许 / 作为子目录分隔，去掉空段；每一段去掉 Windows 文件名中的非法字符
+  const parts = out
+    .split('\\')
+    .join('/')
+    .split('/')
+    .filter((p) => p.trim() && p !== '.' && p !== '..')
+    .map((p) => p.replace(BAD_PATH, '_').replace(/[. ]+$/, '') || '_')
   return parts.join('/') || 'ComfyEngi'
+}
+
+/** dateStr（yyyyMMdd 或 yyyy-MM-dd，测试与预览用）→ 日期；没有时为当前时间 */
+function dateFrom(dateStr?: string): Date {
+  const m = /^(\d{4})-?(\d{2})-?(\d{2})$/.exec(dateStr ?? '')
+  return m ? new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3])) : new Date()
+}
+
+/** 展开 %date:格式% ：yyyy yy MM M dd d HH H hh h mm m ss s（与 ComfyUI 网页界面的写法一致） */
+export function expandDateTokens(text: string, d = new Date()): string {
+  const p2 = (n: number) => String(n).padStart(2, '0')
+  const h12 = d.getHours() % 12 || 12
+  const map: Record<string, string> = {
+    yyyy: String(d.getFullYear()),
+    yy: String(d.getFullYear()).slice(-2),
+    MM: p2(d.getMonth() + 1),
+    M: String(d.getMonth() + 1),
+    dd: p2(d.getDate()),
+    d: String(d.getDate()),
+    HH: p2(d.getHours()),
+    H: String(d.getHours()),
+    hh: p2(h12),
+    h: String(h12),
+    mm: p2(d.getMinutes()),
+    m: String(d.getMinutes()),
+    ss: p2(d.getSeconds()),
+    s: String(d.getSeconds()),
+  }
+  return text.replace(/%date:([^%]+)%/g, (_, fmt: string) => fmt.replace(/yyyy|yy|MM|M|dd|d|HH|H|hh|h|mm|m|ss|s/g, (t) => map[t]))
 }
 
 export interface ValueUnit extends PrefixUnit {

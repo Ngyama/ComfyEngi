@@ -362,7 +362,7 @@ export default function QueuePage() {
           检测到上次未正常结束的队列：{recovery.inFlight} 张已提交给 ComfyUI 但未记录结果。点击「开始」后会先向 ComfyUI 核对——已完成的直接补记录，仍在排队的继续等待，确实丢失的才重新提交，不会重复生成。
         </div>
       )}
-      <div className="flex items-center gap-3 px-6 pt-5 pb-2">
+      <div className="flex items-center gap-3 px-6 pt-5 pb-1.5">
         <span className="text-[11px] font-medium tracking-wide text-muted-foreground uppercase">队列</span>
         <span className="text-[11px] text-muted-foreground/70">拖动调整执行顺序</span>
         <div className="flex-1" />
@@ -370,7 +370,7 @@ export default function QueuePage() {
           <Switch checked={showDone} onCheckedChange={setShowDone} /> 显示已结束
         </label>
       </div>
-      <div className="min-h-0 flex-1 space-y-2 overflow-y-auto px-6 pb-4">
+      <div className="min-h-0 flex-1 space-y-2 overflow-y-auto px-6 pt-0.5 pb-4">
         {visible.length ? (
           <SortableArea
             items={visible}

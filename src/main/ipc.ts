@@ -125,6 +125,7 @@ function libraryOf(store: Store): Library {
 
 function localOutput(store: Store, o: OutputFile | undefined): string {
   if (!o) return ''
+  if (o.saved && existsSync(o.saved)) return o.saved // 已复制到任务输出目录的最终图片
   if (o.path && existsSync(o.path)) return o.path
   const base = store.getSetting('comfy_output_dir')
   if (base && o.type === 'output') {
@@ -136,7 +137,7 @@ function localOutput(store: Store, o: OutputFile | undefined): string {
 
 const firstOutput = (u: RunUnit | null) => {
   const outs = u?.outputs ?? []
-  return outs.find((o) => o.type === 'output') ?? outs[0]
+  return outs.find((o) => o.saved) ?? outs.find((o) => o.type === 'output') ?? outs[0]
 }
 
 export function registerIpc(ctx: IpcContext) {
@@ -409,8 +410,8 @@ export function registerIpc(ctx: IpcContext) {
     }),
     'app.openDataDir': () => void shell.openPath(ctx.dataDir),
     'app.backupNow': () => store.backup(ctx.backupDir, 'manual'),
-    'app.chooseOutputDir': async () => {
-      const r = await dialog.showOpenDialog(ctx.window()!, { title: '选择 ComfyUI 输出目录', properties: ['openDirectory'] })
+    'app.chooseOutputDir': async (title) => {
+      const r = await dialog.showOpenDialog(ctx.window()!, { title: typeof title === 'string' && title ? title : '选择 ComfyUI 输出目录', properties: ['openDirectory', 'createDirectory'] })
       return r.canceled ? null : (r.filePaths[0] ?? null)
     },
   }

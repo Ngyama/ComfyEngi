@@ -108,7 +108,7 @@ export interface Api {
   'app.info'(): { version: string; dataDir: string; dbPath: string; backupDir: string; migratedFrom: number | null; backup: string | null }
   'app.openDataDir'(): void
   'app.backupNow'(): string
-  'app.chooseOutputDir'(): string | null
+  'app.chooseOutputDir'(title?: string): string | null
 }
 
 export type ApiMethod = keyof Api

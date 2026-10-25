@@ -11,7 +11,6 @@ import {
   Eye,
   GripVertical,
   ListPlus,
-  MoreHorizontal,
   Pencil,
   Play,
   Plus,
@@ -25,7 +24,6 @@ import {
 } from 'lucide-react'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
-import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { Avatar, EmptyState, IconButton } from '@/components/common'
 import { SortableArea, useSortableItem } from '@/components/sortable'
@@ -58,6 +56,7 @@ function TaskSwitcher() {
     d.male_base_id = cur?.male_base_id ?? mb?.id ?? null
     d.character_id = cur?.character_id ?? null // 沿用当前任务的角色，减少重复选择
     d.workflow_id = cur?.workflow_id ?? null
+    if (cur?.workflow_none) d.workflow_none = true
     const r = await call(api['tasks.create'](`套图任务 ${(lib?.tasks.length ?? 0) + 1}`, d))
     if (!r) return
     await reloadLib()
@@ -124,48 +123,43 @@ function TaskSwitcher() {
         </PopoverContent>
       </Popover>
       {task && (
-        <DropdownMenu>
-          <DropdownMenuTrigger asChild>
-            <Button variant="ghost" size="icon-sm" className="text-muted-foreground" aria-label="任务操作">
-              <MoreHorizontal />
-            </Button>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="start">
-            <DropdownMenuItem
-              onSelect={() => {
-                setName(task.name)
-                setEditing(true)
-              }}
-            >
-              <Pencil /> 重命名
-            </DropdownMenuItem>
-            <DropdownMenuItem
-              onSelect={async () => {
-                await usePlan.getState().flush()
-                const r = await call(api['tasks.duplicate'](task.id))
-                if (r) {
-                  await reloadLib()
-                  await load(r.id)
-                  toast.success('已复制任务')
-                }
-              }}
-            >
-              <Copy /> 复制任务
-            </DropdownMenuItem>
-            <DropdownMenuSeparator />
-            <DropdownMenuItem
-              variant="destructive"
-              onSelect={async () => {
-                if (!(await confirm({ title: `删除「${task.name}」？`, description: '已加入队列或已生成的记录不受影响。', confirmText: '删除', destructive: true }))) return
-                await api['tasks.remove'](task.id)
+        <div className="flex items-center">
+          <IconButton
+            tip="重命名"
+            onClick={() => {
+              setName(task.name)
+              setEditing(true)
+            }}
+          >
+            <Pencil />
+          </IconButton>
+          <IconButton
+            tip="复制任务"
+            onClick={async () => {
+              await usePlan.getState().flush()
+              const r = await call(api['tasks.duplicate'](task.id))
+              if (r) {
                 await reloadLib()
-                await load(null)
-              }}
-            >
-              <Trash2 /> 删除任务
-            </DropdownMenuItem>
-          </DropdownMenuContent>
-        </DropdownMenu>
+                await load(r.id)
+                toast.success('已复制任务')
+              }
+            }}
+          >
+            <Copy />
+          </IconButton>
+          <IconButton
+            tip="删除任务"
+            className="hover:text-destructive"
+            onClick={async () => {
+              if (!(await confirm({ title: `删除「${task.name}」？`, description: '已加入队列或已生成的记录不受影响。', confirmText: '删除', destructive: true }))) return
+              await api['tasks.remove'](task.id)
+              await reloadLib()
+              await load(null)
+            }}
+          >
+            <Trash2 />
+          </IconButton>
+        </div>
       )}
     </div>
   )
@@ -405,9 +399,18 @@ export default function PlanPage() {
     })
   }
 
-  const changeCharacter = (cid: number) => {
+  const changeCharacter = (cid: number | null) => {
     if (cid === d.character_id) return
-    const old = new Map((lib?.outfits ?? []).filter((o) => o.character_id === d.character_id).map((o) => [o.id, o.name]))
+    if (cid === null) {
+      // 清除主角色：任务可以继续保存（不能入队）；动作的服装选择保留，重新选择角色时按同名服装对应
+      update((x) => {
+        x.character_id = null
+        if (x.lora_overrides) x.lora_overrides = Object.fromEntries(Object.entries(x.lora_overrides).filter(([k]) => !k.startsWith('lora')))
+      })
+      return
+    }
+    // 按服装 ID 查名称（包括清除角色前留下的服装选择），再在新角色中找同名服装
+    const old = new Map((lib?.outfits ?? []).map((o) => [o.id, o.name]))
     const byName = new Map((lib?.outfits ?? []).filter((o) => o.character_id === cid).map((o) => [o.name, o.id]))
     let lost = 0
     update((x) => {
@@ -490,7 +493,23 @@ export default function PlanPage() {
           <TaskSwitcher />
           <span className="text-[11px] text-muted-foreground">{saving ? '保存中…' : '已自动保存'}</span>
           <div className="flex-1" />
-          <WorkflowMenu value={d.workflow_id} onPick={(id) => update((x) => (x.workflow_id = id))} />
+          <WorkflowMenu
+            value={d.workflow_id}
+            none={!!d.workflow_none}
+            onPick={(id) =>
+              update((x) => {
+                x.workflow_id = id
+                delete x.workflow_none
+              })
+            }
+            onClear={() =>
+              update((x) => {
+                // 清除工作流：恢复未选择状态；各工作流的 LoRA 修改记录保留在任务中，但不再作为当前配置
+                x.workflow_id = null
+                x.workflow_none = true
+              })
+            }
+          />
           <Button variant="secondary" size="sm" onClick={() => setPicker('settings')}>
             <Settings2 /> 任务设置
           </Button>
@@ -644,13 +663,14 @@ export default function PlanPage() {
         </div>
       )}
 
-      <CharacterPicker open={picker === 'char'} onOpenChange={(o) => setPicker(o ? 'char' : null)} value={d.character_id} onPick={changeCharacter} title="选择主角色" />
+      <CharacterPicker open={picker === 'char'} onOpenChange={(o) => setPicker(o ? 'char' : null)} value={d.character_id} onPick={changeCharacter} onClear={() => changeCharacter(null)} clearLabel="清除选择" title="选择主角色" />
       <CharacterPicker
         open={picker === 'char2'}
         onOpenChange={(o) => setPicker(o ? 'char2' : null)}
         value={d.second_character_id ?? null}
         onPick={changeSecondCharacter}
         onClear={() => changeSecondCharacter(null)}
+        clearLabel="清除选择"
         title="选择第二角色"
         description="与主角色来自同一个角色库。第二角色在每个动作中单独启用，可分别选择服装、动作和表情；未启用的动作生成单人图片。"
       />

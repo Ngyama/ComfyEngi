@@ -1,8 +1,8 @@
 import { readFileSync, existsSync } from 'node:fs'
-import { join } from 'node:path'
+import { isAbsolute, join } from 'node:path'
 // 任务 → 生成计划（预览与入队共用），以及把计划冻结写入执行队列。
 
-import { applyInputs, findLoraLoaders, isStackBinding, loraStem, mappingValues, parseLoraSource, slotLora, slotState, SOURCE_LABELS, stackReplaceTarget, validateMapping } from '@shared/mapping'
+import { applyInputs, findLoraLoaders, renderPrefix, isStackBinding, loraStem, mappingValues, parseLoraSource, slotLora, slotState, SOURCE_LABELS, stackReplaceTarget, validateMapping } from '@shared/mapping'
 import { expandTask, normalizeTaskData, PlanLibrary } from '@shared/planner'
 import { MODULE_LABELS } from '@shared/prompt'
 import type { ApiWorkflow, Lora, MappingEntry, PlanUnit, Settings, Task, TaskData, Workflow } from '@shared/types'
@@ -13,7 +13,8 @@ export function loadPlanLibrary(store: Store): PlanLibrary {
   return new PlanLibrary(store.list('templates'), store.list('characters'), store.list('outfits'), store.list('stories'))
 }
 
-export function resolveWorkflow(store: Store, workflowId: number | null | undefined): Workflow | null {
+export function resolveWorkflow(store: Store, workflowId: number | null | undefined, none = false): Workflow | null {
+  if (none) return null // 任务中清除了工作流选择
   const wid = workflowId || store.getSetting('default_workflow_id')
   return wid ? store.get('workflows', wid) : null
 }
@@ -43,6 +44,14 @@ function resolveLoraName(store: Store, l: Lora, errors: string[]): string {
     l.name = r.comfyName
   } catch(e) { const msg = `LoRA ${l.name}: ${(e as Error).message}`; if (!errors.includes(msg)) errors.push(msg) }
   return l.name
+}
+
+/** 任务的输出目录：填写的绝对路径；相对路径相对于工作区；空则为工作区 output/（不在工作区模式下时不复制） */
+export function outputDirOf(store: Store, dir?: string): string {
+  const d = (dir ?? '').trim()
+  if (d && isAbsolute(d)) return d
+  if (!store.files) return ''
+  return join(store.files.root, d || 'output')
 }
 
 /** 第二角色 LoRA 的名称（即使所有图片中第二角色都未出场，也需要它来停用工作流中关联的条目） */
@@ -126,7 +135,7 @@ export function planForTask(store: Store, task: Task, settings?: Settings, dateS
   const legacyTriggers = (ch?.loras ?? []).flatMap((l) => l.trigger_words ?? []).filter((w) => typeof w === 'string' && w.trim())
   if (legacyTriggers.length)
     warnings.push(`角色「${ch!.name}」有之前启用的触发词（${legacyTriggers.join(', ')}）尚未合并到基础 Prompt；新版不再自动加入，可在角色库中一键合并`)
-  const wf = resolveWorkflow(store, data.workflow_id)
+  const wf = resolveWorkflow(store, data.workflow_id, !!data.workflow_none)
   if (!wf) {
     warnings.push('尚未选择 ComfyUI 工作流：可以预览 Prompt，但不能加入执行队列')
   } else {
@@ -167,8 +176,18 @@ export function planForTask(store: Store, task: Task, settings?: Settings, dateS
     for (const [lvl, msg] of msgs) (lvl === 'error' ? errors : warnings).push(`工作流「${wf.name}」${msg}`)
     if (!msgs.some(([l]) => l === 'error')) {
       for (const u of units) u.inputs = [...mappingValues(u, wf.mapping, settings, dateStr, wf.api_json), ...loraConfigInputs(wf.api_json ?? {}, wf.mapping ?? [], cfg, rolesOf(u))]
+      // 任务的文件名前缀：写入工作流映射的输出文件名前缀（ComfyUI 在它自己的 output 目录下按前缀保存）
+      const prefix = data.output?.prefix?.trim()
+      if (prefix) {
+        if (!wf.mapping.some((m) => m.source === 'filename_prefix'))
+          once(warnings, `工作流「${wf.name}」没有映射「输出文件前缀」，任务中设置的文件名前缀不会生效（最终图片仍会复制到输出目录）。可在工作流映射中用「自动识别」添加`)
+        for (const u of units) u.inputs = u.inputs!.map((x) => (x.source === 'filename_prefix' ? { ...x, value: renderPrefix(prefix, u, dateStr) } : x))
+      }
     }
   }
+  // 输出目录：完成后把最终图片从 ComfyUI 复制到这里（默认工作区 output/）；入队时随计划冻结
+  const outDir = outputDirOf(store, data.output?.dir)
+  if (outDir) for (const u of units) u.meta.output_dir = outDir
   if (!units.length && !errors.length) errors.push('计划为空：请选择剧情模板或添加动作')
   return { units, errors, warnings, workflow: wf }
 }

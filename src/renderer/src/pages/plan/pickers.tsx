@@ -23,6 +23,7 @@ export function CharacterPicker({
   title = '选择角色',
   description = '角色的基础 Prompt、LoRA 和服装模板会自动载入。',
   onClear,
+  clearLabel = '清除选择',
 }: {
   open: boolean
   onOpenChange: (o: boolean) => void
@@ -32,6 +33,7 @@ export function CharacterPicker({
   description?: string
   /** 提供时显示「不使用」按钮（第二角色可不选择） */
   onClear?: () => void
+  clearLabel?: string
 }) {
   const lib = useLib((s) => s.lib)
   const go = useNav((s) => s.go)
@@ -47,7 +49,7 @@ export function CharacterPicker({
           <DialogDescription>{description}</DialogDescription>
         </DialogHeader>
         <SearchBox value={q} onChange={setQ} placeholder="搜索角色名称…" autoFocus />
-        <div className="-mx-1 grid min-h-0 flex-1 grid-cols-2 gap-2 overflow-y-auto px-1 pb-1">
+        <div className="-mx-1 -mt-0.5 grid min-h-0 flex-1 grid-cols-2 gap-2 overflow-y-auto px-1 pt-0.5 pb-1">
           {chars.map((c) => (
             <button
               key={c.id}
@@ -83,7 +85,7 @@ export function CharacterPicker({
           </Button>
           {onClear && value !== null && (
             <Button variant="secondary" onClick={() => (onClear(), onOpenChange(false))}>
-              不使用第二角色
+              {clearLabel}
             </Button>
           )}
         </DialogFooter>
@@ -409,13 +411,13 @@ export function GlobalPicker({ open, onOpenChange, value, onPick }: { open: bool
 
 // ---------------------------------------------------------------- 工作流
 /** 套图任务页面的工作流选择与导入（使用与设置页相同的工作流存储；节点映射在设置中编辑） */
-export function WorkflowMenu({ value, onPick }: { value: number | null; onPick: (id: number | null) => void }) {
+export function WorkflowMenu({ value, none, onPick, onClear }: { value: number | null; none?: boolean; onPick: (id: number | null) => void; onClear?: () => void }) {
   const lib = useLib((s) => s.lib)
   const go = useNav((s) => s.go)
   const [open, setOpen] = useState(false)
   const wfs = lib?.workflows ?? []
   const def = wfs.find((w) => w.id === lib?.settings.default_workflow_id)
-  const cur = wfs.find((w) => w.id === (value ?? lib?.settings.default_workflow_id))
+  const cur = none ? undefined : wfs.find((w) => w.id === (value ?? lib?.settings.default_workflow_id))
   const problem = (w: (typeof wfs)[number]) => (!w.mapping ? '尚未配置节点映射' : w.errors ? `映射有 ${w.errors} 个错误` : '')
   const editMapping = (id: number) => {
     setOpen(false)
@@ -439,12 +441,12 @@ export function WorkflowMenu({ value, onPick }: { value: number | null; onPick: 
       key={id ?? 'default'}
       type="button"
       onClick={() => (onPick(id), setOpen(false))}
-      className={cn('flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-[13px] hover:bg-tint/[0.05]', value === id && 'bg-primary/10 text-primary')}
+      className={cn('flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-[13px] hover:bg-tint/[0.05]', !none && value === id && 'bg-primary/10 text-primary')}
     >
       <StatusDot tone={!w || !w.mapping ? 'warn' : w.errors ? 'error' : 'ok'} />
       <span className="min-w-0 flex-1 truncate">{label}</span>
       {w && problem(w) && <span className="shrink-0 text-[11px] text-warning">{problem(w)}</span>}
-      {value === id && <Check className="size-3.5 shrink-0" />}
+      {!none && value === id && <Check className="size-3.5 shrink-0" />}
     </button>
   )
   const issue = cur ? problem(cur) : '未选择工作流'
@@ -477,6 +479,11 @@ export function WorkflowMenu({ value, onPick }: { value: number | null; onPick: 
             <Settings2 /> 编辑节点映射
           </Button>
         </div>
+        {onClear && !none && (
+          <button type="button" data-testid="workflow-clear" onClick={() => (onClear(), setOpen(false))} className="mt-1 w-full rounded-md px-2 py-1.5 text-left text-[12px] text-muted-foreground hover:bg-tint/[0.05] hover:text-foreground">
+            清除选择（本任务不使用工作流）
+          </button>
+        )}
       </PopoverContent>
     </Popover>
   )

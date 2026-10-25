@@ -185,6 +185,12 @@ try {
   await themeCheck('执行队列')
   const total = mock.submitted.length
   check('任务通过模拟 ComfyUI 执行完成', total > 0, `提交 ${total} 张`)
+  // 最终图片从 ComfyUI 复制到任务输出目录（默认工作区 output/），ComfyUI 原文件保留
+  const walk = (d) => (existsSync(d) ? readdirSync(d, { withFileTypes: true }).flatMap((e) => (e.isDirectory() ? walk(join(d, e.name)) : [join(d, e.name)])) : [])
+  const copied = walk(join(dataDir, 'vault', 'output')).filter((f) => f.endsWith('.png'))
+  // 本次入队的图片都会复制；迁移来的旧队列项（入队时没有输出目录）不复制
+  const planned = Number(desc.match(/共 (\d+) 张/)[1])
+  check('本次入队的最终图片已复制到工作区 output/（默认输出目录），旧队列项不复制，ComfyUI 原文件保留', copied.length === planned && planned < total && walk(join(dataDir, 'comfy-output')).filter((f) => f.endsWith('.png')).length >= total, `${copied.length} / 本次 ${planned} / 共提交 ${total}`)
   // 预览中的 Prompt 与实际提交一致（第一张：剧情场景 1）
   const firstNew = mock.submitted.find(([, g]) => String(g['6'].inputs.text).includes('scene1'))
   check('提交内容包含剧情场景与占位符替换', !!firstNew && String(firstNew[1]['6'].inputs.text).includes('scene1 角色A'))
@@ -418,8 +424,8 @@ try {
   }
   // 选择工作流后自动读取其中的 LoRA（包括停用条目），主角色 LoRA 不在列表中 → 追加到 #5
   const mainLora = win.locator('[data-testid=lora-card][data-prefix=lora1]')
-  check('自动读取工作流 #5 中的 8 个 LoRA（含停用条目），只有一组（三个采样阶段共用）', (await wfCards.count()) === 8 && (await win.locator('[data-testid=lora-group]').count()) === 1 && (await win.locator('[data-testid=lora-card][data-prefix="wf:5:6"]').getAttribute('data-enabled')) === null && (await win.locator('[data-testid=lora-group]').innerText()).includes('#46、#103、#107'))
-  check('主角色 LoRA 不在工作流列表中：自动追加到 #5（不覆盖画风 LoRA）', (await mainLora.innerText()).includes('追加到 #5'), (await mainLora.innerText()).replace(/\n/g, ' | '))
+  check('自动读取工作流 #5 中的 8 个 LoRA（含停用条目），只有一组（三个采样阶段共用）', (await wfCards.count()) === 8 && (await win.locator('[data-testid=lora-group]').count()) === 1 && (await win.locator('[data-testid=lora-card][data-prefix="wf:5:6"]').getAttribute('data-enabled')) === null && (await win.locator('[data-testid=lora-group]').getAttribute('title')).includes('46、103、107') && !(await win.locator('[data-testid=lora-panel]').innerText()).includes('#5'))
+  check('主角色 LoRA 不在工作流列表中：自动追加到 #5（不覆盖画风 LoRA）', (await mainLora.innerText()).includes('追加到工作流 LoRA'), (await mainLora.innerText()).replace(/\n/g, ' | '))
   const s1 = await stackNow()
   check('最终 #5 列表 = 工作流原有 8 个 + 角色 LoRA', s1.length === 9 && s1[8].name === 'charA' && s1.filter((e) => e.active).length === 8, JSON.stringify(s1.map((e) => [e.name, e.active])))
   await win.locator('[data-testid=lora-card][data-prefix="wf:5:0"]').getByRole('button', { name: '停用' }).click()
@@ -483,7 +489,7 @@ try {
   const p2 = await planNow()
   // 解除高级映射后 #10 交给任务的 LoRA 配置：#10 加载的正是角色的 charA，自动关联该条目（不重复、不报错）
   const n10 = p2.units.find((u) => u.section === 'pose').inputs.filter((x) => x.node === '10')
-  check('解除高级映射后，任务配置自动关联 #10 中同名的角色 LoRA', !p2.errors.some((e) => e.includes('LoRA')) && (await mainCard.innerText()).includes('关联 #10'), `${(await mainCard.innerText()).replace(/\n/g, ' | ')} ${JSON.stringify(n10)}`)
+  check('解除高级映射后，任务配置自动关联 #10 中同名的角色 LoRA', !p2.errors.some((e) => e.includes('LoRA')) && (await mainCard.innerText()).includes('已在工作流 LoRA 中'), `${(await mainCard.innerText()).replace(/\n/g, ' | ')} ${JSON.stringify(n10)}`)
   await win.evaluate((w) => window.api['workflows.save']({ id: w.id, mapping: w.mapping }), wfBefore)
   await win.evaluate(() => window.dispatchEvent(new Event('focus')))
   await win.locator('nav button', { hasText: '素材库' }).click()
@@ -529,6 +535,52 @@ try {
   await win.locator('button', { hasText: '剧情' }).filter({ hasText: '剧情1' }).first().click()
   await shot('19-story-picker')
   await win.keyboard.press('Escape')
+
+  await win.waitForFunction(() => !document.querySelector('[role=dialog]'), null, { timeout: 5000 })
+  await win.waitForTimeout(300)
+  // 侧边栏分组：靠上素材与资料，靠下生成与系统
+  const navOrder = await win.locator('nav button').allInnerTexts()
+  check('侧边栏分为上下两组', navOrder.slice(0, 8).join(',') === '素材库,LoRA 管理,角色库,剧情库,套图任务,执行队列,运行记录,设置', navOrder.join(','))
+  // 任务名称旁的重命名 / 复制 / 删除按钮
+  check('任务名称旁直接显示重命名、复制、删除按钮', (await win.getByRole('button', { name: '重命名', exact: true }).count()) === 1 && (await win.getByRole('button', { name: '复制任务', exact: true }).count()) === 1 && (await win.getByRole('button', { name: '删除任务', exact: true }).count()) === 1, [await win.getByRole('button', { name: '重命名', exact: true }).count(), await win.getByRole('button', { name: '复制任务', exact: true }).count(), await win.getByRole('button', { name: '删除任务', exact: true }).count(), await win.locator('[aria-label=重命名]').count()].join(','))
+  // LoRA 权重输入框：宽度足够、隐藏原生上下箭头
+  const wInput = win.locator('[data-testid=lora-card] input[type=number]').first()
+  const wStyle = await wInput.evaluate((el) => ({ w: el.getBoundingClientRect().width, a: getComputedStyle(el).appearance, align: getComputedStyle(el).textAlign }))
+  check('权重输入框加宽、隐藏 spinner、数字右对齐', wStyle.w >= 58 && wStyle.a === 'textfield' && wStyle.align === 'right', JSON.stringify(wStyle))
+  // 清除主角色：任务照常保存，但不能入队；再选回来
+  const curTask = () => win.evaluate(async () => { const lib = await window.api['library.load'](); return window.api['tasks.get'](lib.settings.last_task_id ?? lib.tasks[0].id) })
+  await win.locator('button', { hasText: '主角色' }).first().click()
+  await win.locator('[role=dialog]').getByRole('button', { name: '清除选择' }).click()
+  await win.waitForTimeout(1200)
+  const cleared = await curTask()
+  const pc = await planNow()
+  check('清除主角色：任务已保存为未选择状态，但计划提示必须选择角色（不能入队）', cleared.data.character_id === null && pc.errors.some((e) => e.includes('未选择角色')) && (await win.locator('button', { hasText: '主角色' }).first().innerText()).includes('选择主角色'))
+  await win.locator('button', { hasText: '主角色' }).first().click()
+  await win.locator('[role=dialog] button', { hasText: '角色A' }).first().click()
+  await win.waitForTimeout(1000)
+  check('重新选择主角色后恢复', (await curTask()).data.character_id !== null && !(await planNow()).errors.some((e) => e.includes('未选择角色')))
+  // 清除工作流：恢复未选择状态（不删除工作流）；再选回来
+  await win.locator('[data-testid=workflow-menu]').click()
+  await win.locator('[data-testid=workflow-clear]').click()
+  await win.waitForTimeout(1200)
+  const noWf = await planNow()
+  check('清除工作流：任务保存为未选择工作流，工作流本身保留', (await curTask()).data.workflow_none === true && !noWf.workflow && (await win.locator('[data-testid=workflow-menu]').innerText()).includes('选择工作流') && (await win.evaluate(async () => (await window.api['library.load']()).workflows.length)) >= 2)
+  await win.locator('[data-testid=workflow-menu]').click()
+  await win.locator('[data-radix-popper-content-wrapper] button', { hasText: '测试工作流' }).last().click()
+  await win.waitForTimeout(1000)
+  check('重新选择工作流后恢复', (await planNow()).workflow?.name === '测试工作流')
+  // 任务输出：文件名前缀展开 %date:…% 并写入工作流的输出前缀
+  await win.locator('button', { hasText: '任务设置' }).click()
+  await win.getByPlaceholder('留空则使用工作流映射中的模板，例如 %date:yyyy-MM-dd%/image').fill('%date:yyyy-MM-dd%/image')
+  await win.waitForTimeout(1200)
+  const d0 = new Date()
+  const ymd = `${d0.getFullYear()}-${String(d0.getMonth() + 1).padStart(2, '0')}-${String(d0.getDate()).padStart(2, '0')}`
+  await shot('20-task-output')
+  check('任务设置显示文件名前缀示例（日期已展开）', (await win.locator('[data-testid=prefix-preview]').innerText()).includes(`${ymd}/image_00001_.png`))
+  await win.keyboard.press('Escape')
+  const pp = await planNow()
+  const pfx = pp.units[0].inputs.find((x) => x.source === 'filename_prefix')
+  check('任务的文件名前缀写入工作流的 filename_prefix（日期已展开），输出目录随计划冻结', pfx?.value === `${ymd}/image` && pp.units[0].meta.output_dir === join(dataDir, 'vault', 'output'), JSON.stringify([pfx, pp.units[0].meta.output_dir]))
 
   check('没有渲染进程错误', errors.length === 0, errors.slice(0, 3).join(' / '))
 } catch (e) {

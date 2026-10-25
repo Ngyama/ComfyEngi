@@ -136,7 +136,15 @@ function Detail({ u, onClose }: { u: RunUnit; onClose: () => void }) {
         <div>
           <FieldLabel>输出文件</FieldLabel>
           <div className="space-y-1 font-mono text-[11px] text-muted-foreground select-text">
-            {u.outputs?.length ? u.outputs.map((o, i) => <div key={i} className="break-all">[{o.type}] {o.path || `${o.subfolder ? `${o.subfolder}/` : ''}${o.filename}`}</div>) : '（ComfyUI 未返回文件信息）'}
+            {u.outputs?.length
+              ? u.outputs.map((o, i) => (
+                  <div key={i} className="break-all">
+                    [{o.type}] {o.path || `${o.subfolder ? `${o.subfolder}/` : ''}${o.filename}`}
+                    {o.saved && <div className="text-success">已保存到：{o.saved}</div>}
+                    {o.save_error && <div className="text-destructive">{o.save_error}</div>}
+                  </div>
+                ))
+              : '（ComfyUI 未返回文件信息）'}
           </div>
         </div>
         <div>

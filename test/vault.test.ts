@@ -43,7 +43,9 @@ describe('Vault files',()=>{
   const data={...newTaskData(),character_id:lib.charA,workflow_id:wf,items:[newItem(Object.values(lib.poses)[0],lib.outfitsA[0])]}
   const tid=old.save('tasks',{name:'task',data});const before=planForTask(old,old.get('tasks',tid)!,undefined,'2000-01-01');old.close()
   const root=tempDir();createVault(root,source);const s=openVault(root)
-  expect(planForTask(s,s.get('tasks',tid)!,undefined,'2000-01-01').units).toEqual(before.units)
+  const after=planForTask(s,s.get('tasks',tid)!,undefined,'2000-01-01').units
+  expect(after.every((u)=>u.meta.output_dir===join(root,'output'))).toBe(true) // 工作区模式下默认复制到 output/
+  expect(after.map((u)=>({...u,meta:{...u.meta,output_dir:undefined}}))).toEqual(before.units.map((u)=>({...u,meta:{...u.meta,output_dir:undefined}})))
   const run=enqueueTask(s,s.get('tasks',tid)!).runId!;expect(run).toBeTruthy()
   const snapshot=s.listUnits(run);s.save('characters',{id:lib.charA,positive:'changed'})
   expect(s.listUnits(run)).toEqual(snapshot);expect(s.listOutfits(lib.charA)).toHaveLength(5);s.close()
