@@ -1,0 +1,57 @@
+# 推送版本标签（例如 v0.2.1）时：检查版本一致 → 测试 → 打包 Windows 安装程序 → 创建 GitHub Release 并附带安装包。
+# 已存在同名 Release 时直接失败，不会覆盖。标签带预发布后缀（如 v0.3.0-beta.1）时创建为预发布版，
+# 应用内「检查更新」只读取最新正式版，不会提示预发布版。
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+
+permissions:
+  contents: write
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: 检查版本号与标签一致
+        run: node scripts/check-version.mjs ${{ github.ref_name }}
+
+      - name: 不覆盖已有 Release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view "${{ github.ref_name }}" --repo "${{ github.repository }}" >/dev/null 2>&1; then
+            echo "Release ${{ github.ref_name }} 已存在，停止（不会覆盖）"; exit 1
+          fi
+
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test
+
+      - name: 打包 NSIS 安装程序
+        run: npm run dist:installer
+
+      - name: 创建 Release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="${{ github.ref_name }}"
+          VERSION="${TAG#v}"
+          FILE="dist/ComfyEngi-${VERSION}-setup.exe"
+          test -f "$FILE"
+          NOTES="release-notes/${TAG}.md"
+          ARGS=(--title "ComfyEngi ${TAG}" --verify-tag)
+          if [ -f "$NOTES" ]; then ARGS+=(--notes-file "$NOTES"); else ARGS+=(--generate-notes); fi
+          if [[ "$VERSION" == *-* ]]; then ARGS+=(--prerelease); fi
+          gh release create "$TAG" "$FILE" --repo "${{ github.repository }}" "${ARGS[@]}"

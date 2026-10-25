@@ -10,6 +10,9 @@ import { checkAgainstObjectInfo, ComfyError, loadApiWorkflow, mappingValues, val
 import { normalizeTaskData } from '@shared/planner'
 import { DEFAULT_SETTINGS, TEMPLATE_KINDS, type Library, type OutputFile, type RunUnit, type Settings } from '@shared/types'
 import { ComfyClient } from './comfy-client'
+import { checkForUpdate } from './update'
+import { INSTALL_DIR_ERROR, insideInstallDir } from './install-dir'
+import { RELEASES_PAGE } from '@shared/update'
 import { enqueueTask, finalWorkflow, planForTask } from './plan'
 import type { Runner } from './runner'
 import { TABLES, type Store, type TableName } from './store'
@@ -415,9 +418,17 @@ export function registerIpc(ctx: IpcContext) {
     }),
     'app.openDataDir': () => void shell.openPath(ctx.dataDir),
     'app.backupNow': () => store.backup(ctx.backupDir, 'manual'),
+    'app.checkUpdate': () => checkForUpdate(app.getVersion()),
+    'app.openReleasePage': (url) => {
+      const u = str(url)
+      if (u !== RELEASES_PAGE && !u.startsWith(`${RELEASES_PAGE}/`)) throw new BadArg('只能打开本项目的 GitHub Release 页面')
+      void shell.openExternal(u)
+    },
     'app.chooseOutputDir': async (title) => {
       const r = await dialog.showOpenDialog(ctx.window()!, { title: typeof title === 'string' && title ? title : '选择 ComfyUI 输出目录', properties: ['openDirectory', 'createDirectory'] })
-      return r.canceled ? null : (r.filePaths[0] ?? null)
+      if (r.canceled || !r.filePaths[0]) return null
+      if (insideInstallDir(r.filePaths[0])) throw new BadArg(INSTALL_DIR_ERROR)
+      return r.filePaths[0]
     },
   }
 

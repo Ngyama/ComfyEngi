@@ -1,6 +1,7 @@
 import { existsSync, readFileSync, watch } from 'node:fs'
 import { atomic } from './file-library'
 import { createVault, openVault } from './vault'
+import { INSTALL_DIR_ERROR, insideInstallDir } from './install-dir'
 // Electron 主进程入口：窗口、数据目录、数据库、执行器生命周期。
 
 import { appendFileSync, mkdirSync } from 'node:fs'
@@ -23,7 +24,8 @@ const backupDir = join(vaultRoot || dataDir, 'data', 'backups')
 mkdirSync(dataDir, { recursive: true })
 // Chromium 缓存等放在子目录，避免与数据库混在一起
 app.setPath('userData', join(dataDir, 'electron'))
-app.setAppUserModelId('ComfyEngi')
+// 与安装包 appId 一致：开始菜单快捷方式与任务栏图标归为同一程序
+app.setAppUserModelId('local.comfyengi.app')
 
 const logFile = join(vaultRoot || dataDir, vaultRoot ? 'logs/error.log' : 'error.log')
 const logError = (e: unknown) => {
@@ -136,6 +138,7 @@ if (!app.requestSingleInstanceLock()) {
         if(r.canceled || !r.filePaths[0]) return
         if(runner.isAlive()) throw new Error('队列仍在执行，请先停止')
         const root=r.filePaths[0]
+        if(insideInstallDir(root)) throw new Error(INSTALL_DIR_ERROR)
         if(create) createVault(root,migrate ? join(dataDir,'comfyengi.db') : undefined)
         const check=openVault(root); check.close()
         atomic(recentFile,JSON.stringify({root})); app.relaunch(); app.quit()

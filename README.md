@@ -8,6 +8,14 @@ Node.js 22.17+：`npm ci`，`npm run dev`。Windows 也可运行 `start.bat`。
 首次启动选择创建空工作区、打开已有工作区，或从旧版数据库迁移。最近工作区记录保存在系统应用目录；创作数据位于所选 Vault。
 设置 → 常规顶部提供工作区管理。运行期间禁止切换；切换验证目标后重启应用，不热替换数据库。切换前等待自动保存完成。
 
+## 安装与更新
+
+从 [GitHub Releases](https://github.com/Ngyama/ComfyEngi/releases) 下载 `ComfyEngi-<版本>-setup.exe` 安装，无需 Node.js。可选择安装目录（默认 `%LOCALAPPDATA%\Programs\ComfyEngi`），安装后从开始菜单或桌面启动，在「应用和功能」中卸载。
+
+设置 → 数据与维护 →「关于与更新」可手动检查更新：查询 GitHub 最新正式 Release，按语义化版本与当前版本比较；有新版时打开 Release 页面，由用户下载新安装程序覆盖安装。不会自动下载或安装。
+
+安装、升级和卸载只处理安装目录：工作区（Vault）、`%APPDATA%\ComfyEngi` 中的最近工作区记录都不会被修改或删除；应用也不允许把工作区或输出目录选在安装目录内。安装包目前未签名，SmartScreen 可能提示，选择「更多信息 → 仍要运行」。发布流程见 [RELEASING.md](RELEASING.md)。
+
 ## 工作区
 
 ```text

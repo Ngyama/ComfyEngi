@@ -1,5 +1,6 @@
 // Renderer ↔ 主进程 的 IPC 契约。Preload 只暴露这里列出的方法，主进程逐个校验参数。
 
+import type { UpdateCheck } from './update'
 import type {
   ApiWorkflow,
   LoraResource,
@@ -111,6 +112,10 @@ export interface Api {
   'app.openDataDir'(): void
   'app.backupNow'(): string
   'app.chooseOutputDir'(title?: string): string | null
+  /** 手动检查更新：查询 GitHub 最新正式 Release 并比较版本 */
+  'app.checkUpdate'(): UpdateCheck
+  /** 在浏览器中打开本项目的 GitHub Release 页面（只接受本项目的地址） */
+  'app.openReleasePage'(url: string): void
 }
 
 export type ApiMethod = keyof Api
@@ -129,7 +134,7 @@ export const API_METHODS: ApiMethod[] = [
   'queue.enqueue', 'queue.list', 'queue.units', 'queue.reorder', 'queue.remove', 'queue.delete', 'queue.retry', 'queue.retrySave', 'queue.pendingSummary',
   'runner.status', 'runner.precheck', 'runner.start', 'runner.pause', 'runner.stop', 'runner.interrupt', 'runner.logs',
   'history.list', 'history.image', 'history.openImage', 'history.showInFolder',
-  'comfy.test', 'app.info', 'app.openDataDir', 'app.backupNow', 'app.chooseOutputDir',
+  'comfy.test', 'app.info', 'app.openDataDir', 'app.backupNow', 'app.chooseOutputDir', 'app.checkUpdate', 'app.openReleasePage',
 ]
 
 /** Renderer 侧看到的 API：每个方法都是异步的 */

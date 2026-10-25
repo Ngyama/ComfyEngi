@@ -8,6 +8,7 @@
 
 import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
+import { createServer } from 'node:http'
 import { join, resolve } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { _electron as electron } from 'playwright-core'
@@ -36,7 +37,11 @@ const check = (name, ok, detail = '') => {
   console.log(`${ok ? 'PASS' : 'FAIL'}  ${name}${detail ? `  (${detail})` : ''}`)
 }
 
-const env = { ...process.env, COMFYENGI_DATA_DIR: dataDir, COMFYENGI_VAULT: join(dataDir, 'vault'), COMFYENGI_IMPORT_LEGACY: join(dataDir, 'comfyengi.db') }
+// 模拟 GitHub「最新 Release」接口，用于检查更新
+let releaseReply = [404, { message: 'Not Found' }]
+const releaseApi = createServer((_req, res) => res.writeHead(releaseReply[0], { 'content-type': 'application/json' }).end(JSON.stringify(releaseReply[1])))
+await new Promise((r) => releaseApi.listen(0, '127.0.0.1', r))
+const env = { ...process.env, COMFYENGI_UPDATE_URL: `http://127.0.0.1:${releaseApi.address().port}/latest`, COMFYENGI_DATA_DIR: dataDir, COMFYENGI_VAULT: join(dataDir, 'vault'), COMFYENGI_IMPORT_LEGACY: join(dataDir, 'comfyengi.db') }
 const app = exe
   ? await electron.launch({ executablePath: resolve(exe), args: [], env })
   : await electron.launch({ args: [root], cwd: root, env })
@@ -599,6 +604,33 @@ try {
   await win.locator('main button', { hasText: '数据与维护' }).click()
   await win.getByText('立即备份数据库').waitFor({ timeout: 5000 }).catch(() => {})
   await shot('22-settings-data')
+  // 关于与更新：无 Release、已是最新版、有新版本、请求失败
+  const appVersion = await app.evaluate(({ app }) => app.getVersion())
+  check('关于与更新显示当前版本', (await win.locator('[data-testid=update-card]').innerText()).includes(`ComfyEngi v${appVersion}`), appVersion)
+  const checkUpdate = async () => {
+    await win.locator('[data-testid=update-card] button', { hasText: '检查更新' }).click()
+    await win.locator('[data-testid=update-result]').waitFor()
+    await win.waitForFunction(() => !document.querySelector('[data-testid=update-card] button')?.disabled)
+    const el = win.locator('[data-testid=update-result]')
+    return { kind: await el.getAttribute('data-kind'), text: await el.innerText() }
+  }
+  let u = await checkUpdate()
+  check('没有任何 Release：明确提示，不显示为已是最新版', u.kind === 'no-release' && !u.text.includes('最新版') && u.text.includes('还没有发布'), u.text)
+  releaseReply = [200, { tag_name: `v${appVersion}`, html_url: 'https://github.com/Ngyama/ComfyEngi/releases/tag/v' + appVersion }]
+  u = await checkUpdate()
+  check('与最新 Release 相同：当前已是最新版', u.kind === 'latest' && u.text.includes('当前已是最新版'), u.text)
+  releaseReply = [200, { tag_name: 'v99.1.0', name: 'v99.1.0', html_url: 'https://github.com/Ngyama/ComfyEngi/releases/tag/v99.1.0', body: '## 更新内容\n- 修复若干问题', published_at: '2026-10-20T00:00:00Z' }]
+  u = await checkUpdate()
+  await shot('23-update-available')
+  check('存在更高版本：显示新版本号、说明摘要和下载按钮', u.kind === 'available' && u.text.includes('发现新版本 v99.1.0') && u.text.includes('修复若干问题') && u.text.includes('下载更新'), u.text)
+  releaseReply = [200, { tag_name: 'nightly' }]
+  u = await checkUpdate()
+  check('Release 版本号格式异常：提示无法比较', u.kind === 'error' && u.text.includes('nightly'), u.text)
+  releaseApi.close()
+  releaseApi.closeAllConnections()
+  u = await checkUpdate()
+  check('网络请求失败：提示检查网络', u.kind === 'error' && u.text.includes('无法连接 GitHub'), u.text)
+  check('只能打开本项目的 Release 页面', await win.evaluate(() => window.api['app.openReleasePage']('https://evil.example/x').then(() => false, () => true)))
   check('数据与维护区分数据库备份与完整备份', (await win.locator('main').innerText()).includes('完整备份') && (await win.locator('main').innerText()).includes('立即备份数据库'))
   await nav('套图任务')
   await win.locator('main button', { hasText: oldTask.name }).first().click()

@@ -1,16 +1,32 @@
+# Windows 安装包（NSIS）。用户数据不在安装目录：
+#   %APPDATA%\ComfyEngi        最近工作区记录、旧版数据库、Electron 缓存
+#   用户选择的工作区（Vault）   数据库、Markdown、工作流 JSON、LoRA 管理信息、输出图片
+# 安装新版 / 卸载只替换或删除安装目录，不触碰上述位置。
 appId: local.comfyengi.app
 productName: ComfyEngi
 directories:
   output: dist
+# 只打包编译后的程序；源码、测试、示例数据、Vault 均不进入安装包
 files:
   - out/**
   - package.json
 asar: true
 npmRebuild: false
+# 不由 electron-builder 自动发布，发布流程见 RELEASING.md
+publish: null
 win:
-  target: nsis
+  target:
+    - target: nsis
+      arch: [x64]
   artifactName: ComfyEngi-${version}-setup.${ext}
 nsis:
   oneClick: false
+  perMachine: false
   allowToChangeInstallationDirectory: true
+  createStartMenuShortcut: true
+  createDesktopShortcut: true
+  shortcutName: ComfyEngi
+  uninstallDisplayName: ComfyEngi ${version}
+  # 卸载时不删除 %APPDATA%\ComfyEngi；工作区本来就不在安装目录中
   deleteAppDataOnUninstall: false
+  runAfterFinish: true
