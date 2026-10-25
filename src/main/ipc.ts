@@ -88,12 +88,13 @@ export interface IpcContext {
 function settingValue(key: string, value: unknown): unknown {
   if (!(key in DEFAULT_SETTINGS)) throw new BadArg(`未知的设置项 ${key}`)
   const def = DEFAULT_SETTINGS[key as keyof Settings]
-  if (key === 'default_workflow_id' || key === 'last_task_id') return value === null ? null : int(value, key)
+  if (key === 'default_workflow_id' || key === 'last_task_id' || key === 'default_global_id') return value === null ? null : int(value, key)
   if (key === 'lora_display_name') { if (value !== 'model' && value !== 'file') throw new BadArg('无效的显示名称选项'); return value }
   if (Array.isArray(def)) {
     if (!Array.isArray(value)) throw new BadArg(`${key} 必须是数组`)
     return value.map((x) => str(x))
   }
+  if (key === 'default_item_count') return Math.min(999, Math.max(1, int(value, key)))
   if (typeof def === 'number') {
     const n = Number(value)
     if (!Number.isFinite(n) || n < 0) throw new BadArg(`${key} 必须是非负数`)
@@ -325,6 +326,10 @@ export function registerIpc(ctx: IpcContext) {
       store.deleteRun(rid)
     },
     'queue.retry': (runId) => store.retryFailed(int(runId)),
+    'queue.retrySave': (runId, unitIds) => {
+      const ids = runId === null ? intArray(unitIds ?? []) : store.listUnits(int(runId)).filter((u) => u.status === 'done' && u.outputs?.some((o) => o.save_error)).map((u) => u.id)
+      return runner.retrySave(ids)
+    },
     'queue.pendingSummary': () => ({
       pending: store.listRuns(false).reduce((a, r) => a + (r.counts.pending ?? 0), 0),
       inFlight: store.inFlightUnits().length,

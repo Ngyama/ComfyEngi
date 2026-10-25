@@ -88,7 +88,11 @@ export default function App() {
       setReady(true)
     })().catch(e=>setError(String(e)))
   }, [])
-  useEffect(()=>api.onRunnerEvent(e=>{if(e.kind==='log'&&e.text.startsWith('[Vault]'))toast.info(e.text,{duration:15000})}),[])
+  useEffect(()=>api.onRunnerEvent(e=>{
+    if(e.kind==='log'&&e.text.startsWith('[Vault]'))toast.info(e.text,{duration:15000})
+    // 图片已生成但未能保存到输出目录：同一提示只保留一条（id 固定），避免连续失败时刷屏
+    else if(e.kind==='notice')toast[e.level==='error'?'error':'warning'](e.text,{id:'runner-notice',description:e.detail,duration:20000,action:{label:'查看',onClick:()=>useNav.getState().go('history')}})
+  }),[])
   if(vault===false) return <div className="p-12"><VaultPanel /></div>
   if(error) return <div className="p-8 space-y-4"><p className="whitespace-pre-wrap">{error}</p><VaultPanel /></div>
   const switchTo = (p: Page) => {

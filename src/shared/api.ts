@@ -89,6 +89,8 @@ export interface Api {
   'queue.remove'(runId: number): void
   'queue.delete'(runId: number): void
   'queue.retry'(runId: number): number
+  /** 只重试保存（不重新生图）：runId 为队列项内所有保存失败的图片，unitIds 为指定图片 */
+  'queue.retrySave'(runId: number | null, unitIds?: number[]): { saved: number; failed: number; error: string }
   'queue.pendingSummary'(): { pending: number; inFlight: number }
 
   'runner.status'(): RunnerStatus
@@ -124,7 +126,7 @@ export const API_METHODS: ApiMethod[] = [
   'workflows.get', 'workflows.import', 'workflows.reimport', 'workflows.save', 'workflows.remove', 'workflows.onlineCheck',
   'tasks.get', 'tasks.create', 'tasks.save', 'tasks.remove', 'tasks.duplicate',
   'plan.forTask', 'plan.finalWorkflow', 'plan.exportWorkflow',
-  'queue.enqueue', 'queue.list', 'queue.units', 'queue.reorder', 'queue.remove', 'queue.delete', 'queue.retry', 'queue.pendingSummary',
+  'queue.enqueue', 'queue.list', 'queue.units', 'queue.reorder', 'queue.remove', 'queue.delete', 'queue.retry', 'queue.retrySave', 'queue.pendingSummary',
   'runner.status', 'runner.precheck', 'runner.start', 'runner.pause', 'runner.stop', 'runner.interrupt', 'runner.logs',
   'history.list', 'history.image', 'history.openImage', 'history.showInFolder',
   'comfy.test', 'app.info', 'app.openDataDir', 'app.backupNow', 'app.chooseOutputDir',

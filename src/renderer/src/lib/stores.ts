@@ -3,6 +3,7 @@
 import { create } from 'zustand'
 import { normalizeTaskData, PlanLibrary } from '@shared/planner'
 import type { Library, RunnerStatus, Task, TaskData, Template, TemplateKind } from '@shared/types'
+import { toast } from 'sonner'
 import { api } from './api'
 
 export type Page = 'loras' | 'plan' | 'queue' | 'history' | 'library' | 'characters' | 'stories' | 'settings'
@@ -54,6 +55,31 @@ interface PlanState {
 }
 
 let saveTimer: ReturnType<typeof setTimeout> | null = null
+// 自动保存：每次修改递增 editVersion；保存请求串行执行（不会重叠，旧数据不会晚于新数据写入），
+// 只有保存期间没有新修改时才清除 saving，否则继续保存最新数据。
+let editVersion = 0
+let saveChain: Promise<void> = Promise.resolve()
+
+/** 立即保存当前任务（串行）；保存失败会抛出错误，saving 保持为 true */
+function saveNow(get: () => PlanState, set: (p: Partial<PlanState>) => void): Promise<void> {
+  const run = async () => {
+    // 循环直到没有未保存的修改：保存期间又有修改时，接着保存最新数据
+    for (;;) {
+      const t = get().task
+      if (!t || !get().saving) return
+      const v = editVersion
+      await api['tasks.save']({ id: t.id, data: t.data })
+      if (editVersion === v && get().task?.id === t.id) {
+        set({ saving: false })
+        return
+      }
+      if (get().task?.id !== t.id) return
+    }
+  }
+  const p = saveChain.then(run)
+  saveChain = p.catch(() => {})
+  return p
+}
 
 export const usePlan = create<PlanState>((set, get) => ({
   task: null,
@@ -67,26 +93,34 @@ export const usePlan = create<PlanState>((set, get) => ({
       const first = lib?.tasks[0]
       t = first ? await api['tasks.get'](first.id) : null
     }
+    // 读取期间界面上可能又有修改（仍属于旧任务）：切换前再保存一次
+    await get().flush()
     if (t) {
       t = { ...t, data: normalizeTaskData(t.data) }
       void api['settings.set']('last_task_id', t.id)
     }
-    set({ task: t, selected: null })
+    set({ task: t, selected: null, saving: false })
   },
   update: (fn) => {
     const t = get().task
     if (!t) return
     const data = structuredClone(t.data)
     fn(data)
+    editVersion++
     set({ task: { ...t, data }, saving: true })
     if (saveTimer) clearTimeout(saveTimer)
-    saveTimer = setTimeout(() => void get().flush(), 350)
+    saveTimer = setTimeout(() => {
+      saveTimer = null
+      get().flush().catch((e) => toast.error('任务自动保存失败', { description: e instanceof Error ? e.message : String(e) }))
+    }, 350)
   },
   rename: async (name) => {
     const t = get().task
     if (!t) return
     await api['tasks.save']({ id: t.id, name })
-    set({ task: { ...t, name } })
+    // 只改名称：保留等待期间界面上的其他修改
+    const cur = get().task
+    if (cur?.id === t.id) set({ task: { ...cur, name } })
     await reloadLib()
   },
   select: (i) => set({ selected: i }),
@@ -95,11 +129,7 @@ export const usePlan = create<PlanState>((set, get) => ({
       clearTimeout(saveTimer)
       saveTimer = null
     }
-    const t = get().task
-    if (t && get().saving) {
-      await api['tasks.save']({ id: t.id, data: t.data })
-      set({ saving: false })
-    }
+    await saveNow(get, set)
   },
 }))
 

@@ -457,6 +457,8 @@ export class Runner {
       const k = `${o.subfolder}/${o.filename}`
       if (seen.has(k)) continue
       seen.add(k)
+      if (o.saved) continue // 重试保存时跳过已成功的文件
+      delete o.save_error
       try {
         const sub = String(o.subfolder ?? '').split(/[\\/]/).filter((p) => p && p !== '.' && p !== '..').map((p) => p.replace(/[<>:"|?*\x00-\x1f]/g, '_'))
         const name = String(o.filename).split(/[\\/]/).pop()!.replace(/[<>:"|?*\x00-\x1f]/g, '_')
@@ -509,7 +511,33 @@ export class Runner {
     const files = outputs.filter((o) => o.type === 'output').map((o) => o.saved || o.filename).join(', ') || '无输出文件信息'
     this.log(`第 ${unit.idx + 1} 张完成：${files}`)
     const failed = outputs.filter((o) => o.save_error)
-    if (failed.length) this.log(`第 ${unit.idx + 1} 张有 ${failed.length} 个文件未能复制到输出目录：${failed[0].save_error}（ComfyUI 中的原文件不受影响）`)
+    if (failed.length) {
+      this.log(`第 ${unit.idx + 1} 张有 ${failed.length} 个文件未能复制到输出目录：${failed[0].save_error}（ComfyUI 中的原文件不受影响）`)
+      this.onEvent({ kind: 'notice', level: 'warn', text: `第 ${unit.idx + 1} 张已生成，但未能保存到输出目录`, detail: `${failed[0].save_error}。ComfyUI 中的原图保留，可在执行队列或运行记录中「重试保存」，无需重新生图。` })
+    }
     return 'done'
+  }
+
+  /** 只重试文件保存：从 ComfyUI /view 重新下载已生成的图片并复制到入队时冻结的输出目录，不重新提交生图 */
+  async retrySave(unitIds: number[]): Promise<{ saved: number; failed: number; error: string }> {
+    const client = this.clientFactory(this.store.settings().comfy_url)
+    let saved = 0
+    let failed = 0
+    let error = ''
+    for (const id of unitIds) {
+      const unit = this.store.getUnit(id)
+      if (!unit || unit.status !== 'done' || !unit.outputs?.some((o) => o.save_error)) continue
+      const outputs = structuredClone(unit.outputs)
+      const before = outputs.filter((o) => o.saved).length
+      await this.saveOutputs(unit, outputs, client)
+      this.store.updateUnit(unit.id, { outputs })
+      this.onEvent({ kind: 'unit', unitId: unit.id, runId: unit.run_id })
+      saved += outputs.filter((o) => o.saved).length - before
+      const bad = outputs.filter((o) => o.save_error)
+      failed += bad.length
+      if (bad.length) error ||= bad[0].save_error!
+    }
+    this.log(`重试保存：成功 ${saved} 个文件${failed ? `，仍失败 ${failed} 个：${error}` : ''}`)
+    return { saved, failed, error }
   }
 }

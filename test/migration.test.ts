@@ -60,7 +60,7 @@ describe('旧数据库迁移', () => {
 
   it('设置、执行队列与运行记录原样读取', () => {
     const { store } = openLegacy()
-    expect(store.settings()).toEqual({ lora_roots: [], lora_display_name: 'model', ...expected.settings, compose_order: DEFAULT_SETTINGS.compose_order }) // 旧版默认顺序（未自定义）升级为新默认顺序
+    expect(store.settings()).toEqual({ lora_roots: [], lora_display_name: 'model', default_global_id: null, default_item_count: 10, default_output_dir: '', default_output_prefix: '', ...expected.settings, compose_order: DEFAULT_SETTINGS.compose_order }) // 旧版默认顺序（未自定义）升级为新默认顺序
     expect(normalizedOrder(expected.settings.compose_order)).not.toEqual(DEFAULT_SETTINGS.compose_order)
     const runs = store.listRuns(true)
     expect(runs.map((r) => [r.id, r.name, r.status, r.counts])).toEqual(expected.runs.map((r: { id: number; name: string; status: string; counts: unknown }) => [r.id, r.name, r.status, r.counts]))

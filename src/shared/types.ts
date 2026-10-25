@@ -217,6 +217,11 @@ export interface Settings {
   neg_separator: string
   trim_modules: boolean
   default_workflow_id: number | null
+  /** 新任务默认值（只在新建任务时使用，不影响已有任务和已入队快照） */
+  default_global_id: number | null
+  default_item_count: number
+  default_output_dir: string
+  default_output_prefix: string
   unit_timeout_min: number
   max_consecutive_failures: number
   comfy_wait_max_min: number
@@ -234,6 +239,10 @@ export const DEFAULT_SETTINGS: Settings = {
   neg_separator: ', ',
   trim_modules: true,
   default_workflow_id: null,
+  default_global_id: null,
+  default_item_count: 10,
+  default_output_dir: '',
+  default_output_prefix: '',
   unit_timeout_min: 30,
   max_consecutive_failures: 3,
   comfy_wait_max_min: 10,
@@ -347,7 +356,8 @@ export interface RunUnit {
   run_name?: string
 }
 
-export type RunCounts = Partial<Record<UnitStatus, number>> & { total: number }
+/** save_failed：已生成但有文件未能复制到任务输出目录的张数（包含在 done 中） */
+export type RunCounts = Partial<Record<UnitStatus, number>> & { total: number; save_failed?: number }
 
 export interface Run {
   id: number
@@ -384,6 +394,8 @@ export type RunnerEvent =
   | { kind: 'status'; status: RunnerStatus }
   | { kind: 'log'; text: string }
   | { kind: 'unit'; unitId: number; runId: number }
+  /** 需要用户注意的提示（例如图片已生成但未能保存到输出目录） */
+  | { kind: 'notice'; level: 'warn' | 'error'; text: string; detail?: string }
 
 export interface Library {
   templates: Template[]

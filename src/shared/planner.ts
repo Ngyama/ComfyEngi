@@ -67,6 +67,35 @@ export function newTaskData(): TaskData {
   }
 }
 
+/** 新动作的默认生成张数（设置 → 生成默认值） */
+export function defaultItemCount(s: Pick<Settings, 'default_item_count'> | null | undefined): number {
+  const n = Math.round(Number(s?.default_item_count))
+  return Number.isFinite(n) && n >= 1 ? Math.min(999, n) : 10
+}
+
+/**
+ * 新建任务的数据：套用设置页的默认值。只在新建时调用，已有任务和已入队快照不受影响。
+ * 默认全局 Prompt 优先；未设置（或模板已删除）时沿用当前任务，再退回第一个全局 Prompt。
+ * 角色、男性基础、工作流沿用当前任务（工作流未单独选择时即使用默认工作流）。
+ */
+export function newTaskWithDefaults(
+  s: Pick<Settings, 'default_global_id' | 'default_output_dir' | 'default_output_prefix'>,
+  opts: { globalIds: number[]; maleBaseId?: number | null; inherit?: TaskData | null },
+): TaskData {
+  const d = newTaskData()
+  const cur = opts.inherit
+  const def = s.default_global_id != null && opts.globalIds.includes(s.default_global_id) ? s.default_global_id : null
+  d.global_id = def ?? cur?.global_id ?? opts.globalIds[0] ?? null
+  d.male_base_id = cur?.male_base_id ?? opts.maleBaseId ?? null
+  d.character_id = cur?.character_id ?? null
+  d.workflow_id = cur?.workflow_id ?? null
+  if (cur?.workflow_none) d.workflow_none = true
+  const dir = s.default_output_dir?.trim()
+  const prefix = s.default_output_prefix?.trim()
+  if (dir || prefix) d.output = { ...(dir ? { dir } : {}), ...(prefix ? { prefix } : {}) }
+  return d
+}
+
 /** 旧数据中可能缺少字段：补齐默认值（不修改原对象） */
 export function normalizeTaskData(d: Partial<TaskData> | null | undefined): TaskData {
   const base = newTaskData()

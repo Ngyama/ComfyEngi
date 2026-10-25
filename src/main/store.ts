@@ -399,6 +399,8 @@ export class Store {
       counts[r.status as keyof RunCounts] = Number(r.n)
       counts.total += Number(r.n)
     }
+    const sf = Number(this.one(`SELECT COUNT(*) AS n FROM run_units WHERE run_id=? AND status='done' AND outputs LIKE '%"save_error"%'`, runId)?.n ?? 0)
+    if (sf) counts.save_failed = sf
     return counts
   }
 
@@ -490,7 +492,9 @@ export class Store {
     let sql =
       "SELECT u.*, r.name AS run_name FROM run_units u JOIN runs r ON r.id=u.run_id WHERE u.status IN ('done','failed')"
     const params: SqlValue[] = []
-    if (status) {
+    if (status === 'save_failed') {
+      sql += ` AND u.status='done' AND u.outputs LIKE '%"save_error"%'`
+    } else if (status) {
       sql += ' AND u.status=?'
       params.push(status)
     }

@@ -1,11 +1,11 @@
 // 运行记录：以缩略图浏览历史结果，点开查看 Prompt、Seed、prompt_id 与输出位置。
 
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { AlertTriangle, FolderOpen, History, ImageIcon, ImageOff, RefreshCw, X } from 'lucide-react'
+import { AlertTriangle, FolderOpen, History, ImageIcon, ImageOff, RefreshCw, Save, X } from 'lucide-react'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { Chip, CopyButton, EmptyState, FieldLabel, PageHeader, SearchBox } from '@/components/common'
-import { api } from '@/lib/api'
+import { api, call } from '@/lib/api'
 import { useRunner } from '@/lib/stores'
 import { cn } from '@/lib/utils'
 import type { RunUnit } from '@shared/types'
@@ -65,6 +65,11 @@ function Thumb({ u, selected, onClick }: { u: RunUnit; selected: boolean; onClic
           <div className="absolute inset-0 grid place-items-center text-muted-foreground/40">{src === null ? <ImageOff className="size-5" /> : <ImageIcon className="size-5" />}</div>
         )}
         <span className="absolute top-2 left-2 rounded-md bg-black/55 px-1.5 py-0.5 font-mono text-[10px] text-white/80">{u.seed}</span>
+        {u.status === 'done' && u.outputs?.some((o) => o.save_error) && (
+          <span className="absolute top-2 right-2 rounded-md bg-warning px-1.5 py-0.5 text-[10px] font-medium text-white" title="图片已生成，但未能复制到任务输出目录">
+            未保存
+          </span>
+        )}
       </div>
       <div className="px-2.5 py-2">
         <div className="truncate text-[12px] font-medium">{u.item_label}</div>
@@ -84,6 +89,17 @@ function Detail({ u, onClose }: { u: RunUnit; onClose: () => void }) {
     const err = await api[kind](u.id)
     if (err) toast.error(err)
   }
+  const saveFailed = u.status === 'done' && !!u.outputs?.some((o) => o.save_error)
+  const [retrying, setRetrying] = useState(false)
+  const retrySave = async () => {
+    setRetrying(true)
+    const r = await call(api['queue.retrySave'](null, [u.id]))
+    setRetrying(false)
+    if (!r) return
+    if (r.failed) toast.error('仍未能保存', { description: r.error })
+    else toast.success('已保存到输出目录')
+    // 列表随执行器的 unit 事件自动刷新
+  }
   const rows: [string, string][] = [
     ['任务', u.run_name ?? ''],
     ['角色', m?.character ?? ''],
@@ -101,7 +117,7 @@ function Detail({ u, onClose }: { u: RunUnit; onClose: () => void }) {
     <div className="flex h-full flex-col">
       <div className="flex items-center gap-2 px-4 pt-4 pb-2">
         <span className="truncate text-[14px] font-semibold">{u.item_label}</span>
-        <span className={cn('text-xs', u.status === 'done' ? 'text-success' : 'text-destructive')}>{u.status === 'done' ? '成功' : '失败'}</span>
+        <span className={cn('text-xs', saveFailed ? 'text-warning' : u.status === 'done' ? 'text-success' : 'text-destructive')}>{saveFailed ? '已生成，未保存到输出目录' : u.status === 'done' ? '成功' : '失败'}</span>
         <div className="flex-1" />
         <Button variant="ghost" size="icon-sm" onClick={onClose} aria-label="关闭">
           <X />
@@ -122,6 +138,14 @@ function Detail({ u, onClose }: { u: RunUnit; onClose: () => void }) {
           </Button>
           <CopyButton text={String(u.seed)} label={`复制 Seed ${u.seed}`} />
         </div>
+        {saveFailed && (
+          <div className="space-y-2 rounded-xl bg-warning/10 p-3 text-xs leading-relaxed text-warning" data-testid="save-failed">
+            <div>图片已在 ComfyUI 中生成，但未能复制到任务输出目录。ComfyUI 中的原图保留；「重试保存」会重新从 ComfyUI 下载并复制，不会重新生图。</div>
+            <Button size="sm" variant="secondary" onClick={retrySave} disabled={retrying}>
+              <Save /> {retrying ? '正在保存…' : '重试保存'}
+            </Button>
+          </div>
+        )}
         {u.error && <div className="rounded-xl bg-destructive/10 p-3 text-xs leading-relaxed whitespace-pre-wrap text-destructive select-text">{u.error}</div>}
         <div className="grid grid-cols-[72px_1fr] gap-x-3 gap-y-1.5 text-xs">
           {rows.map(([k, v]) => (
@@ -191,6 +215,7 @@ export default function HistoryPage() {
               ['', '全部'],
               ['done', '成功'],
               ['failed', '失败'],
+              ['save_failed', '未保存'],
             ].map(([k, l]) => (
               <Chip key={k} active={status === k} onClick={() => setStatus(k)}>
                 {l}

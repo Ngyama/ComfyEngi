@@ -1,7 +1,7 @@
 // 任务级输出：文件名前缀（含 %date:…%）写入 ComfyUI 的 filename_prefix；完成后通过 ComfyUI /view 把最终图片复制到任务的输出目录。
 // 使用模拟 ComfyUI（真实写文件、真实 /view 下载）；ComfyUI 的 output 目录与任务输出目录分开，验证确实复制到了任务目录。
 
-import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { expandDateTokens, renderPrefix } from '@shared/mapping'
@@ -121,6 +121,36 @@ describe('任务输出目录（模拟 ComfyUI）', () => {
     expect(o.saved).toBeUndefined()
     expect(o.save_error).toContain('复制到')
     expect(existsSync(join(comfyOut, o.subfolder, o.filename))).toBe(true)
+    // 不隐藏在普通「完成」中：队列计数与运行记录筛选都能找到
+    expect(s.runCounts(units[0].run_id).save_failed).toBe(1)
+    expect(s.history('', 'save_failed').map((u) => u.id)).toEqual([units[0].id])
+  })
+
+  it('只重试保存：修复目录后从 ComfyUI 重新下载并复制，不重新提交生图', async () => {
+    const parent = tempDir()
+    const blocker = join(parent, 'out')
+    writeFileSync(blocker, 'x')
+    const units = await run(lib.makeTask([lib.item('睡觉', null, [], 1)], 'R', { output: { dir: blocker, prefix: 'z/img' } }))
+    expect(units[0].outputs.some((o) => o.save_error)).toBe(true)
+    const submitted = mock.submitted.length
+    // 第一次重试：目录仍不可用，记录原因
+    const r0 = new Runner(s, { eventsFactory: null })
+    expect((await r0.retrySave([units[0].id])).failed).toBe(1)
+    // 用户修复目录后重试
+    rmSync(blocker)
+    const r1 = await r0.retrySave([units[0].id])
+    expect(r1).toEqual({ saved: 1, failed: 0, error: '' })
+    const u = s.getUnit(units[0].id)!
+    const o = u.outputs.find((x) => x.node === '9')!
+    expect(o.save_error).toBeUndefined()
+    expect(o.saved!.startsWith(join(blocker, 'z'))).toBe(true)
+    expect(readFileSync(o.saved!)).toEqual(readFileSync(join(comfyOut, o.subfolder, o.filename)))
+    expect(u.status).toBe('done')
+    expect(mock.submitted.length).toBe(submitted) // 没有重新生图
+    expect(s.runCounts(u.run_id).save_failed).toBeUndefined()
+    // 再次重试：已保存的文件不会重复复制
+    expect((await r0.retrySave([u.id])).saved).toBe(0)
+    expect(readdirSync(join(blocker, 'z')).length).toBe(1)
   })
 
   it('没有设置前缀的旧任务沿用工作流映射的模板；入队前没有输出目录的旧记录不复制', async () => {

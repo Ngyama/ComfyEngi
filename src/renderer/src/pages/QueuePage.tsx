@@ -1,7 +1,7 @@
 // 执行队列与运行监控。调度在主进程中进行，本页只负责展示与控制。
 
 import { useCallback, useEffect, useState } from 'react'
-import { ChevronDown, ChevronRight, CircleStop, GripVertical, ListPlus, MoreHorizontal, Pause, Play, RotateCcw, Terminal, Trash2, Undo2, Zap } from 'lucide-react'
+import { ChevronDown, ChevronRight, CircleStop, GripVertical, ListPlus, MoreHorizontal, Pause, Play, RotateCcw, Save, Terminal, Trash2, Undo2, Zap } from 'lucide-react'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
@@ -166,7 +166,7 @@ function RunCard({ run, expanded, onToggle, onChanged }: { run: Run; expanded: b
   }, [expanded, run.id, tick])
   const c = run.counts
   const total = c.total - (c.skipped ?? 0)
-  const statusText = { queued: c.done || c.failed ? '执行中' : '排队中', done: '已完成', removed: '已移出' }[run.status]
+  const statusText = { queued: c.done || c.failed ? '执行中' : '排队中', done: c.save_failed ? '已生成，部分未保存' : '已完成', removed: '已移出' }[run.status]
   return (
     <div ref={s.setNodeRef} style={s.style} className={cn('rounded-xl bg-card ring-1 ring-tint/[0.08]', s.isDragging && 'shadow-2xl shadow-tint/15')}>
       <div className="flex items-center gap-3 px-3 py-3">
@@ -187,6 +187,11 @@ function RunCard({ run, expanded, onToggle, onChanged }: { run: Run; expanded: b
             <span>
               {c.done ?? 0} / {total}
             </span>
+            {c.save_failed ? (
+              <span className="text-warning" title="图片已在 ComfyUI 生成，但未能复制到任务输出目录。可在右侧菜单「重试保存」，无需重新生图。">
+                未保存 {c.save_failed}
+              </span>
+            ) : null}
             {c.failed ? <span className="text-destructive">失败 {c.failed}</span> : null}
           </div>
           <Bar value={(c.done ?? 0) + (c.failed ?? 0)} max={total} />
@@ -207,6 +212,19 @@ function RunCard({ run, expanded, onToggle, onChanged }: { run: Run; expanded: b
               }}
             >
               <RotateCcw /> 重试失败项
+            </DropdownMenuItem>
+            <DropdownMenuItem
+              disabled={!c.save_failed}
+              onSelect={async () => {
+                const r = await call(api['queue.retrySave'](run.id))
+                if (r) {
+                  if (r.failed) toast.error(`仍有 ${r.failed} 个文件未能保存`, { description: r.error })
+                  else toast.success(`已保存 ${r.saved} 个文件到输出目录`)
+                }
+                onChanged()
+              }}
+            >
+              <Save /> 重试保存（不重新生图）
             </DropdownMenuItem>
             <DropdownMenuItem
               disabled={run.status !== 'queued'}
@@ -237,8 +255,9 @@ function RunCard({ run, expanded, onToggle, onChanged }: { run: Run; expanded: b
       {expanded && (
         <div className="max-h-80 overflow-y-auto border-t border-tint/[0.08] px-3 py-2">
           {units.map((u) => {
-            const [t, cls] = UNIT_STATUS[u.status] ?? [u.status, '']
-            const files = u.outputs?.filter((o) => o.type === 'output').map((o) => o.filename).join(', ')
+            const saveErr = u.status === 'done' ? u.outputs?.find((o) => o.save_error)?.save_error : undefined
+            const [t, cls] = saveErr ? ['未保存', 'text-warning'] : (UNIT_STATUS[u.status] ?? [u.status, ''])
+            const files = u.outputs?.filter((o) => o.type === 'output').map((o) => o.saved || o.filename).join(', ')
             return (
               <div key={u.id} className="flex items-center gap-3 rounded-md px-2 py-1.5 text-xs hover:bg-tint/[0.03]">
                 <span className="w-10 shrink-0 text-muted-foreground tabular-nums">#{u.idx + 1}</span>
@@ -251,8 +270,8 @@ function RunCard({ run, expanded, onToggle, onChanged }: { run: Run; expanded: b
                 <span className="w-24 shrink-0 truncate text-muted-foreground">{u.meta?.expression || '—'}</span>
                 <span className="w-24 shrink-0 font-mono text-[11px] text-muted-foreground">{u.seed}</span>
                 <span className={cn('w-14 shrink-0', cls)}>{t}</span>
-                <span className={cn('min-w-0 flex-1 truncate', u.error ? 'text-destructive' : 'text-muted-foreground')} title={u.error || files}>
-                  {u.error || files}
+                <span className={cn('min-w-0 flex-1 truncate', u.error ? 'text-destructive' : saveErr ? 'text-warning' : 'text-muted-foreground')} title={u.error || saveErr || files}>
+                  {u.error || saveErr || files}
                 </span>
               </div>
             )

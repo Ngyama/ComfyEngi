@@ -31,13 +31,22 @@ import { api, call } from '@/lib/api'
 import { hueOf } from '@/lib/hooks'
 import { confirm, reloadLib, templatesOf, useLib, useNav, usePlan, useRunner } from '@/lib/stores'
 import { cn } from '@/lib/utils'
-import { expandTask, newInteractionItem, newItem, newTaskData } from '@shared/planner'
+import { defaultItemCount, expandTask, newInteractionItem, newItem, newTaskWithDefaults } from '@shared/planner'
 import type { Plan } from '@shared/api'
-import type { PlanUnit, TaskItem } from '@shared/types'
+import { DEFAULT_SETTINGS, type Library, type PlanUnit, type TaskData, type TaskItem } from '@shared/types'
 import { PlanPreviewDialog, TaskSettingsDialog } from './dialogs'
 import { LoraPanel } from './LoraPanel'
 import { CharacterPicker, GlobalPicker, PosePicker, StoryPicker, WorkflowMenu, type NewAction } from './pickers'
 import { PoseDetail } from './PoseDetail'
+
+/** 新建任务：套用设置 → 生成默认值；角色和工作流沿用当前任务 */
+function newTaskFor(lib: Library | null, inherit: TaskData | null | undefined): TaskData {
+  return newTaskWithDefaults(lib?.settings ?? DEFAULT_SETTINGS, {
+    globalIds: templatesOf(lib, 'global').map((t) => t.id),
+    maleBaseId: templatesOf(lib, 'male').find((t) => t.category === '基础')?.id ?? null,
+    inherit,
+  })
+}
 
 // ---------------------------------------------------------------- 任务切换
 function TaskSwitcher() {
@@ -48,15 +57,7 @@ function TaskSwitcher() {
   const [name, setName] = useState('')
 
   const create = async () => {
-    const d = newTaskData()
-    const cur = task?.data
-    const g = templatesOf(lib, 'global')[0]
-    const mb = templatesOf(lib, 'male').find((t) => t.category === '基础')
-    d.global_id = cur?.global_id ?? g?.id ?? null
-    d.male_base_id = cur?.male_base_id ?? mb?.id ?? null
-    d.character_id = cur?.character_id ?? null // 沿用当前任务的角色，减少重复选择
-    d.workflow_id = cur?.workflow_id ?? null
-    if (cur?.workflow_none) d.workflow_none = true
+    const d = newTaskFor(lib, task?.data) // 沿用当前任务的角色，减少重复选择
     const r = await call(api['tasks.create'](`套图任务 ${(lib?.tasks.length ?? 0) + 1}`, d))
     if (!r) return
     await reloadLib()
@@ -337,7 +338,7 @@ export default function PlanPage() {
         action={
           <Button
             onClick={async () => {
-              const r = await call(api['tasks.create']('套图任务 1', newTaskData()))
+              const r = await call(api['tasks.create']('套图任务 1', newTaskFor(lib, null)))
               if (r) {
                 await reloadLib()
                 await usePlan.getState().load(r.id)
@@ -371,8 +372,13 @@ export default function PlanPage() {
     const prev = at > 0 ? items[at - 1] : null
     // 服装默认继承上一个动作
     // 双人互动在选择了第二角色时默认让第二角色出场；单人动作默认是单人图片
+    const count = defaultItemCount(lib?.settings)
     update((x) =>
-      x.items.splice(at, 0, ...ids.map((a) => ('pose_id' in a ? newItem(a.pose_id, prev?.outfit_id ?? null) : newInteractionItem(a.position_id, a.subposition_id, prev?.outfit_id ?? null, !!x.second_character_id)))),
+      x.items.splice(
+        at,
+        0,
+        ...ids.map((a) => ({ ...('pose_id' in a ? newItem(a.pose_id, prev?.outfit_id ?? null) : newInteractionItem(a.position_id, a.subposition_id, prev?.outfit_id ?? null, !!x.second_character_id)), count })),
+      ),
     )
     setKeysAfter((k) => [...k.slice(0, at), ...ids.map(() => Math.random().toString(36).slice(2)), ...k.slice(at)])
     select(at + ids.length - 1)
