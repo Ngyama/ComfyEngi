@@ -8,11 +8,17 @@ import { api } from './api'
 export type Page = 'loras' | 'plan' | 'queue' | 'history' | 'library' | 'characters' | 'stories' | 'settings'
 
 // ---------------------------------------------------------------- 导航
+/** 跳转到设置页的某个位置（例如从套图任务直接打开某个工作流的节点映射） */
+export interface SettingsTarget {
+  section: 'workflows'
+  workflowId?: number
+}
 interface NavState {
   page: Page
-  go(p: Page): void
+  settingsTarget: SettingsTarget | null
+  go(p: Page, settingsTarget?: SettingsTarget): void
 }
-export const useNav = create<NavState>((set) => ({ page: 'plan', go: (page) => set({ page }) }))
+export const useNav = create<NavState>((set) => ({ page: 'plan', settingsTarget: null, go: (page, settingsTarget) => set({ page, settingsTarget: settingsTarget ?? null }) }))
 
 // ---------------------------------------------------------------- 素材库缓存
 interface LibState {

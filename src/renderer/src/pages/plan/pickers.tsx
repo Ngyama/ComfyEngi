@@ -1,12 +1,15 @@
-// 主界面使用的快捷选择器：角色（主角色 / 第二角色）、剧情、动作。
+// 主界面使用的快捷选择器：全局 Prompt、角色（主角色 / 第二角色）、剧情、动作、工作流。
 
 import { useEffect, useMemo, useState } from 'react'
-import { BookOpen, Check, Dices, Plus, Shirt, Sparkles, Users } from 'lucide-react'
+import { BookOpen, Check, Dices, Plus, Settings2, Shirt, Sparkles, Users, Workflow as WorkflowIcon } from 'lucide-react'
+import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
-import { Avatar, Chip, EmptyState, FieldLabel, SearchBox } from '@/components/common'
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
+import { Avatar, Chip, EmptyState, FieldLabel, SearchBox, StatusDot } from '@/components/common'
+import { api, call } from '@/lib/api'
 import { hueOf, matchesName } from '@/lib/hooks'
-import { templatesOf, useLib, useNav } from '@/lib/stores'
+import { reloadLib, templatesOf, useLib, useNav } from '@/lib/stores'
 import { cn } from '@/lib/utils'
 import { pickRandomStory } from '@shared/planner'
 import type { Story } from '@shared/types'
@@ -355,5 +358,126 @@ export function PosePicker({ open, onOpenChange, onAdd, insertAfter }: { open: b
         </DialogFooter>
       </DialogContent>
     </Dialog>
+  )
+}
+
+// ---------------------------------------------------------------- 全局 Prompt
+/** 整套任务的全局 Prompt（画质、画风与通用负面）：与剧情、角色并列在页面顶部选择 */
+export function GlobalPicker({ open, onOpenChange, value, onPick }: { open: boolean; onOpenChange: (o: boolean) => void; value: number | null; onPick: (id: number | null) => void }) {
+  const lib = useLib((s) => s.lib)
+  const go = useNav((s) => s.go)
+  const list = templatesOf(lib, 'global')
+  const pick = (id: number | null) => {
+    onPick(id)
+    onOpenChange(false)
+  }
+  const row = (id: number | null, name: string, pos: string, neg: string) => (
+    <button
+      key={id ?? 'none'}
+      type="button"
+      onClick={() => pick(id)}
+      className={cn('flex w-full items-start gap-3 rounded-xl bg-card p-3 text-left ring-1 ring-tint/[0.08] transition hover:bg-accent', value === id && 'ring-primary/60')}
+    >
+      <div className="min-w-0 flex-1">
+        <div className="text-[13px] font-medium">{name}</div>
+        {pos && <div className="mt-1 line-clamp-2 font-mono text-[11px] text-muted-foreground">{pos}</div>}
+        {neg && <div className="mt-0.5 line-clamp-1 font-mono text-[11px] text-muted-foreground/70">负面：{neg}</div>}
+      </div>
+      {value === id && <Check className="size-4 shrink-0 text-primary" />}
+    </button>
+  )
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="flex max-h-[calc(100dvh-2rem)] flex-col sm:max-w-xl">
+        <DialogHeader className="shrink-0">
+          <DialogTitle>全局 Prompt</DialogTitle>
+          <DialogDescription>画质、画风与通用负面 Prompt，作用于整套图。</DialogDescription>
+        </DialogHeader>
+        <div className="-mx-1 min-h-0 flex-1 space-y-2 overflow-y-auto px-1 py-0.5">
+          {row(null, '不使用', '', '')}
+          {list.map((g) => row(g.id, g.name || '（未命名）', g.positive, g.negative))}
+        </div>
+        <DialogFooter className="shrink-0 sm:justify-start">
+          <Button variant="ghost" onClick={() => (onOpenChange(false), go('library'))}>
+            管理全局 Prompt
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+// ---------------------------------------------------------------- 工作流
+/** 套图任务页面的工作流选择与导入（使用与设置页相同的工作流存储；节点映射在设置中编辑） */
+export function WorkflowMenu({ value, onPick }: { value: number | null; onPick: (id: number | null) => void }) {
+  const lib = useLib((s) => s.lib)
+  const go = useNav((s) => s.go)
+  const [open, setOpen] = useState(false)
+  const wfs = lib?.workflows ?? []
+  const def = wfs.find((w) => w.id === lib?.settings.default_workflow_id)
+  const cur = wfs.find((w) => w.id === (value ?? lib?.settings.default_workflow_id))
+  const problem = (w: (typeof wfs)[number]) => (!w.mapping ? '尚未配置节点映射' : w.errors ? `映射有 ${w.errors} 个错误` : '')
+  const editMapping = (id: number) => {
+    setOpen(false)
+    go('settings', { section: 'workflows', workflowId: id })
+  }
+  const doImport = async () => {
+    const r = await call(api['workflows.import']())
+    if (!r) return
+    if ('error' in r) return toast.error('无法导入工作流', { description: r.error })
+    await reloadLib()
+    onPick(r.id)
+    setOpen(false)
+    toast.success('已导入并设为当前任务的工作流', {
+      description: '下一步：配置节点映射（Prompt、Seed、LoRA 写入哪些节点）。',
+      action: { label: '配置映射', onClick: () => go('settings', { section: 'workflows', workflowId: r.id }) },
+      duration: 10000,
+    })
+  }
+  const item = (id: number | null, label: string, w?: (typeof wfs)[number]) => (
+    <button
+      key={id ?? 'default'}
+      type="button"
+      onClick={() => (onPick(id), setOpen(false))}
+      className={cn('flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-[13px] hover:bg-tint/[0.05]', value === id && 'bg-primary/10 text-primary')}
+    >
+      <StatusDot tone={!w || !w.mapping ? 'warn' : w.errors ? 'error' : 'ok'} />
+      <span className="min-w-0 flex-1 truncate">{label}</span>
+      {w && problem(w) && <span className="shrink-0 text-[11px] text-warning">{problem(w)}</span>}
+      {value === id && <Check className="size-3.5 shrink-0" />}
+    </button>
+  )
+  const issue = cur ? problem(cur) : '未选择工作流'
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <button type="button" data-testid="workflow-menu" className="flex items-center gap-2 rounded-lg px-2.5 py-1.5 text-xs text-muted-foreground hover:bg-tint/[0.05] hover:text-foreground" title={issue || '工作流'}>
+          <StatusDot tone={!cur || !cur.mapping ? 'warn' : cur.errors ? 'error' : 'ok'} />
+          <WorkflowIcon className="size-3.5" />
+          <span className="max-w-40 truncate">{cur ? cur.name : '选择工作流'}</span>
+          {issue && <span className="text-warning">· {issue}</span>}
+        </button>
+      </PopoverTrigger>
+      <PopoverContent align="end" className="w-80 p-2">
+        <div className="px-2 pt-1 pb-1.5 text-[11px] text-muted-foreground">当前任务使用的 ComfyUI 工作流</div>
+        <div className="max-h-72 space-y-0.5 overflow-y-auto">
+          {item(null, def ? `默认：${def.name}` : '默认（未设置）', def)}
+          {wfs.map((w) => item(w.id, w.name, w))}
+        </div>
+        {cur && issue && (
+          <div className="mx-1 mt-2 rounded-lg bg-warning/[0.08] px-2.5 py-2 text-[11.5px] text-warning">
+            「{cur.name}」{issue}，生成前需要指定 Prompt、Seed 等写入哪些节点。
+          </div>
+        )}
+        <div className="mt-2 flex gap-1 border-t border-tint/[0.08] pt-2">
+          <Button size="sm" variant="ghost" className="flex-1" onClick={() => void doImport()}>
+            <Plus /> 导入 API 工作流
+          </Button>
+          <Button size="sm" variant="ghost" className="flex-1" disabled={!cur} onClick={() => cur && editMapping(cur.id)}>
+            <Settings2 /> 编辑节点映射
+          </Button>
+        </div>
+      </PopoverContent>
+    </Popover>
   )
 }

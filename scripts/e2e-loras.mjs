@@ -312,6 +312,8 @@ try {
   await dlg.locator('textarea').first().fill('alice_ce, blue eyes')
   await win.waitForTimeout(200)
   await shot('c02-import-triggers')
+  const sb = await win.locator('[data-testid=import-body]').evaluate((el) => ({ overflow: getComputedStyle(el).overflowY, bar: getComputedStyle(el).scrollbarWidth, gutter: el.offsetWidth - el.clientWidth }))
+  check('导入触发词弹窗隐藏滚动条但仍可滚动', sb.overflow === 'auto' && sb.bar === 'none' && sb.gutter === 0, JSON.stringify(sb))
   check('编辑后的预览', (await preview.innerText()) === 'alice_ce, blue eyes, 1girl, char_b')
   await dlg.getByRole('button', { name: '确认导入' }).click()
   await win.waitForTimeout(1500)

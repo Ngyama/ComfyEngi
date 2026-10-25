@@ -12,6 +12,7 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { Avatar, EmptyState, FieldLabel, PromptField, SearchBox, TextInput } from '@/components/common'
 import { SortableArea, useSortableItem } from '@/components/sortable'
+import { DndContext, DragOverlay, PointerSensor, pointerWithin, useDraggable, useDroppable, useSensor, useSensors, type DragEndEvent } from '@dnd-kit/core'
 import { api, call } from '@/lib/api'
 import { hueOf, matches, useDraft } from '@/lib/hooks'
 import { confirm, reloadLib, useLib } from '@/lib/stores'
@@ -276,10 +277,12 @@ function OutfitEditor({ o, onDeleted }: { o: Outfit; onDeleted: () => void }) {
 
 // ---------------------------------------------------------------- 角色
 
-function CharacterAvatar({ c, resources, className }: { c: Character; resources: LoraResource[]; className?: string }) {
+/** portrait：角色列表中的 3:4 竖向头像（42×56） */
+function CharacterAvatar({ c, resources, className, portrait }: { c: Character; resources: LoraResource[]; className?: string; portrait?: boolean }) {
   const r = c.loras?.length === 1 && c.loras[0].resource_id ? resources.find((x) => x.id === c.loras[0].resource_id) : undefined
-  if (r && (r.preview || r.cover)) return <LoraThumb r={r} width={96} className={cn('size-9 rounded-xl', className)} />
-  return <Avatar name={c.name} hue={hueOf(c.name)} className={className} />
+  const size = portrait ? 'h-14 w-[42px] rounded-lg' : 'size-9 rounded-xl'
+  if (r && (r.preview || r.cover)) return <LoraThumb r={r} width={portrait ? 128 : 96} className={cn(size, className)} />
+  return <Avatar name={c.name} hue={hueOf(c.name)} className={cn(portrait && size, className)} />
 }
 
 function Section({ title, hint, right, children }: { title: string; hint?: string; right?: React.ReactNode; children: React.ReactNode }) {
@@ -456,7 +459,7 @@ function ImportTriggersDialog({ resource, base, onClose, onConfirm }: { resource
           <DialogTitle>导入触发词</DialogTitle>
           <DialogDescription>来自「{loraTitle(resource)}」的 metadata。确认前可以编辑；不会修改 LoRA 的 metadata.json。</DialogDescription>
         </DialogHeader>
-        <div className="-mx-1 min-h-0 min-w-0 flex-1 space-y-4 overflow-y-auto overscroll-contain px-1 py-0.5" data-testid="import-body">
+        <div className="scrollbar-none -mx-1 min-h-0 min-w-0 flex-1 space-y-4 overflow-y-auto overscroll-contain px-1 py-0.5" data-testid="import-body">
           <div>
             <FieldLabel hint="点击插入到下方选中的位置">触发词</FieldLabel>
             <div className="flex flex-wrap gap-1.5">
@@ -616,6 +619,26 @@ function loadCollapsed(): Set<string> {
   }
 }
 
+/** 可拖动的角色行：只挂指针拖动（移动 6px 后才开始），点击与右键菜单不受影响 */
+function DraggableChar({ id, disabled, children }: { id: number; disabled: boolean; children: React.ReactNode }) {
+  const { setNodeRef, listeners, isDragging } = useDraggable({ id: `char:${id}`, disabled })
+  return (
+    <div ref={setNodeRef} {...(disabled ? {} : listeners)} className={cn(isDragging && 'opacity-40')}>
+      {children}
+    </div>
+  )
+}
+
+/** 角色可以放入的位置：文件夹行，或拖动时出现的「根目录」 */
+function FolderDrop({ folder, children, className }: { folder: string; children: React.ReactNode; className?: string }) {
+  const { setNodeRef, isOver } = useDroppable({ id: `folder:${folder}` })
+  return (
+    <div ref={setNodeRef} data-drop-over={isOver || undefined} className={cn('rounded-lg transition-colors', isOver && 'bg-primary/10 ring-1 ring-primary/50', className)}>
+      {children}
+    </div>
+  )
+}
+
 function CharacterTree({ resources, sel, onSelect, onRenamed }: { resources: LoraResource[]; sel: number | null; onSelect: (id: number | null) => void; onRenamed: () => void }) {
   const lib = useLib((s) => s.lib)
   const [q, setQ] = useState('')
@@ -651,9 +674,25 @@ function CharacterTree({ resources, sel, onSelect, onRenamed }: { resources: Lor
     if (!(await succeeded(api['folders.remove'](f)))) return
     await reloadLib()
   }
+  // 拖放到文件夹：与「移动到…」相同，真实移动 Markdown 文件（不覆盖同名文件，关联不变）
+  const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 6 } }))
+  const [dragging, setDragging] = useState<Character | null>(null)
+  const canDrag = vault && !q
+  const onDragEnd = async (e: DragEndEvent) => {
+    const c = dragging
+    setDragging(null)
+    const over = e.over ? String(e.over.id) : ''
+    if (!c || !over.startsWith('folder:')) return
+    const target = over.slice('folder:'.length)
+    if (target === (c._folder ?? '')) return
+    if (!(await succeeded(api['characters.move'](c.id, target)))) return
+    await reloadLib()
+    toast.success(`已把「${c.name}」移到「${target || '根目录'}」`)
+  }
 
   const charRow = (c: Character, depth: number, path?: string) => (
-    <ContextMenu key={c.id}>
+    <DraggableChar key={c.id} id={c.id} disabled={!canDrag}>
+    <ContextMenu>
       <ContextMenuTrigger asChild>
         <button
           type="button"
@@ -661,9 +700,9 @@ function CharacterTree({ resources, sel, onSelect, onRenamed }: { resources: Lor
           data-active={sel === c.id || undefined}
           data-testid="char-row"
           style={{ paddingLeft: 8 + depth * 16 }}
-          className="flex w-full items-center gap-3 rounded-xl py-2 pr-2 text-left hover:bg-tint/[0.04] data-[active]:bg-tint/[0.07] data-[state=open]:bg-tint/[0.05]"
+          className="flex w-full items-center gap-3 rounded-xl py-1.5 pr-2 text-left hover:bg-tint/[0.04] data-[active]:bg-tint/[0.07] data-[state=open]:bg-tint/[0.05]"
         >
-          <CharacterAvatar c={c} resources={resources} />
+          <CharacterAvatar c={c} resources={resources} portrait />
           <div className="min-w-0">
             <div className="truncate text-[13px] font-medium">{c.name || '（未命名）'}</div>
             <div className="truncate text-[11px] text-muted-foreground">{path !== undefined ? `${path || '根目录'} · ` : ''}{outfitCount(c.id)} 套服装</div>
@@ -685,6 +724,7 @@ function CharacterTree({ resources, sel, onSelect, onRenamed }: { resources: Lor
         </ContextMenuItem>
       </ContextMenuContent>
     </ContextMenu>
+    </DraggableChar>
   )
 
   const folderNode = (f: string, depth: number): React.ReactNode => {
@@ -693,6 +733,7 @@ function CharacterTree({ resources, sel, onSelect, onRenamed }: { resources: Lor
     const empty = !chars.some((c) => c._folder === f) && !folders.some((x) => parentOf(x) === f)
     return (
       <div key={f}>
+        <FolderDrop folder={f}>
         <ContextMenu>
           <ContextMenuTrigger asChild>
             <button
@@ -724,6 +765,7 @@ function CharacterTree({ resources, sel, onSelect, onRenamed }: { resources: Lor
             </ContextMenuItem>
           </ContextMenuContent>
         </ContextMenu>
+        </FolderDrop>
         {open && (
           <div className="relative">
             {/* 竖向引导线：区分文件夹内的角色与根目录角色 */}
@@ -753,7 +795,13 @@ function CharacterTree({ resources, sel, onSelect, onRenamed }: { resources: Lor
       <div className="px-4 pb-3">
         <SearchBox value={q} onChange={setQ} placeholder="搜索角色…" />
       </div>
+      <DndContext sensors={sensors} collisionDetection={pointerWithin} onDragStart={(e) => setDragging(chars.find((c) => `char:${c.id}` === String(e.active.id)) ?? null)} onDragEnd={(e) => void onDragEnd(e)} onDragCancel={() => setDragging(null)}>
       <div className="min-h-0 flex-1 space-y-0.5 overflow-y-auto px-2 pb-3" data-testid="character-tree">
+        {dragging && (
+          <FolderDrop folder="" className="mb-1 border border-dashed border-primary/40">
+            <div className="px-3 py-2 text-center text-[12px] text-primary" data-testid="root-drop">拖到这里移回根目录</div>
+          </FolderDrop>
+        )}
         {q ? (
           <>
             {found.map((c) => charRow(c, 0, c._folder ?? ''))}
@@ -766,6 +814,15 @@ function CharacterTree({ resources, sel, onSelect, onRenamed }: { resources: Lor
           </>
         )}
       </div>
+      <DragOverlay dropAnimation={null}>
+        {dragging && (
+          <div className="flex w-[220px] items-center gap-3 rounded-xl bg-card px-2 py-1.5 shadow-xl ring-1 shadow-tint/15 ring-primary/40">
+            <CharacterAvatar c={dragging} resources={resources} portrait />
+            <span className="truncate text-[13px] font-medium">{dragging.name}</span>
+          </div>
+        )}
+      </DragOverlay>
+      </DndContext>
       {dlg?.kind === 'newFolder' && (
         <NameDialog
           title={dlg.parent ? `在「${leafOf(dlg.parent)}」中新建文件夹` : '新建文件夹'}

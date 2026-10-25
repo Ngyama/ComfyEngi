@@ -10,7 +10,7 @@ import { EmptyState, FieldLabel, NumberStepper, StatusDot, TextInput } from '@/c
 import { SortableArea, useSortableItem } from '@/components/sortable'
 import { api, call } from '@/lib/api'
 import { useAsync } from '@/lib/hooks'
-import { reloadLib, useLib } from '@/lib/stores'
+import { reloadLib, useLib, useNav } from '@/lib/stores'
 import { cn } from '@/lib/utils'
 import { compose, MODULE_LABELS, normalizedOrder } from '@shared/prompt'
 import type { Settings } from '@shared/types'
@@ -95,7 +95,7 @@ function ComfySection({ s }: { s: Settings }) {
 function WorkflowsSection() {
   const lib = useLib((s) => s.lib)
   const wfs = lib?.workflows ?? []
-  const [sel, setSel] = useState<number | null>(wfs[0]?.id ?? null)
+  const [sel, setSel] = useState<number | null>(() => useNav.getState().settingsTarget?.workflowId ?? wfs[0]?.id ?? null)
   const cur = wfs.find((w) => w.id === sel) ?? wfs[0]
   const doImport = async () => {
     const r = await call(api['workflows.import']())
@@ -256,7 +256,7 @@ function DataSection() {
 
 export default function SettingsPage() {
   const lib = useLib((s) => s.lib)
-  const [sec, setSec] = useState<Section>('comfy')
+  const [sec, setSec] = useState<Section>(() => useNav.getState().settingsTarget?.section ?? 'comfy')
   if (!lib) return null
   const s = lib.settings
   return (

@@ -21,13 +21,13 @@ import {
   Trash2,
   User,
   UserPlus,
-  Workflow as WorkflowIcon,
+  Sparkles,
 } from 'lucide-react'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
-import { Avatar, EmptyState, IconButton, StatusDot } from '@/components/common'
+import { Avatar, EmptyState, IconButton } from '@/components/common'
 import { SortableArea, useSortableItem } from '@/components/sortable'
 import { api, call } from '@/lib/api'
 import { hueOf } from '@/lib/hooks'
@@ -37,7 +37,7 @@ import { expandTask, newInteractionItem, newItem, newTaskData } from '@shared/pl
 import type { Plan } from '@shared/api'
 import type { PlanUnit, TaskItem } from '@shared/types'
 import { PlanPreviewDialog, TaskSettingsDialog } from './dialogs'
-import { CharacterPicker, PosePicker, StoryPicker, type NewAction } from './pickers'
+import { CharacterPicker, GlobalPicker, PosePicker, StoryPicker, WorkflowMenu, type NewAction } from './pickers'
 import { PoseDetail } from './PoseDetail'
 
 // ---------------------------------------------------------------- 任务切换
@@ -316,7 +316,7 @@ export default function PlanPage() {
   const go = useNav((s) => s.go)
   const { task, update, selected, select, saving } = usePlan()
   const runner = useRunner((s) => s.status)
-  const [picker, setPicker] = useState<null | 'char' | 'char2' | 'story' | 'pose' | 'settings'>(null)
+  const [picker, setPicker] = useState<null | 'global' | 'char' | 'char2' | 'story' | 'pose' | 'settings'>(null)
   const [plan, setPlan] = useState<Plan | null>(null)
   const [previewOpen, setPreviewOpen] = useState(false)
   // 卡片的稳定 key（拖拽需要），与 items 一一对应
@@ -360,8 +360,7 @@ export default function PlanPage() {
   const char2 = d.second_character_id ? lib?.characters.find((c) => c.id === d.second_character_id) : undefined
   const story = lib?.stories.find((s) => s.id === d.story_id)
   const storyOutfit = lib?.outfits.find((o) => o.id === d.story_outfit_id)
-  const wfId = d.workflow_id ?? lib?.settings.default_workflow_id
-  const wf = lib?.workflows.find((w) => w.id === wfId)
+  const globalTpl = d.global_id ? lib?.templates.find((t) => t.id === d.global_id) : undefined
   const units = result?.units ?? []
   const errors = result?.errors ?? []
   const itemError = (i: number) => errors.find((e) => e.startsWith(`第 ${i + 1} 个动作`))?.replace(/^第 \d+ 个动作(「[^」]*」)?：/, '')
@@ -487,23 +486,22 @@ export default function PlanPage() {
           <TaskSwitcher />
           <span className="text-[11px] text-muted-foreground">{saving ? '保存中…' : '已自动保存'}</span>
           <div className="flex-1" />
-          <button
-            type="button"
-            onClick={() => (wf ? setPicker('settings') : go('settings'))}
-            className="flex items-center gap-2 rounded-lg px-2.5 py-1.5 text-xs text-muted-foreground hover:bg-tint/[0.05] hover:text-foreground"
-            title={wf ? '工作流（在任务设置中更改）' : '尚未配置工作流，点击前往设置'}
-          >
-            <StatusDot tone={!wf ? 'warn' : wf.errors ? 'error' : 'ok'} />
-            <WorkflowIcon className="size-3.5" />
-            <span className="max-w-40 truncate">{wf ? wf.name : '未配置工作流'}</span>
-          </button>
+          <WorkflowMenu value={d.workflow_id} onPick={(id) => update((x) => (x.workflow_id = id))} />
           <Button variant="secondary" size="sm" onClick={() => setPicker('settings')}>
             <Settings2 /> 任务设置
           </Button>
         </div>
 
-        {/* 剧情与角色 */}
+        {/* 整套任务的基础素材：全局 Prompt、剧情、主角色、第二角色 */}
         <div className="flex gap-3 px-6 pb-4">
+          <ContextCard
+            icon={<div className="grid size-9 shrink-0 place-items-center rounded-xl bg-primary/10 text-primary"><Sparkles className="size-4" /></div>}
+            label="全局 Prompt"
+            title={globalTpl ? globalTpl.name || '（未命名）' : d.global_id ? '（已被删除）' : '不使用'}
+            sub={globalTpl ? globalTpl.positive || '（空）' : '画质、画风与通用负面'}
+            empty={!globalTpl}
+            onClick={() => setPicker('global')}
+          />
           <ContextCard
             icon={<div className="grid size-9 shrink-0 place-items-center rounded-xl bg-amber-500/10 text-amber-600"><BookOpen className="size-4" /></div>}
             label="剧情"
@@ -659,6 +657,7 @@ export default function PlanPage() {
         onOutfit={(id) => update((x) => (x.story_outfit_id = id))}
       />
       <PosePicker open={picker === 'pose'} onOpenChange={(o) => setPicker(o ? 'pose' : null)} onAdd={addPoses} insertAfter={selected !== null && selected < items.length ? selected : null} />
+      <GlobalPicker open={picker === 'global'} onOpenChange={(o) => setPicker(o ? 'global' : null)} value={d.global_id} onPick={(id) => update((x) => (x.global_id = id))} />
       <TaskSettingsDialog open={picker === 'settings'} onOpenChange={(o) => setPicker(o ? 'settings' : null)} />
       <PlanPreviewDialog open={previewOpen} onOpenChange={setPreviewOpen} plan={plan} onEnqueue={enqueue} />
     </div>

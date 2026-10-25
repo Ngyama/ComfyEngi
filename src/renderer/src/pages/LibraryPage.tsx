@@ -94,17 +94,9 @@ export function TemplateEditor({ t, onClose, onDeleted }: { t: Template; onClose
   })
   const positions = templatesOf(lib, 'position')
   if (!draft) return null
-  const moveTo = async (k: TemplateKind) => {
-    if (!(await confirm({ title: `把「${draft.name}」移到「${TEMPLATE_KINDS[k]}」？`, description: '只修改素材类型，文件与 Prompt 内容不变；已有任务对它的引用继续有效。', confirmText: '移动' }))) return
-    flush()
-    await call(api['templates.save']({ id: t.id, kind: k } as never))
-    await reloadLib()
-    onClose()
-    toast.success(`已移到${TEMPLATE_KINDS[k]}`)
-  }
   return (
-    <div className="flex h-full flex-col">
-      <div className="flex items-center gap-2 px-4 pt-4 pb-3">
+    <div className="flex min-h-0 flex-col" data-testid="template-editor">
+      <div className="flex items-center gap-2 px-4 pt-3 pb-2">
         <span className="text-[11px] text-muted-foreground">{TEMPLATE_KINDS[kind]}</span>
         <div className="flex-1" />
         <Button
@@ -149,7 +141,8 @@ export function TemplateEditor({ t, onClose, onDeleted }: { t: Template; onClose
           <X />
         </Button>
       </div>
-      <div className="min-h-0 flex-1 space-y-4 overflow-y-auto px-4 pb-6">
+      {/* 简单素材只有名称与正面 Prompt：编辑面板随内容高度收缩，不再撑满整列 */}
+      <div className="min-h-0 space-y-3 overflow-y-auto px-4 pb-4">
         <div>
           <FieldLabel>名称</FieldLabel>
           <TextInput value={draft.name} onChange={(v) => patch({ name: v })} />
@@ -167,24 +160,11 @@ export function TemplateEditor({ t, onClose, onDeleted }: { t: Template; onClose
             </div>
           </div>
         )}
-        <PromptField label="正面 Prompt" value={draft.positive} onChange={(v) => patch({ positive: v })} placeholder={`原样保存，不做任何格式转换。可用占位符 ${PLACEHOLDER_HELP}`} minRows={5} copy />
+        <PromptField label="正面 Prompt" value={draft.positive} onChange={(v) => patch({ positive: v })} placeholder={`原样保存，不做任何格式转换。可用占位符 ${PLACEHOLDER_HELP}`} minRows={4} copy />
         {showNeg ? (
           <PromptField label="负面 Prompt" value={draft.negative} onChange={(v) => patch({ negative: v })} placeholder="通用负面 Prompt，可留空。新任务的负面 Prompt 统一来自这里" minRows={2} copy />
         ) : (
           <LegacyNegative value={draft.negative} onClear={() => patch({ negative: '' })} />
-        )}
-        {kind === 'pose' && (
-          <div className="rounded-xl bg-tint/[0.025] p-3 ring-1 ring-tint/[0.08]">
-            <FieldLabel hint="旧「姿态」中的双人内容可以移到双人互动">移动到</FieldLabel>
-            <div className="flex gap-2">
-              <Button size="sm" variant="secondary" onClick={() => void moveTo('position')}>
-                双人主体位
-              </Button>
-              <Button size="sm" variant="secondary" onClick={() => void moveTo('act')}>
-                双人行为
-              </Button>
-            </div>
-          </div>
         )}
       </div>
     </div>
@@ -579,7 +559,7 @@ export default function LibraryPage() {
         </div>
       </div>
       {cur && (
-        <div className="absolute inset-y-3 right-3 z-30 w-[440px] overflow-hidden rounded-2xl bg-popover shadow-2xl ring-1 shadow-tint/15 ring-tint/[0.128] 2xl:static 2xl:my-3 2xl:mr-3 2xl:shrink-0 2xl:bg-card 2xl:shadow-none">
+        <div className="absolute top-3 right-3 z-30 flex max-h-[calc(100%-1.5rem)] w-[440px] flex-col overflow-hidden rounded-2xl bg-popover shadow-2xl ring-1 shadow-tint/15 ring-tint/[0.128] 2xl:static 2xl:my-3 2xl:mr-3 2xl:shrink-0 2xl:self-start 2xl:bg-card 2xl:shadow-none">
           <TemplateEditor key={cur.id} t={cur} onClose={() => setSel(null)} onDeleted={() => setSel(null)} />
         </div>
       )}

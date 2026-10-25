@@ -6,7 +6,7 @@
 //       可选 --shots <目录> 指定截图输出位置
 // 数据使用临时目录（从旧版数据库样本复制，同时验证旧数据迁移），不会触碰真实用户数据。
 
-import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync } from 'node:fs'
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
@@ -315,6 +315,76 @@ try {
   await win.evaluate(() => window.dispatchEvent(new Event('focus')))
   await win.waitForTimeout(600)
   check('在资源管理器中新建的文件夹回到窗口后显示', (await win.locator('[data-testid=folder-row]', { hasText: '外部整理' }).count()) === 1)
+  // 角色列表头像为 3:4
+  const av = await win.locator('[data-testid=char-row]').first().locator('> div').first().boundingBox()
+  check('角色列表头像为 3:4 竖向', !!av && Math.abs(av.width / av.height - 0.75) < 0.03, av ? `${av.width}×${av.height}` : '')
+  // 拖放：把角色A拖进「外部整理」，再拖回根目录（真实移动 Markdown 文件）
+  const dragTo = async (from, to) => {
+    const a = await from.boundingBox()
+    await win.mouse.move(a.x + a.width / 2, a.y + a.height / 2)
+    await win.mouse.down()
+    for (let i = 1; i <= 8; i++) {
+      await win.mouse.move(a.x + a.width / 2 + i, a.y + a.height / 2 + i)
+      await win.waitForTimeout(16)
+    }
+    const b = await to().boundingBox()
+    for (let i = 1; i <= 15; i++) {
+      await win.mouse.move(a.x + a.width / 2 + ((b.x + b.width / 2 - a.x - a.width / 2) * i) / 15, a.y + a.height / 2 + ((b.y + b.height / 2 - a.y - a.height / 2) * i) / 15)
+      await win.waitForTimeout(16)
+    }
+    await win.waitForTimeout(150)
+    await win.mouse.up()
+    await win.waitForTimeout(700)
+  }
+  await dragTo(win.locator('[data-testid=char-row]', { hasText: '角色A' }), () => win.locator('[data-testid=folder-row]', { hasText: '外部整理' }))
+  check('拖动角色到文件夹：文件移入对应目录', existsSync(join(charDir, '外部整理', '角色A.md')) && !existsSync(join(charDir, '角色A.md')))
+  await dragTo(win.locator('[data-testid=char-row]', { hasText: '角色A' }), () => win.locator('[data-testid=root-drop]'))
+  check('拖回根目录', existsSync(join(charDir, '角色A.md')) && !existsSync(join(charDir, '外部整理', '角色A.md')))
+  const linkCheck = await win.evaluate(async () => {
+    const lib = await window.api['library.load']()
+    const a = lib.characters.find((c) => c.name === '角色A')
+    return { outfits: lib.outfits.filter((o) => o.character_id === a.id).length, loras: a.loras.length }
+  })
+  check('拖放后服装与 LoRA 关联不变', linkCheck.outfits === 5 && linkCheck.loras === 1, JSON.stringify(linkCheck))
+
+  // 套图任务：全局 Prompt 在顶部，工作流在页面中选择和导入
+  await nav('套图任务')
+  await win.waitForTimeout(300)
+  const planBefore = await win.evaluate(async () => {
+    const lib = await window.api['library.load']()
+    return (await window.api['plan.forTask'](lib.settings.last_task_id ?? lib.tasks[0].id)).units.map((u) => u.positive)
+  })
+  check('页面顶部显示全局 Prompt', (await win.locator('button', { hasText: '全局 Prompt' }).filter({ hasText: '画质' }).count()) === 1)
+  await win.locator('button', { hasText: '全局 Prompt' }).click()
+  await win.locator('[role=dialog] button', { hasText: '画质' }).click()
+  await win.waitForTimeout(800)
+  const planAfter = await win.evaluate(async () => {
+    const lib = await window.api['library.load']()
+    return (await window.api['plan.forTask'](lib.settings.last_task_id ?? lib.tasks[0].id)).units.map((u) => u.positive)
+  })
+  check('通过顶部重新选择同一全局 Prompt，生成结果不变', JSON.stringify(planBefore) === JSON.stringify(planAfter))
+  const wfFile = join(dataDir, 'imported-api.json')
+  const apiJson = await win.evaluate(async () => {
+    const lib = await window.api['library.load']()
+    return (await window.api['workflows.get'](lib.workflows[0].id)).api_json
+  })
+  writeFileSync(wfFile, JSON.stringify(apiJson))
+  await app.evaluate(({ dialog }, f) => {
+    dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [f] })
+  }, wfFile)
+  await win.locator('[data-testid=workflow-menu]').click()
+  await shot('19a-workflow-menu')
+  await win.getByRole('button', { name: '导入 API 工作流' }).click()
+  await win.waitForTimeout(800)
+  check('在任务页导入工作流后自动设为当前任务的工作流，并提示配置映射', (await win.locator('[data-testid=workflow-menu]').innerText()).includes('imported-api') && (await win.locator('[data-testid=workflow-menu]').innerText()).includes('尚未配置节点映射'), await win.locator('[data-testid=workflow-menu]').innerText())
+  await win.locator('[data-testid=workflow-menu]').click()
+  await win.getByRole('button', { name: '编辑节点映射' }).click()
+  await win.waitForTimeout(500)
+  check('从任务页进入该工作流的节点映射编辑', (await win.getByText('节点输入映射').count()) > 0 && (await win.locator('main').innerText()).includes('imported-api'))
+  await nav('套图任务')
+  await win.locator('[data-testid=workflow-menu]').click()
+  await win.locator('[data-radix-popper-content-wrapper] button', { hasText: '测试工作流' }).last().click()
+  await win.waitForTimeout(300)
   await nav('剧情库')
   await win.locator('main button', { hasText: '剧情1' }).first().click()
   await shot('12-stories')

@@ -16,45 +16,31 @@ export function TaskSettingsDialog({ open, onOpenChange }: { open: boolean; onOp
   const { task, update } = usePlan()
   if (!task) return null
   const d = task.data
-  const globals = templatesOf(lib, 'global')
   const maleBase = templatesOf(lib, 'male').find((m) => m.id === d.male_base_id)
-  const wfs = lib?.workflows ?? []
-  const defWf = wfs.find((w) => w.id === lib?.settings.default_workflow_id)
+  const defaultScene = templatesOf(lib, 'scene').find((t) => t.id === d.scene_id)
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-xl">
         <DialogHeader>
           <DialogTitle>任务设置</DialogTitle>
-          <DialogDescription>这些设置作用于整套图，通常设置一次即可。</DialogDescription>
+          <DialogDescription>作用于整套图的生成参数。全局 Prompt 在页面顶部选择，工作流在页面右上角选择，场景在每个动作的详情中选择。</DialogDescription>
         </DialogHeader>
         <div className="space-y-5">
-          <section>
-            <FieldLabel hint="画质、画风与通用正负面">全局 Prompt</FieldLabel>
-            <div className="flex flex-wrap gap-1.5">
-              <Chip active={!d.global_id} onClick={() => update((x) => (x.global_id = null))}>
-                不使用
-              </Chip>
-              {globals.map((g) => (
-                <Chip key={g.id} active={d.global_id === g.id} onClick={() => update((x) => (x.global_id = g.id))} title={g.positive}>
-                  {g.name}
+          {/* 全局 Prompt 在页面顶部选择、工作流在页面右上角选择、场景在每个动作的详情中选择。
+              旧任务的默认场景只在已设置时显示（仍会应用到没有单独指定场景的动作），可以清除 */}
+          {!!d.scene_id && (
+            <section>
+              <FieldLabel hint="旧版设置：应用到没有单独指定场景的动作。新任务请在每个动作的详情中选择场景">默认场景（旧版）</FieldLabel>
+              <div className="flex flex-wrap gap-1.5">
+                <Chip active={false} onClick={() => update((x) => (x.scene_id = null))}>
+                  不再使用
                 </Chip>
-              ))}
-            </div>
-          </section>
-          <section>
-            <FieldLabel hint="应用到没有单独指定场景的动作（剧情场景使用各自的 Prompt）">默认场景</FieldLabel>
-            <div className="flex flex-wrap gap-1.5">
-              <Chip active={!d.scene_id} onClick={() => update((x) => (x.scene_id = null))}>
-                不使用
-              </Chip>
-              {templatesOf(lib, 'scene').map((sc) => (
-                <Chip key={sc.id} active={d.scene_id === sc.id} onClick={() => update((x) => (x.scene_id = sc.id))} title={sc.positive}>
-                  {sc.name}
+                <Chip active title={defaultScene?.positive}>
+                  {defaultScene?.name ?? '（已删除）'}
                 </Chip>
-              ))}
-              {!templatesOf(lib, 'scene').length && <span className="text-xs text-muted-foreground">场景库为空，可在「素材库 → 场景」中添加</span>}
-            </div>
-          </section>
+              </div>
+            </section>
+          )}
           {/* 旧任务的男性基础描述：只在已设置时显示（可清除）；新任务在页面顶部选择第二角色 */}
           {!!d.male_base_id && (
             <section>
@@ -69,20 +55,6 @@ export function TaskSettingsDialog({ open, onOpenChange }: { open: boolean; onOp
               </div>
             </section>
           )}
-          <section>
-            <FieldLabel>ComfyUI 工作流</FieldLabel>
-            <div className="flex flex-wrap gap-1.5">
-              <Chip active={!d.workflow_id} onClick={() => update((x) => (x.workflow_id = null))}>
-                默认{defWf ? `：${defWf.name}` : '（未设置）'}
-              </Chip>
-              {wfs.map((w) => (
-                <Chip key={w.id} active={d.workflow_id === w.id} onClick={() => update((x) => (x.workflow_id = w.id))}>
-                  {w.name}
-                  {w.errors ? <span className="text-destructive"> · 映射有误</span> : null}
-                </Chip>
-              ))}
-            </div>
-          </section>
           <section>
             <FieldLabel hint="第 N 张的 Seed = 起始 Seed + N − 1，预览中即为实际值">起始 Seed</FieldLabel>
             <div className="flex gap-2">
