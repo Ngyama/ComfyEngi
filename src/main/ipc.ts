@@ -10,7 +10,7 @@ import { checkAgainstObjectInfo, ComfyError, loadApiWorkflow, mappingValues, val
 import { normalizeTaskData } from '@shared/planner'
 import { DEFAULT_SETTINGS, TEMPLATE_KINDS, type Library, type OutputFile, type RunUnit, type Settings } from '@shared/types'
 import { ComfyClient } from './comfy-client'
-import { enqueueTask, planForTask } from './plan'
+import { enqueueTask, finalWorkflow, planForTask } from './plan'
 import type { Runner } from './runner'
 import { TABLES, type Store, type TableName } from './store'
 
@@ -282,6 +282,21 @@ export function registerIpc(ctx: IpcContext) {
       if (!t) throw new BadArg('任务不存在')
       const p = planForTask(store, t)
       return { ...p, workflow: p.workflow ? { id: p.workflow.id, name: p.workflow.name } : null }
+    },
+    'plan.finalWorkflow': (taskId, index) => {
+      const t = store.get('tasks', int(taskId))
+      if (!t) throw new BadArg('任务不存在')
+      return finalWorkflow(store, t, int(index))
+    },
+    'plan.exportWorkflow': async (taskId, index) => {
+      const t = store.get('tasks', int(taskId))
+      if (!t) throw new BadArg('任务不存在')
+      const f = finalWorkflow(store, t, int(index))
+      const safe = `${t.name || 'task'}_${String(f.index + 1).padStart(4, '0')}`.replace(/[<>:"/|?*]/g, '_')
+      const r = await dialog.showSaveDialog(ctx.window()!, { title: '导出最终工作流 JSON（API 格式）', defaultPath: `${safe}.json`, filters: [{ name: 'JSON', extensions: ['json'] }] })
+      if (r.canceled || !r.filePath) return null
+      await writeFile(r.filePath, JSON.stringify(f.json, null, 2), 'utf8')
+      return r.filePath
     },
     'queue.enqueue': (ids) => {
       const ok: { name: string; runId: number; count: number }[] = []

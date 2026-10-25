@@ -186,6 +186,8 @@ export interface TaskData {
   /** LoRA 配置：LoRA 是工作流参数（写入 LoRA Loader 节点），不拼入 Prompt */
   lora_overrides?: Record<string, LoraOverride>
   task_loras?: TaskLora[]
+  /** 按工作流保存的 LoRA 配置（键为工作流 ID）：工作流中已有的 LoRA 是默认值；切换工作流不会串用 */
+  lora_configs?: Record<string, import('./lora-config').WfLoraConfig>
 }
 
 export interface Task extends Timestamps {

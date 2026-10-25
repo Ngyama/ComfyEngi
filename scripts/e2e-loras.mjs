@@ -426,27 +426,45 @@ try {
   await win.locator('nav button', { hasText: 'LoRA' }).click()
   await win.locator('[data-testid=lora-card]', { hasText: 'Alice' }).click()
   await shot('l05-small')
-  // 套图任务的任务级 LoRA：从 LoRA Manager 选择；未绑定 Loader 时不能入队；不拼入 Prompt
+  // 套图任务：选择带多 LoRA Loader 的工作流后，从 LoRA Manager 添加 LoRA 到 #5；写入最终工作流，不拼入 Prompt
+  const twoPass = join(dataDir, 'workflow-two-pass.json')
+  copyFileSync(join(root, 'test', 'fixtures', 'workflow-two-pass.json'), twoPass)
+  await app.evaluate(({ dialog }, f) => {
+    dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [f] })
+  }, twoPass)
   await win.locator('nav button', { hasText: '套图任务' }).click()
   await win.waitForTimeout(600)
-  await win.locator('[data-testid=add-task-lora]').click()
+  await win.locator('[data-testid=workflow-menu]').click()
+  await win.getByRole('button', { name: '导入 API 工作流' }).click()
+  await win.waitForTimeout(1000)
+  // 先用自动识别建立 Prompt / Seed / 输出映射（LoRA 不需要映射）
+  await win.locator('[data-testid=workflow-menu]').click()
+  await win.getByRole('button', { name: '编辑节点映射' }).click()
+  await win.waitForTimeout(600)
+  await win.getByRole('button', { name: '自动识别' }).click()
+  await win.waitForTimeout(300)
+  await win.getByRole('button', { name: '应用勾选项' }).click()
+  await win.waitForTimeout(800)
+  await win.locator('nav button', { hasText: '套图任务' }).click()
+  await win.waitForTimeout(800)
+  await win.locator('[data-testid=add-workflow-lora]').click()
   await win.getByPlaceholder('搜索文件名或模型名称…').fill('ink')
   await win.waitForTimeout(300)
   await win.locator('[data-testid=lora-picker-item]').first().click()
-  await win.waitForTimeout(900)
-  const taskCard = win.locator('[data-testid=lora-card][data-prefix=task_lora1]')
-  check('添加任务级 LoRA：标题为本地文件名，未绑定时显示警告图标', (await taskCard.count()) === 1 && (await taskCard.locator('[data-testid=lora-title]').innerText()) === 'Ink' && (await taskCard.locator('[data-testid=lora-warning]').count()) === 1, (await taskCard.innerText()).replace(/\n/g, ' | '))
+  await win.waitForTimeout(1200)
+  const taskCard = win.locator('[data-testid=lora-card][data-prefix^="wf:5:+"]')
+  const added = await win.evaluate(async () => {
+    const lib = await window.api['library.load']()
+    const p = await window.api['plan.forTask'](lib.settings.last_task_id ?? lib.tasks[0].id)
+    return { list: p.units.find((u) => u.inputs)?.inputs.find((x) => x.node === '5' && x.input === 'loras')?.value.__value__ ?? [], prompts: p.units.map((u) => u.positive) }
+  })
+  check('从 LoRA Manager 添加到 #5：卡片标题为本地文件名，最终 #5 列表包含它，Prompt 中没有 <lora:', (await taskCard.count()) === 1 && (await taskCard.locator('[data-testid=lora-title]').innerText()) === 'Ink' && added.list.some((e) => e.name === 'Ink' && e.active) && added.prompts.every((p) => !p.includes('<lora:')), JSON.stringify(added.list.map((e) => e.name)))
   // 网格：宽窗口 3 列、中等 2 列、较窄 1 列，卡片不超出面板
   const grid = () => win.locator('[data-testid=lora-panel]').evaluate((g) => {
     const cards = [...g.querySelectorAll('[data-testid=lora-card]')].map((c) => c.getBoundingClientRect())
     const box = g.getBoundingClientRect()
     return { cols: new Set(cards.map((r) => Math.round(r.left))).size, inside: cards.every((r) => r.left >= box.left - 1 && r.right <= box.right + 1), width: Math.round(box.width) }
   })
-  await win.locator('[data-testid=add-task-lora]').click()
-  await win.getByPlaceholder('搜索文件名或模型名称…').fill('bob')
-  await win.waitForTimeout(300)
-  await win.locator('[data-testid=lora-picker-item]').first().click()
-  await win.waitForTimeout(600)
   await setSize(1920, 1040)
   await win.waitForTimeout(400)
   const g3 = await grid()
@@ -461,17 +479,15 @@ try {
   await shot('c08-lora-grid-narrow')
   await win.locator('[data-testid=lora-panel]').evaluate((g) => (g.parentElement.style.width = ''))
   check('LoRA 卡片网格：3 / 2 / 1 列，且都在面板内', g3.cols === 3 && g2.cols === 2 && g1.cols === 1 && g3.inside && g2.inside && g1.inside, JSON.stringify({ g3, g2, g1 }))
-  await win.locator('[data-testid=lora-card][data-prefix=task_lora2]').getByRole('button', { name: '删除任务 LoRA' }).click()
-  await win.waitForTimeout(300)
-  const tp = await win.evaluate(async () => {
-    const lib = await window.api['library.load']()
-    return window.api['plan.forTask'](lib.settings.last_task_id ?? lib.tasks[0].id)
-  })
-  check('任务 LoRA 未绑定 Loader 时阻止入队，且不写入 Prompt', tp.errors.some((e) => e.includes('任务 LoRA「任务 LoRA 1」') && e.includes('没有绑定 LoRA Loader')) && tp.units.every((u) => !u.positive.includes('<lora:')), tp.errors.join(' / '))
   await shot('c05-task-lora')
-  await taskCard.getByRole('button', { name: '删除任务 LoRA' }).click()
-  await win.waitForTimeout(500)
-  check('删除任务 LoRA', (await win.locator('[data-testid=lora-card][data-prefix=task_lora1]').count()) === 0)
+  await taskCard.getByRole('button', { name: '从本任务移除' }).click()
+  await win.waitForTimeout(900)
+  const removed = await win.evaluate(async () => {
+    const lib = await window.api['library.load']()
+    const p = await window.api['plan.forTask'](lib.settings.last_task_id ?? lib.tasks[0].id)
+    return p.units.find((u) => u.inputs)?.inputs.find((x) => x.node === '5' && x.input === 'loras')?.value.__value__ ?? []
+  })
+  check('从本任务移除：最终 #5 列表不再包含它（LoRA 文件不受影响）', (await taskCard.count()) === 0 && !removed.some((e) => e.name === 'Ink') && !!statSync(join(lorasA, 'style', 'Ink.safetensors')), JSON.stringify(removed.map((e) => e.name)))
 
   check('没有渲染进程错误', errors.length === 0, errors.slice(0, 3).join(' / '))
 } catch (e) {

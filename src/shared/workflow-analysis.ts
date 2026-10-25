@@ -2,11 +2,11 @@
 // - Prompt：从采样器的 positive / negative 沿条件（conditioning）回溯到文本编码器，再沿字符串连接回溯到真正提供文本的节点
 //   （字符串拼接、正则替换等中间节点会被穿过；触发词节点、LoRA Loader 不会被当作 Prompt 来源）
 // - Seed：被其他节点引用的 Seed 节点是主 Seed；采样器里独立填写的 Seed 需要确认，不会擅自同步
-// - LoRA Loader：标准 Loader、兼容的自定义 Loader、多 LoRA Loader（列表）全部列出；角色 / 画风无法从结构判断，一律需要确认
+// - LoRA Loader：可识别的 Loader 由套图任务直接控制（不生成映射建议），无法识别的给出提示
 // - 输出：最终（不再被其他节点使用的）保存节点
 // 所有建议都只是候选，由用户确认后才写入映射。
 
-import { DEFAULT_PREFIX_TEMPLATE, findLoraLoaders, isLink, loraBindingEntries, newEntry, nodeTitle, sortNodeIds, type LoraLoaderInfo } from './mapping'
+import { DEFAULT_PREFIX_TEMPLATE, findLoraLoaders, isLink, newEntry, nodeTitle, sortNodeIds, type LoraLoaderInfo } from './mapping'
 import type { ApiNode, ApiWorkflow, MappingEntry } from './types'
 
 export type SuggestionGroup = 'prompt' | 'seed' | 'lora' | 'output'
@@ -127,6 +127,11 @@ function samplersFed(api: ApiWorkflow, nid: string, samplers: Set<string>, cons:
   return sortNodeIds([...hit])
 }
 
+/** 使用某个 Loader（沿模型链）的采样器：多个采样阶段共用同一个 Loader 时只需要一组配置 */
+export function loaderStages(api: ApiWorkflow, node: string): string[] {
+  return samplersFed(api, node, new Set(findSamplers(api)), consumers(api))
+}
+
 export function analyzeWorkflow(api: ApiWorkflow): WorkflowAnalysis {
   const suggestions: Suggestion[] = []
   const notes: string[] = []
@@ -216,24 +221,10 @@ export function analyzeWorkflow(api: ApiWorkflow): WorkflowAnalysis {
       notes.push(`节点 ${label(api, ld.node)} 看起来是 LoRA 加载节点，但结构无法识别：需要在映射中手动指定，或保持工作流原值。`)
       continue
     }
-    const stack = ld.support === 'stack'
-    for (const [prefix, who] of [
-      ['lora1', '主角色 LoRA'],
-      ['second_lora1', '第二角色 LoRA'],
-    ] as const) {
-      suggestions.push({
-        group: 'lora',
-        entries: loraBindingEntries(prefix, ld),
-        checked: false,
-        confidence: 'confirm',
-        title: `${who} → ${stack ? '追加到 LoRA 列表' : 'lora_name + 权重'}`,
-        why: `${fedText(ld)}。${stack ? `列表中已有 ${ld.entries!.length} 个 LoRA（其中 ${ld.entries!.filter((e) => e.active).length} 个启用），会保持原样；与角色 LoRA 同名的条目会被直接更新` : `当前为「${ld.lora_name}」`}。无法从结构判断这是角色还是画风 LoRA，请确认`,
-        node: ld.node,
-        nodeLabel: label(api, ld.node),
-        preview: stack ? ld.entries!.map((e) => `${e.active ? '' : '（停用）'}${e.name}:${e.strength}`).join('  ') : ld.lora_name,
-      })
-    }
-    if (stack) notes.push(`多 LoRA Loader ${label(api, ld.node)} 按 loras 列表加载（text 字段不参与执行）。其中的 LoRA 默认保持原样；可以在套图任务的 LoRA 配置中把它们导入为任务 LoRA，由任务控制启用与权重。`)
+    // 可识别的 Loader 不需要映射：套图任务直接读取其中的 LoRA，并在生成时按任务配置写入（关联角色 LoRA、启用 / 停用、权重）
+    if (ld.support === 'stack')
+      notes.push(`多 LoRA Loader ${label(api, ld.node)}（${fedText(ld)}）：其中的 ${ld.entries!.length} 个 LoRA 会直接显示在套图任务的 LoRA 配置中，由任务控制，无需映射。插件执行时只读取 loras 列表，text 会同步更新。`)
+    else if (ld.support !== 'partial') notes.push(`LoRA Loader ${label(api, ld.node)}（${fedText(ld)}）：会直接显示在套图任务的 LoRA 配置中，由任务控制，无需映射。`)
     if (ld.support === 'partial') notes.push(`节点 ${label(api, ld.node)} 只识别到 lora_name，权重无法由本软件控制。`)
   }
 

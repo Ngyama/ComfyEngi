@@ -171,13 +171,14 @@ describe('第二角色 LoRA 与工作流映射', () => {
     expect(p.errors.some((e) => e.includes('第二角色 LoRA 1 在部分图片中没有要加载的 LoRA') && e.includes('Loader 11 无法安全禁用'))).toBe(true)
   })
 
-  it('主角色 LoRA 没有绑定 Loader 时不能入队（可在任务中禁用）；Prompt 节点只拼接部分模块时提示未包含的第二角色模块', () => {
+  it('主角色 LoRA 不在工作流中、也没有可追加的 Loader 时不能入队（可在任务中停用）；Prompt 节点只拼接部分模块时提示未包含的第二角色模块', () => {
     const s = newStore()
     const f = setup(s)
     const map = SAMPLE_MAPPING.filter((m) => !m.source.startsWith('lora')).map((m) => (m.source === 'positive' ? { ...m, modules: ['global', 'character', 'content'] } : m))
-    f.lib.addWorkflow(map)
+    // 工作流中的标准 Loader 加载的是画风 LoRA：不会被角色 LoRA 自动覆盖
+    f.lib.addWorkflow(map, { ...SAMPLE_WORKFLOW, '10': { ...SAMPLE_WORKFLOW['10'], inputs: { ...SAMPLE_WORKFLOW['10'].inputs, lora_name: 'style.safetensors' } } })
     const t = f.lib.makeTask([f.lib.item('睡觉', null, [], 1, { second_enabled: true })], 't', { second_character_id: f.lib.charB })
-    expect(planForTask(s, t).errors.some((e) => e.includes('主角色「角色A」的 LoRA「charA.safetensors」已启用，但当前工作流没有绑定 LoRA Loader'))).toBe(true)
+    expect(planForTask(s, t).errors.some((e) => e.includes('主角色「角色A」的 LoRA「charA」不在当前工作流的 LoRA 列表中'))).toBe(true)
     s.save('tasks', { id: t.id, data: { ...t.data, lora_overrides: { lora1: { enabled: false } } } })
     const p = planForTask(s, s.get('tasks', t.id)!)
     expect(p.errors).toEqual([])

@@ -2,10 +2,11 @@ import { readFileSync, existsSync } from 'node:fs'
 import { join } from 'node:path'
 // 任务 → 生成计划（预览与入队共用），以及把计划冻结写入执行队列。
 
-import { findLoraLoaders, isStackBinding, loraStem, mappingValues, parseLoraSource, slotLora, slotState, SOURCE_LABELS, stackReplaceTarget, validateMapping } from '@shared/mapping'
+import { applyInputs, findLoraLoaders, isStackBinding, loraStem, mappingValues, parseLoraSource, slotLora, slotState, SOURCE_LABELS, stackReplaceTarget, validateMapping } from '@shared/mapping'
 import { expandTask, normalizeTaskData, PlanLibrary } from '@shared/planner'
 import { MODULE_LABELS } from '@shared/prompt'
-import type { MappingEntry, PlanUnit, Settings, Task, Workflow } from '@shared/types'
+import type { ApiWorkflow, Lora, MappingEntry, PlanUnit, Settings, Task, TaskData, Workflow } from '@shared/types'
+import { effectiveLoraConfig, loraConfigInputs, loraConfigProblems, type CharRole, type RoleState } from '@shared/lora-config'
 import type { Store } from './store'
 
 export function loadPlanLibrary(store: Store): PlanLibrary {
@@ -31,7 +32,27 @@ export interface FullPlan {
  *   只有当绑定节点的全部强度输入都已映射时才能安全禁用，否则不能入队；
  * - 强度映射不完整、只能识别 lora_name 的自定义节点给出提示；没有被映射的 Loader（工作流中固定的 LoRA）保持原样，不检查。
  */
-function checkLoraSlots(wf: Workflow, units: PlanUnit[], errors: string[], warnings: string[], once: (list: string[], msg: string) => void) {
+/** LoRA 资源 → ComfyUI 中的相对模型名称（检查名称合法、文件存在）；失败时记录错误并保留原名称 */
+function resolveLoraName(store: Store, l: Lora, errors: string[]): string {
+  if (!store.files || !l.resource_id) return l.name
+  try {
+    if (!/^[a-f0-9-]{36}$/i.test(l.resource_id)) throw new Error('无效 LoRA 资源 ID')
+    const r = JSON.parse(readFileSync(join(store.files.root,'loras/metadata',l.resource_id+'.json'),'utf8'))
+    if (!r.comfyName || /^(?:[A-Za-z]:|[\\/])/.test(r.comfyName) || r.comfyName.split(/[\\/]/).includes('..')) throw new Error('请配置 ComfyUI 相对模型名称')
+    if (!existsSync(r.path)) throw new Error('模型文件缺失')
+    l.name = r.comfyName
+  } catch(e) { const msg = `LoRA ${l.name}: ${(e as Error).message}`; if (!errors.includes(msg)) errors.push(msg) }
+  return l.name
+}
+
+/** 第二角色 LoRA 的名称（即使所有图片中第二角色都未出场，也需要它来停用工作流中关联的条目） */
+function secondLoraName(store: Store, data: TaskData): string | undefined {
+  const c2 = data.second_character_id ? store.get('characters', data.second_character_id) : null
+  const o = data.lora_overrides?.second_lora1
+  return o?.name || c2?.loras?.find((l) => l.name)?.name
+}
+
+function checkLoraSlots(wf: Workflow, units: PlanUnit[], errors: string[], warnings: string[], once: (list: string[], msg: string) => void, handled: Set<CharRole> = new Set()) {
   const loaders = new Map(findLoraLoaders(wf.api_json ?? {}).map((l) => [l.node, l]))
   const bind = new Map<string, { nodes: Set<string>; strengths: Set<string>; stack: Map<string, MappingEntry> }>()
   for (const m of wf.mapping ?? []) {
@@ -51,6 +72,7 @@ function checkLoraSlots(wf: Workflow, units: PlanUnit[], errors: string[], warni
     for (const t of u.task_loras ?? []) if (slotLora(u, 'task_lora', t.slot)) active.set(`task_lora${t.slot}`, `任务 LoRA「${t.label}」（${t.name}）`)
     for (const [prefix, label] of active) {
       const b = bind.get(prefix)
+      if (!b?.nodes.size && handled.has(prefix as CharRole)) continue // 由任务的 LoRA 配置加载（关联已有条目或追加）
       if (!b?.nodes.size) {
         once(errors, `${label}已启用，但当前工作流没有绑定 LoRA Loader（${slotTitle(prefix)}）：请在套图任务的 LoRA 配置中绑定 Loader，或在本任务中禁用它`)
         continue
@@ -98,15 +120,7 @@ export function planForTask(store: Store, task: Task, settings?: Settings, dateS
   const { units, errors } = expandTask(data, loadPlanLibrary(store), settings, task.name ?? '')
   const warnings: string[] = []
   if (store.files) {
-    for (const u of units) for (const l of [...u.loras, ...(u.loras2 ?? []), ...(u.task_loras ?? [])]) if (l.resource_id && !l.disabled) {
-      try {
-        if (!/^[a-f0-9-]{36}$/i.test(l.resource_id)) throw new Error('无效 LoRA 资源 ID')
-        const r = JSON.parse(readFileSync(join(store.files.root,'loras/metadata',l.resource_id+'.json'),'utf8'))
-        if (!r.comfyName || /^(?:[A-Za-z]:|[\\/])/.test(r.comfyName) || r.comfyName.split(/[\\/]/).includes('..')) throw new Error('请配置 ComfyUI 相对模型名称')
-        if (!existsSync(r.path)) throw new Error('模型文件缺失')
-        l.name = r.comfyName
-      } catch(e) { const msg = `LoRA ${l.name}: ${(e as Error).message}`; if (!errors.includes(msg)) errors.push(msg) }
-    }
+    for (const u of units) for (const l of [...u.loras, ...(u.loras2 ?? []), ...(u.task_loras ?? [])]) if (l.resource_id && !l.disabled) resolveLoraName(store, l, errors)
   }
   const ch = data.character_id ? store.get('characters', data.character_id) : null
   const legacyTriggers = (ch?.loras ?? []).flatMap((l) => l.trigger_words ?? []).filter((w) => typeof w === 'string' && w.trim())
@@ -121,7 +135,24 @@ export function planForTask(store: Store, task: Task, settings?: Settings, dateS
       if (!seen.has(msg)) list.push(msg)
       seen.add(msg)
     }
-    checkLoraSlots(wf, units, errors, warnings, once)
+    // 任务的 LoRA 配置（按工作流保存；没有保存时使用工作流中已有的 LoRA）
+    const cfg = effectiveLoraConfig(data.lora_configs?.[String(wf.id)], wf.api_json ?? {}, wf.mapping ?? [])
+    cfg.entries = cfg.entries.map((e) => (e.resource_id && e.enabled ? { ...e, name: resolveLoraName(store, { name: e.name, resource_id: e.resource_id, strength: e.strength }, errors) } : e))
+    const name2 = units.find((u) => u.loras2?.length)?.loras2![0].name ?? secondLoraName(store, data)
+    const rolesOf = (u: PlanUnit) => {
+      const r: Partial<Record<CharRole, RoleState & { label: string }>> = {}
+      if (u.loras.length) r.lora1 = { name: u.loras[0].name, load: slotLora(u, 'lora', 1) ?? null, label: `主角色「${u.meta.character}」的 LoRA` }
+      if (name2) r.second_lora1 = { name: name2, load: u.loras2 ? (slotLora(u, 'second_lora', 1) ?? null) : null, label: '第二角色的 LoRA' }
+      return r
+    }
+    const handled = new Set<CharRole>()
+    for (const u of units) {
+      const p = loraConfigProblems(wf.api_json ?? {}, wf.mapping ?? [], cfg, rolesOf(u))
+      p.errors.forEach((m) => once(errors, m))
+      p.warnings.forEach((m) => once(warnings, m))
+      p.handled.forEach((x) => handled.add(x))
+    }
+    checkLoraSlots(wf, units, errors, warnings, once, handled)
     // Prompt 节点只拼接部分模块时，检查有内容的模块是否都有去处
     for (const src of ['positive', 'negative']) {
       const entries = wf.mapping.filter((m) => m.source === src)
@@ -135,7 +166,7 @@ export function planForTask(store: Store, task: Task, settings?: Settings, dateS
     const msgs = validateMapping(wf.api_json ?? {}, wf.mapping ?? [])
     for (const [lvl, msg] of msgs) (lvl === 'error' ? errors : warnings).push(`工作流「${wf.name}」${msg}`)
     if (!msgs.some(([l]) => l === 'error')) {
-      for (const u of units) u.inputs = mappingValues(u, wf.mapping, settings, dateStr, wf.api_json)
+      for (const u of units) u.inputs = [...mappingValues(u, wf.mapping, settings, dateStr, wf.api_json), ...loraConfigInputs(wf.api_json ?? {}, wf.mapping ?? [], cfg, rolesOf(u))]
     }
   }
   if (!units.length && !errors.length) errors.push('计划为空：请选择剧情模板或添加动作')
@@ -156,4 +187,17 @@ export function enqueueTask(store: Store, task: Task, settings?: Settings): { ru
     plan.units.map((u) => ({ ...u, inputs: u.inputs ?? [] })),
   )
   return { runId, plan }
+}
+
+/**
+ * 某一张图实际要提交给 ComfyUI 的完整工作流 JSON（查看 / 导出用）。
+ * 与执行完全相同：入队时冻结 planForTask 的 inputs，执行时 applyInputs(工作流, inputs)。
+ */
+export function finalWorkflow(store: Store, task: Task, index: number): { json: ApiWorkflow; index: number; count: number; label: string; seed: number; errors: string[]; workflow: string } {
+  const plan = planForTask(store, task)
+  if (!plan.workflow) throw new Error('尚未选择 ComfyUI 工作流')
+  const u = plan.units[index]
+  if (!u) throw new Error(plan.units.length ? `没有第 ${index + 1} 张` : '计划为空')
+  if (!u.inputs) throw new Error(`工作流映射有错误，无法生成最终 JSON：${plan.errors.slice(0, 3).join('；')}`)
+  return { json: applyInputs(plan.workflow.api_json, u.inputs), index, count: plan.units.length, label: `${u.meta.section}「${u.item_label}」`, seed: u.seed, errors: plan.errors, workflow: plan.workflow.name }
 }

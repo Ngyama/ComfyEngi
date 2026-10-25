@@ -1,6 +1,7 @@
 // Renderer ↔ 主进程 的 IPC 契约。Preload 只暴露这里列出的方法，主进程逐个校验参数。
 
 import type {
+  ApiWorkflow,
   LoraResource,
   Character,
   Library,
@@ -78,6 +79,9 @@ export interface Api {
   'tasks.duplicate'(id: number): SaveResult
 
   'plan.forTask'(taskId: number): Plan
+  /** 某一张图实际提交的完整工作流 JSON（与执行时的构建逻辑相同） */
+  'plan.finalWorkflow'(taskId: number, index: number): { json: ApiWorkflow; index: number; count: number; label: string; seed: number; errors: string[]; workflow: string }
+  'plan.exportWorkflow'(taskId: number, index: number): string | null
   'queue.enqueue'(taskIds: number[]): { ok: { name: string; runId: number; count: number }[]; failed: { name: string; errors: string[] }[] }
   'queue.list'(includeFinished: boolean): Run[]
   'queue.units'(runId: number): RunUnit[]
@@ -119,7 +123,7 @@ export const API_METHODS: ApiMethod[] = [
   'stories.save', 'stories.remove', 'stories.duplicate', 'references',
   'workflows.get', 'workflows.import', 'workflows.reimport', 'workflows.save', 'workflows.remove', 'workflows.onlineCheck',
   'tasks.get', 'tasks.create', 'tasks.save', 'tasks.remove', 'tasks.duplicate',
-  'plan.forTask',
+  'plan.forTask', 'plan.finalWorkflow', 'plan.exportWorkflow',
   'queue.enqueue', 'queue.list', 'queue.units', 'queue.reorder', 'queue.remove', 'queue.delete', 'queue.retry', 'queue.pendingSummary',
   'runner.status', 'runner.precheck', 'runner.start', 'runner.pause', 'runner.stop', 'runner.interrupt', 'runner.logs',
   'history.list', 'history.image', 'history.openImage', 'history.showInFolder',

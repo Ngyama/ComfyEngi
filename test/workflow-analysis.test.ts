@@ -87,15 +87,15 @@ describe('自动识别（Test.json）', () => {
     ])
   })
 
-  it('LoRA：#5 识别为多 LoRA Loader，解析名称、权重（含字符串）、启用状态；作用于 #46、#103、#107；角色 / 画风需要确认', () => {
+  it('LoRA：#5 识别为多 LoRA Loader，解析名称、权重（含字符串）、启用状态；作用于 #46、#103、#107；由任务直接控制、不生成映射建议', () => {
     const [ld] = findLoraLoaders(WF)
     expect(ld.support).toBe('stack')
     expect(ld.entries!.length).toBe(8)
     expect(ld.entries![0]).toEqual({ name: 'BlueArchiveStyle_illus_1884029', strength: 0.85, clipStrength: 0.85, active: true })
     expect(ld.entries!.find((e) => e.name === 'Ugly Man_illus_1001313')!.active).toBe(false)
-    const lora = analyzeWorkflow(WF).suggestions.filter((s) => s.group === 'lora')
-    expect(lora.every((s) => !s.checked && s.node === '5')).toBe(true)
-    expect(lora[0].why).toContain('#46、#103、#107')
+    const a = analyzeWorkflow(WF)
+    expect(a.suggestions.filter((s) => s.group === 'lora')).toEqual([])
+    expect(a.notes.some((n) => n.includes('#5') && n.includes('#46、#103、#107') && n.includes('无需映射'))).toBe(true)
     expect(findSamplers(WF)).toEqual(['46', '103', '107'])
   })
 

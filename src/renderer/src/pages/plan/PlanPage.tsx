@@ -666,7 +666,7 @@ export default function PlanPage() {
       <PosePicker open={picker === 'pose'} onOpenChange={(o) => setPicker(o ? 'pose' : null)} onAdd={addPoses} insertAfter={selected !== null && selected < items.length ? selected : null} />
       <GlobalPicker open={picker === 'global'} onOpenChange={(o) => setPicker(o ? 'global' : null)} value={d.global_id} onPick={(id) => update((x) => (x.global_id = id))} />
       <TaskSettingsDialog open={picker === 'settings'} onOpenChange={(o) => setPicker(o ? 'settings' : null)} />
-      <PlanPreviewDialog open={previewOpen} onOpenChange={setPreviewOpen} plan={plan} onEnqueue={enqueue} />
+      <PlanPreviewDialog open={previewOpen} onOpenChange={setPreviewOpen} plan={plan} onEnqueue={enqueue} taskId={task.id} />
     </div>
   )
 }

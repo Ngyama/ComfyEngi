@@ -1,7 +1,9 @@
 // 任务设置与生成计划预览。
 
 import { useEffect, useMemo, useState } from 'react'
-import { ChevronDown, ChevronRight, Dices, ListPlus, Play } from 'lucide-react'
+import { Braces, ChevronDown, ChevronRight, Dices, Download, ListPlus, Play } from 'lucide-react'
+import { toast } from 'sonner'
+import { api, call } from '@/lib/api'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Chip, CopyButton, FieldLabel, TextInput } from '@/components/common'
@@ -81,7 +83,8 @@ export function TaskSettingsDialog({ open, onOpenChange }: { open: boolean; onOp
   )
 }
 
-export function PlanPreviewDialog({ open, onOpenChange, plan, onEnqueue }: { open: boolean; onOpenChange: (o: boolean) => void; plan: Plan | null; onEnqueue: (start: boolean) => void }) {
+export function PlanPreviewDialog({ open, onOpenChange, plan, onEnqueue, taskId }: { open: boolean; onOpenChange: (o: boolean) => void; plan: Plan | null; onEnqueue: (start: boolean) => void; taskId?: number }) {
+  const [jsonAt, setJsonAt] = useState<number | null>(null)
   const units = plan?.units ?? []
   const groups = useMemo(() => {
     const out: { key: string; label: string; section: string; no: number; units: typeof units }[] = []
@@ -179,6 +182,11 @@ export function PlanPreviewDialog({ open, onOpenChange, plan, onEnqueue }: { ope
                   {u.meta.character2 && <span>第二角色 {u.meta.character2}</span>}
                   {u.meta.male && <span>男性出场</span>}
                   <span className="font-mono">Seed {u.seed}</span>
+                  {taskId != null && u.inputs && (
+                    <Button size="xs" variant="ghost" className="ml-auto" data-testid="open-final-workflow" onClick={() => setJsonAt(u.index)}>
+                      <Braces /> 最终工作流 JSON
+                    </Button>
+                  )}
                 </div>
                 <div>
                   <FieldLabel right={<CopyButton text={u.positive} label="复制正面" />}>最终正面 Prompt</FieldLabel>
@@ -222,6 +230,65 @@ export function PlanPreviewDialog({ open, onOpenChange, plan, onEnqueue }: { ope
           <Button disabled={!ok} onClick={() => onEnqueue(true)}>
             <Play /> 开始生成
           </Button>
+        </DialogFooter>
+        {jsonAt !== null && taskId != null && <FinalWorkflowDialog taskId={taskId} index={jsonAt} count={units.length} onIndex={setJsonAt} onClose={() => setJsonAt(null)} />}
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+/** 某一张图实际要提交给 ComfyUI 的完整工作流 JSON（由主进程用与执行相同的逻辑构建） */
+export function FinalWorkflowDialog({ taskId, index, count, onIndex, onClose }: { taskId: number; index: number; count: number; onIndex: (i: number) => void; onClose: () => void }) {
+  const [res, setRes] = useState<Awaited<ReturnType<(typeof api)['plan.finalWorkflow']>> | null>(null)
+  const [err, setErr] = useState('')
+  useEffect(() => {
+    let live = true
+    setRes(null)
+    setErr('')
+    api['plan.finalWorkflow'](taskId, index)
+      .then((r) => live && setRes(r))
+      .catch((e) => live && setErr(String((e as Error).message ?? e)))
+    return () => {
+      live = false
+    }
+  }, [taskId, index])
+  const text = res ? JSON.stringify(res.json, null, 2) : ''
+  return (
+    <Dialog open onOpenChange={(o) => !o && onClose()}>
+      <DialogContent className="flex h-[86vh] flex-col gap-3 sm:max-w-4xl" data-testid="final-workflow">
+        <DialogHeader className="shrink-0">
+          <DialogTitle>最终工作流 JSON</DialogTitle>
+          <DialogDescription>
+            第 {index + 1} / {count} 张{res ? ` · ${res.label} · Seed ${res.seed} · 工作流「${res.workflow}」` : ''}。这是应用 Prompt、Seed、LoRA 等配置后实际提交给 ComfyUI 的 API 工作流（与执行时使用同一构建逻辑）。
+          </DialogDescription>
+        </DialogHeader>
+        {res && res.errors.length > 0 && <div className="shrink-0 rounded-lg bg-destructive/10 px-3 py-2 text-[11.5px] text-destructive">计划还有 {res.errors.length} 个问题，修正前不能入队：{res.errors[0]}</div>}
+        <pre className="min-h-0 flex-1 overflow-auto rounded-xl bg-inset p-3 font-mono text-[11.5px] leading-relaxed whitespace-pre select-text" data-testid="final-workflow-json">
+          {err || text || '构建中…'}
+        </pre>
+        <DialogFooter className="shrink-0 sm:justify-between">
+          <div className="flex gap-1">
+            <Button variant="ghost" size="sm" disabled={index <= 0} onClick={() => onIndex(index - 1)}>
+              上一张
+            </Button>
+            <Button variant="ghost" size="sm" disabled={index >= count - 1} onClick={() => onIndex(index + 1)}>
+              下一张
+            </Button>
+          </div>
+          <div className="flex gap-2">
+            {text && <CopyButton text={text} label="复制 JSON" />}
+            <Button
+              variant="secondary"
+              size="sm"
+              disabled={!res}
+              onClick={async () => {
+                const p = await call(api['plan.exportWorkflow'](taskId, index))
+                if (p) toast.success('已导出', { description: p })
+              }}
+            >
+              <Download /> 导出 JSON
+            </Button>
+          </div>
         </DialogFooter>
       </DialogContent>
     </Dialog>
