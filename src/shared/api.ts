@@ -1,6 +1,7 @@
 // Renderer ↔ 主进程 的 IPC 契约。Preload 只暴露这里列出的方法，主进程逐个校验参数。
 
 import type { UpdateCheck } from './update'
+import type { DictionaryInfo, MiningImage, MiningParams, MiningResult, MiningSaveItem, MiningSaveOutcome, ScanResult } from './mining'
 import type {
   ApiWorkflow,
   LoraResource,
@@ -116,6 +117,19 @@ export interface Api {
   'app.checkUpdate'(): UpdateCheck
   /** 在浏览器中打开本项目的 GitHub Release 页面（只接受本项目的地址） */
   'app.openReleasePage'(url: string): void
+
+  /** 历史 Prompt 提取：选择 PNG 文件 / 文件夹并读取 Prompt（进度通过执行器事件 kind='mining' 推送）；取消选择返回 null */
+  'mining.addFiles'(): ScanResult | null
+  'mining.addFolder'(recursive: boolean): ScanResult | null
+  'mining.cancelScan'(): void
+  /** 已扫描图片的缩略图（只允许本次会话读取过的文件） */
+  'mining.image'(path: string, width: number): string | null
+  'mining.showInFolder'(path: string): void
+  'mining.analyze'(images: MiningImage[], params: Partial<MiningParams>): MiningResult
+  'mining.dictInfo'(): DictionaryInfo | null
+  'mining.dictImport'(): DictionaryInfo | null
+  'mining.dictRemove'(): void
+  'mining.save'(items: MiningSaveItem[]): MiningSaveOutcome[]
 }
 
 export type ApiMethod = keyof Api
@@ -135,6 +149,7 @@ export const API_METHODS: ApiMethod[] = [
   'runner.status', 'runner.precheck', 'runner.start', 'runner.pause', 'runner.stop', 'runner.interrupt', 'runner.logs',
   'history.list', 'history.image', 'history.openImage', 'history.showInFolder',
   'comfy.test', 'app.info', 'app.openDataDir', 'app.backupNow', 'app.chooseOutputDir', 'app.checkUpdate', 'app.openReleasePage',
+  'mining.addFiles', 'mining.addFolder', 'mining.cancelScan', 'mining.image', 'mining.showInFolder', 'mining.analyze', 'mining.dictInfo', 'mining.dictImport', 'mining.dictRemove', 'mining.save',
 ]
 
 /** Renderer 侧看到的 API：每个方法都是异步的 */

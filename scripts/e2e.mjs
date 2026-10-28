@@ -557,7 +557,7 @@ try {
   await win.waitForTimeout(300)
   // 侧边栏分组：靠上素材与资料，靠下生成与系统
   const navOrder = await win.locator('nav button').allInnerTexts()
-  check('侧边栏分为上下两组', navOrder.slice(0, 8).join(',') === '素材库,LoRA 管理,角色库,剧情库,套图任务,执行队列,运行记录,设置', navOrder.join(','))
+  check('侧边栏分为上下两组', navOrder.slice(0, 9).join(',') === '素材库,Prompt 提取,LoRA 管理,角色库,剧情库,套图任务,执行队列,运行记录,设置', navOrder.join(','))
   // 任务名称旁的重命名 / 复制 / 删除按钮
   check('任务名称旁直接显示重命名、复制、删除按钮', (await win.getByRole('button', { name: '重命名', exact: true }).count()) === 1 && (await win.getByRole('button', { name: '复制任务', exact: true }).count()) === 1 && (await win.getByRole('button', { name: '删除任务', exact: true }).count()) === 1, [await win.getByRole('button', { name: '重命名', exact: true }).count(), await win.getByRole('button', { name: '复制任务', exact: true }).count(), await win.getByRole('button', { name: '删除任务', exact: true }).count(), await win.locator('[aria-label=重命名]').count()].join(','))
   // LoRA 权重输入框：宽度足够、隐藏原生上下箭头

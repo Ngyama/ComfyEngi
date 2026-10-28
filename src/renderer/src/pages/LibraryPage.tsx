@@ -4,14 +4,14 @@
 // 旧版男性描述与镜头不在素材库中显示：数据与任务引用保持不变，镜头在套图任务中选择和新建。
 
 import { useState } from 'react'
-import { ChevronDown, ChevronRight, Copy, GripVertical, Plus, Shapes, Trash2, X } from 'lucide-react'
+import { ChevronDown, ChevronRight, Copy, GripVertical, Pickaxe, Plus, Shapes, Trash2, X } from 'lucide-react'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { Chip, EmptyState, FieldLabel, PageHeader, PromptField, SearchBox, TextInput } from '@/components/common'
 import { SortableArea, useSortableItem } from '@/components/sortable'
 import { api, call } from '@/lib/api'
 import { matchesName, useDraft } from '@/lib/hooks'
-import { confirm, reloadLib, templatesOf, useLib } from '@/lib/stores'
+import { confirm, reloadLib, templatesOf, useLib, useNav } from '@/lib/stores'
 import { cn } from '@/lib/utils'
 import { PLACEHOLDER_HELP } from '@shared/prompt'
 import { TEMPLATE_KINDS, type Template, type TemplateKind } from '@shared/types'
@@ -511,11 +511,16 @@ export default function LibraryPage() {
           title="素材库"
           description={kind ? HINTS[kind] : '双人互动 = 主体位基础 Prompt + 可选的子体位补充 Prompt + 可叠加的行为（在「行为」中独立管理）。'}
           actions={
-            kind && (
-              <Button size="sm" onClick={add}>
-                <Plus /> 新建{TEMPLATE_KINDS[kind]}
+            <>
+              <Button variant="ghost" size="sm" onClick={() => useNav.getState().go('mining')} data-testid="open-mining">
+                <Pickaxe /> 从历史图片提取
               </Button>
-            )
+              {kind && (
+                <Button size="sm" onClick={add}>
+                  <Plus /> 新建{TEMPLATE_KINDS[kind]}
+                </Button>
+              )}
+            </>
           }
         />
         <div className="flex flex-wrap items-center gap-3 px-6 pb-2.5">

@@ -421,6 +421,8 @@ export type RunnerEvent =
   | { kind: 'unit'; unitId: number; runId: number }
   /** 需要用户注意的提示（例如图片已生成但未能保存到输出目录） */
   | { kind: 'notice'; level: 'warn' | 'error'; text: string; detail?: string }
+  /** 历史 Prompt 提取：图片扫描进度 */
+  | { kind: 'mining'; done: number; total: number; file: string }
 
 export interface Library {
   templates: Template[]

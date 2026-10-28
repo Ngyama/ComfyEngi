@@ -3,7 +3,7 @@ import LorasPage from '@/pages/LorasPage'
 import { VaultPanel } from '@/components/VaultPanel'
 import { api } from '@/lib/api'
 import { useEffect, useState, type ComponentType } from 'react'
-import { BookOpen, History, Layers, ListOrdered, Settings, Shapes, Users } from 'lucide-react'
+import { BookOpen, History, Layers, ListOrdered, Pickaxe, Settings, Shapes, Users } from 'lucide-react'
 import { Toaster } from '@/components/ui/sonner'
 import { TooltipProvider } from '@/components/ui/tooltip'
 import { ConfirmHost, StatusDot } from '@/components/common'
@@ -13,6 +13,7 @@ import PlanPage from '@/pages/plan/PlanPage'
 import QueuePage from '@/pages/QueuePage'
 import HistoryPage from '@/pages/HistoryPage'
 import LibraryPage from '@/pages/LibraryPage'
+import MiningPage from '@/pages/mining/MiningPage'
 import CharactersPage from '@/pages/CharactersPage'
 import StoriesPage from '@/pages/StoriesPage'
 import SettingsPage from '@/pages/settings/SettingsPage'
@@ -21,6 +22,7 @@ type NavItem = { key: Page; label: string; icon: ComponentType<{ className?: str
 /** 侧边栏分两组：靠上为素材与资料，靠下为生成与系统 */
 const NAV_TOP: NavItem[] = [
   { key: 'library', label: '素材库', icon: Shapes },
+  { key: 'mining', label: 'Prompt 提取', icon: Pickaxe },
   { key: 'loras', label: 'LoRA 管理', icon: Shapes },
   { key: 'characters', label: '角色库', icon: Users },
   { key: 'stories', label: '剧情库', icon: BookOpen },
@@ -38,6 +40,7 @@ const PAGES: Record<Page, ComponentType> = {
   queue: QueuePage,
   history: HistoryPage,
   library: LibraryPage,
+  mining: MiningPage,
   characters: CharactersPage,
   stories: StoriesPage,
   settings: SettingsPage,

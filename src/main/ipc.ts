@@ -1,11 +1,11 @@
 import { LoraManager, pathKey } from './lora-manager'
 // IPC 处理：只响应白名单方法，并对每个参数做类型校验；Renderer 无法直接访问文件系统或数据库。
 
-import { existsSync } from 'node:fs'
+import { existsSync, rmSync } from 'node:fs'
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { dirname, extname, join } from 'node:path'
 import { BrowserWindow, dialog, ipcMain, nativeImage, shell, app } from 'electron'
-import { API_METHODS, INVOKE_CHANNEL, type Api, type ApiMethod } from '@shared/api'
+import { API_METHODS, INVOKE_CHANNEL, RUNNER_EVENT_CHANNEL, type Api, type ApiMethod } from '@shared/api'
 import { checkAgainstObjectInfo, ComfyError, loadApiWorkflow, mappingValues, validateMapping } from '@shared/mapping'
 import { normalizeTaskData } from '@shared/planner'
 import { DEFAULT_SETTINGS, TEMPLATE_KINDS, type Library, type OutputFile, type RunUnit, type Settings } from '@shared/types'
@@ -14,6 +14,9 @@ import { checkForUpdate } from './update'
 import { INSTALL_DIR_ERROR, insideInstallDir } from './install-dir'
 import { RELEASES_PAGE } from '@shared/update'
 import { enqueueTask, finalWorkflow, planForTask } from './plan'
+import { dictionaryInfo, dictionaryPath, importDictionary, MiningScanner, saveMined } from './mining'
+import { analyzeInWorker } from './mining-run'
+import { MINING_LIMITS, MINING_SAVE_KINDS } from '@shared/mining'
 import type { Runner } from './runner'
 import { TABLES, type Store, type TableName } from './store'
 
@@ -148,6 +151,12 @@ export function registerIpc(ctx: IpcContext) {
   const { store, runner } = ctx
   const vault = () => { if (!store.files) throw new Error('角色文件夹需要先打开工作区'); return store.files }
   const loras = () => { if (!store.files) throw new Error('请先打开工作区'); return new LoraManager(store.files.root) }
+  const scanner = new MiningScanner()
+  const progress = (done: number, total: number, file: string) => {
+    const win = ctx.window()
+    if (win && !win.isDestroyed()) win.webContents.send(RUNNER_EVENT_CHANNEL, { kind: 'mining', done, total, file })
+  }
+  const dictFile = () => dictionaryPath(ctx.dataDir)
   const handlers: { [K in ApiMethod]: (...args: unknown[]) => unknown } = {
     'vault.info': () => ({root:store.files?.root??null,errors:store.files?.errors??[]}),
     'vault.choose': (create,migrate) => { if(runner.isAlive()) throw new Error('请先安全停止队列，等待当前任务完成'); return ctx.chooseVault(!!create,!!migrate) },
@@ -423,6 +432,58 @@ export function registerIpc(ctx: IpcContext) {
       const u = str(url)
       if (u !== RELEASES_PAGE && !u.startsWith(`${RELEASES_PAGE}/`)) throw new BadArg('只能打开本项目的 GitHub Release 页面')
       void shell.openExternal(u)
+    },
+    'mining.addFiles': async () => {
+      const r = await dialog.showOpenDialog(ctx.window()!, { title: '选择保留生成参数的 PNG 图片（只读取，不会修改图片）', filters: [{ name: 'PNG', extensions: ['png'] }], properties: ['openFile', 'multiSelections'] })
+      if (r.canceled || !r.filePaths.length) return null
+      return scanner.scan(r.filePaths, [], false, progress)
+    },
+    'mining.addFolder': async (recursive) => {
+      const r = await dialog.showOpenDialog(ctx.window()!, { title: '选择包含 PNG 图片的文件夹（只读取，不会修改图片）', properties: ['openDirectory'] })
+      if (r.canceled || !r.filePaths[0]) return null
+      return scanner.scan([], [r.filePaths[0]], !!recursive, progress)
+    },
+    'mining.cancelScan': () => scanner.cancel(),
+    'mining.image': async (path, size) => {
+      const p = str(path)
+      if (!scanner.allowed.has(p)) throw new BadArg('只能预览已读取的图片')
+      const img = nativeImage.createFromPath(p)
+      if (img.isEmpty()) return null
+      const width = Math.max(64, Math.min(2048, int(size)))
+      const out = img.getSize().width > width ? img.resize({ width, quality: 'good' }) : img
+      return `data:image/jpeg;base64,${out.toJPEG(85).toString('base64')}`
+    },
+    'mining.showInFolder': (path) => {
+      const p = str(path)
+      if (!scanner.allowed.has(p)) throw new BadArg('只能打开已读取的图片')
+      shell.showItemInFolder(p)
+    },
+    'mining.analyze': (images, params) => {
+      if (!Array.isArray(images)) throw new BadArg('images 必须是数组')
+      if (images.length > MINING_LIMITS.maxImages) throw new BadArg(`一次最多分析 ${MINING_LIMITS.maxImages} 张图片`)
+      const list = images.map((x) => {
+        const o = plain(x, '图片')
+        return { id: str(o.id, 'id'), positive: str(o.positive, 'positive') }
+      })
+      const p = plain(params ?? {}, '参数')
+      const nums = Object.fromEntries(['minSupport', 'globalRatio', 'minSize', 'minLift', 'maxCandidates'].filter((k) => k in p).map((k) => [k, Number(p[k])]))
+      return analyzeInWorker(list, nums, existsSync(dictFile()) ? dictFile() : null)
+    },
+    'mining.dictInfo': () => dictionaryInfo(dictFile()),
+    'mining.dictImport': async () => {
+      const r = await dialog.showOpenDialog(ctx.window()!, { title: '导入本地标签词典（CSV / TXT / JSON）', filters: [{ name: '标签词典', extensions: ['csv', 'txt', 'json'] }], properties: ['openFile'] })
+      if (r.canceled || !r.filePaths[0]) return null
+      return importDictionary(r.filePaths[0], dictFile())
+    },
+    'mining.dictRemove': () => rmSync(dictFile(), { force: true }),
+    'mining.save': (items) => {
+      if (!Array.isArray(items)) throw new BadArg('items 必须是数组')
+      return saveMined(store, items.map((x) => {
+        const o = plain(x, '组合')
+        const kind = str(o.kind, 'kind')
+        if (!(MINING_SAVE_KINDS as string[]).includes(kind)) throw new BadArg(`不支持的素材类型 ${kind}`)
+        return { name: str(o.name ?? '', 'name'), positive: str(o.positive, 'positive'), kind: kind as never, parent_id: o.parent_id == null ? null : int(o.parent_id, 'parent_id') }
+      }))
     },
     'app.chooseOutputDir': async (title) => {
       const r = await dialog.showOpenDialog(ctx.window()!, { title: typeof title === 'string' && title ? title : '选择 ComfyUI 输出目录', properties: ['openDirectory', 'createDirectory'] })

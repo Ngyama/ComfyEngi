@@ -6,7 +6,7 @@ import type { Library, RunnerStatus, Task, TaskData, Template, TemplateKind } fr
 import { toast } from 'sonner'
 import { api } from './api'
 
-export type Page = 'loras' | 'plan' | 'queue' | 'history' | 'library' | 'characters' | 'stories' | 'settings'
+export type Page = 'loras' | 'plan' | 'queue' | 'history' | 'library' | 'mining' | 'characters' | 'stories' | 'settings'
 
 // ---------------------------------------------------------------- 导航
 /** 跳转到设置页的某个位置（例如从套图任务直接打开某个工作流的节点映射） */
