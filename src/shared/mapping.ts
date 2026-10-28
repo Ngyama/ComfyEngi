@@ -1,8 +1,8 @@
 // ComfyUI 工作流：API 格式识别、节点输入映射、校验与写入。
 // 原则：只修改映射中明确指定的节点输入，不增删节点、不改其他参数。
 
-import { compose, MODULE_LABELS } from './prompt'
-import type { ApiNode, ApiWorkflow, InputValue, MappingEntry, Message, OutputFile, Settings } from './types'
+import { compose, MODULE_LABELS, type ComposeSettings } from './prompt'
+import type { ApiNode, ApiWorkflow, InputValue, MappingEntry, Message, OutputFile } from './types'
 
 export const MAX_LORA_SLOTS = 4
 /** 任务级 LoRA（画风、辅助、背景等）最多几个槽位 */
@@ -27,7 +27,11 @@ export const SOURCES: [string, string][] = [
     [`task_lora${i + 1}_strength`, `任务 LoRA ${i + 1} 强度`] as [string, string],
   ]).flat(),
   ['filename_prefix', '输出文件前缀'],
+  // 基础生成尺寸：动作配置了尺寸时逐张写入；没有尺寸配置的旧动作保持工作流原值
+  ['width', '生成宽度'],
+  ['height', '生成高度'],
 ]
+export const SIZE_SOURCES = ['width', 'height']
 export const SOURCE_LABELS: Record<string, string> = Object.fromEntries(SOURCES)
 export const PROMPT_SOURCES = ['positive', 'negative']
 export const DEFAULT_PREFIX_TEMPLATE = 'ComfyEngi/{任务}/{序号}_{姿态}'
@@ -299,7 +303,7 @@ export function validateMapping(api: ApiWorkflow, mapping: MappingEntry[]): Mess
     if (PROMPT_SOURCES.includes(src) || src.endsWith('_name') || src === 'filename_prefix') {
       if (typeof cur !== 'string')
         out.push(['warning', `${tag}：${label} 的「${inp}」当前值不是文本（${describeValue(cur)}），请确认是否映射正确`])
-    } else if (src === 'seed') {
+    } else if (src === 'seed' || SIZE_SOURCES.includes(src)) {
       if (!isInt(cur)) out.push(['warning', `${tag}：${label} 的「${inp}」当前值不是整数（${describeValue(cur)}）`])
     } else if (src.endsWith('_strength')) {
       if (typeof cur !== 'number') out.push(['warning', `${tag}：${label} 的「${inp}」当前值不是数字（${describeValue(cur)}）`])
@@ -324,6 +328,7 @@ export function guessInput(source: string, inputs: Record<string, unknown>): str
   let pref: string[]
   if (PROMPT_SOURCES.includes(source)) pref = ['text']
   else if (source === 'seed') pref = ['seed', 'noise_seed']
+  else if (SIZE_SOURCES.includes(source)) pref = [source, 'value', 'int', 'Value']
   else if (source.endsWith('_name')) pref = ['lora_name']
   else if (source.endsWith('_strength')) pref = ['strength_model', 'strength_clip']
   else pref = ['filename_prefix']
@@ -408,13 +413,15 @@ export interface ValueUnit extends PrefixUnit {
   loras: SlotLora[]
   loras2?: SlotLora[]
   task_loras?: (SlotLora & { slot: number })[]
+  width?: number
+  height?: number
 }
 
 /** 计算每个映射目标要写入的值。预览与实际提交都调用这个函数，保证一致。值为 null 表示保持工作流原值 */
 export function mappingValues(
   unit: ValueUnit,
   mapping: MappingEntry[],
-  settings: Pick<Settings, 'compose_order' | 'pos_separator' | 'neg_separator' | 'trim_modules'>,
+  settings: ComposeSettings,
   dateStr?: string,
   /** 工作流 JSON：多 LoRA Loader 的列表绑定需要以工作流原列表为基础计算 */
   api?: ApiWorkflow,
@@ -438,6 +445,9 @@ export function mappingValues(
       else value = l ? Number(isClipInput(e.input) ? (l.strength_clip ?? l.strength ?? 1.0) : (l.strength ?? 1.0)) : 0.0
     } else if (src === 'filename_prefix') {
       value = renderPrefix(e.template || DEFAULT_PREFIX_TEMPLATE, unit, dateStr)
+    } else if (src === 'width' || src === 'height') {
+      const v = unit[src]
+      value = Number.isInteger(v) && v! > 0 ? v : null
     }
     return { node: String(e.node), input: e.input, source: src, value }
   })

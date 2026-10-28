@@ -147,7 +147,22 @@ export interface TaskItem {
   second_expression_id?: number | null
   /** 场景：null 时沿用任务的默认场景 */
   scene_id?: number | null
+  /**
+   * 各尺寸的张数（竖图 / 横图 / 方图）。没有此字段的旧动作沿用 count 与工作流默认尺寸；
+   * 有此字段时总张数为各尺寸之和（count 同步为总数，仅供显示）
+   */
+  sizes?: SizeCounts
 }
+
+export type SizeKey = 'portrait' | 'landscape' | 'square'
+export type SizeCounts = Partial<Record<SizeKey, number>>
+/** 生成尺寸预设，按此顺序执行 */
+export const SIZE_PRESETS: { key: SizeKey; label: string; width: number; height: number }[] = [
+  { key: 'portrait', label: '竖图', width: 1024, height: 1536 },
+  { key: 'landscape', label: '横图', width: 1536, height: 1024 },
+  { key: 'square', label: '方图', width: 1024, height: 1024 },
+]
+export const SIZE_STEP = 5
 
 /** 任务对角色默认 LoRA 的调整（键为槽位：lora1 = 主角色，second_lora1 = 第二角色） */
 export interface LoraOverride {
@@ -214,6 +229,8 @@ export interface Settings {
   comfy_output_dir: string
   compose_order: string[]
   pos_separator: string
+  /** 正面 Prompt 顶层模块之间的连接符（模块内部仍用 pos_separator） */
+  pos_module_separator: string
   neg_separator: string
   trim_modules: boolean
   default_workflow_id: number | null
@@ -236,6 +253,7 @@ export const DEFAULT_SETTINGS: Settings = {
   comfy_output_dir: '',
   compose_order: ['global', 'scene', 'camera', 'character', 'outfit', 'content', 'expression', 'interaction', 'male', 'character2', 'outfit2', 'content2', 'expression2', 'extra'],
   pos_separator: ', ',
+  pos_module_separator: ',\\n\\n',
   neg_separator: ', ',
   trim_modules: true,
   default_workflow_id: null,
@@ -283,6 +301,10 @@ export interface UnitMeta {
   of: number
   index?: number
   seed?: number
+  /** 动作的尺寸配置：本张的基础生成尺寸（旧动作没有，使用工作流默认尺寸） */
+  size?: string
+  width?: number
+  height?: number
 }
 
 export interface InputValue {
@@ -309,6 +331,9 @@ export interface PlanUnit {
   meta: UnitMeta
   index: number
   seed: number
+  /** 基础生成尺寸：写入映射的「生成宽度 / 高度」；没有时保持工作流原值 */
+  width?: number
+  height?: number
   inputs?: InputValue[]
 }
 

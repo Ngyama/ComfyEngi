@@ -60,7 +60,7 @@ describe('旧数据库迁移', () => {
 
   it('设置、执行队列与运行记录原样读取', () => {
     const { store } = openLegacy()
-    expect(store.settings()).toEqual({ lora_roots: [], lora_display_name: 'model', default_global_id: null, default_item_count: 10, default_output_dir: '', default_output_prefix: '', ...expected.settings, compose_order: DEFAULT_SETTINGS.compose_order }) // 旧版默认顺序（未自定义）升级为新默认顺序
+    expect(store.settings()).toEqual({ lora_roots: [], lora_display_name: 'model', default_global_id: null, default_item_count: 10, default_output_dir: '', default_output_prefix: '', pos_module_separator: ',\\n\\n', ...expected.settings, compose_order: DEFAULT_SETTINGS.compose_order }) // 旧版默认顺序（未自定义）升级为新默认顺序
     expect(normalizedOrder(expected.settings.compose_order)).not.toEqual(DEFAULT_SETTINGS.compose_order)
     const runs = store.listRuns(true)
     expect(runs.map((r) => [r.id, r.name, r.status, r.counts])).toEqual(expected.runs.map((r: { id: number; name: string; status: string; counts: unknown }) => [r.id, r.name, r.status, r.counts]))
@@ -74,8 +74,9 @@ describe('旧数据库迁移', () => {
   it('新版对旧任务计算出的生成计划与旧版完全一致（Prompt、Seed、写入节点的值）', () => {
     const { store } = openLegacy()
     for (const [tid, exp] of Object.entries(expected.plans) as [string, { errors: string[]; warnings: string[]; units: Record<string, unknown>[] }][]) {
-      // 组合顺序按需求改为新的默认顺序；这里用旧版顺序计算，验证内容（各模块、Seed、写入值）与旧版完全一致
-      const plan = planForTask(store, store.get('tasks', Number(tid))!, { ...store.settings(), compose_order: expected.settings.compose_order }, '20260101')
+      // 组合顺序、模块之间的空行按需求改为新的默认值；这里用旧版顺序与连接符计算，验证内容（各模块、Seed、写入值）与旧版完全一致
+      const legacy = { ...store.settings(), compose_order: expected.settings.compose_order, pos_module_separator: expected.settings.pos_separator }
+      const plan = planForTask(store, store.get('tasks', Number(tid))!, legacy, '20260101')
       expect(plan.errors).toEqual(exp.errors)
       // 新增的提示：旧工作流只映射了 strength_model，strength_clip 会保持工作流原值（行为与旧版相同，只是现在会明确提示）
       expect(plan.warnings.filter((w) => !w.includes('没有映射，这些权重会保持工作流原值'))).toEqual(exp.warnings)

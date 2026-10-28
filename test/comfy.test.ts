@@ -96,7 +96,7 @@ describe('工作流导入与映射', () => {
     const plan = planForTask(s, lib.makeTask([lib.item('睡觉', lib.outfitsA[0], [], 1)]))
     const vals = Object.fromEntries(plan.units[0].inputs!.map((x) => [x.node, x.value]))
     expect(vals['6']).toBe(plan.units[0].positive)
-    expect(vals['11']).toBe('1girl, char_a, red hair, outfit_a1')
+    expect(vals['11']).toBe('1girl, char_a, red hair,\n\noutfit_a1')
   })
 
   it('入队被错误阻止', () => {

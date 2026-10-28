@@ -54,7 +54,7 @@ describe('双角色 Prompt 组合', () => {
     const { units, errors } = expandTask(f.lib.task([item], { second_character_id: f.charM }), loadPlanLibrary(s), s.settings())
     expect(errors).toEqual([])
     const u = units[0]
-    expect(u.positive).toBe('masterpiece, best quality, bedroom, pov, 1girl, char_a, red hair, outfit_a1, sleeping, lying, expr1, missionary, legs up, hug, 1boy, char_m, suit, standing, smile')
+    expect(u.positive).toBe('masterpiece, best quality,\n\nbedroom,\n\npov,\n\n1girl, char_a, red hair,\n\noutfit_a1,\n\nsleeping, lying,\n\nexpr1,\n\nmissionary, legs up, hug,\n\n1boy, char_m,\n\nsuit,\n\nstanding,\n\nsmile')
     expect(u.modules.character2).toEqual(['1boy, char_m', ''])
     expect(u.modules.content2).toEqual(['standing', ''])
     expect(u.meta).toMatchObject({ character: '角色A', character2: '男角色', outfit2: '西装', action2: '站立', expression2: '微笑' })
@@ -72,7 +72,7 @@ describe('双角色 Prompt 组合', () => {
     expect(Object.keys(units[0].modules)).not.toContain('character2')
     expect(units[0].loras2).toBeUndefined()
     expect(units[0].meta.character2).toBeUndefined()
-    expect(units[1].positive).toBe('masterpiece, best quality, 1girl, char_a, red hair, wariza, 1boy, char_m')
+    expect(units[1].positive).toBe('masterpiece, best quality,\n\n1girl, char_a, red hair,\n\nwariza,\n\n1boy, char_m')
   })
 
   it('同一个动作 / 表情素材可以分别分配给两个角色；占位符按各自角色填充', () => {
@@ -92,7 +92,7 @@ describe('双角色 Prompt 组合', () => {
     const data = f.lib.task([f.lib.item('睡觉', null, [], 1, { second_enabled: true, second_outfit_id: f.lib.outfitsB[0] })], { second_character_id: f.lib.charB })
     const r = expandTask(data, loadPlanLibrary(s), s.settings())
     expect(r.errors).toEqual([])
-    expect(r.units[0].positive).toBe('masterpiece, best quality, 1girl, char_a, red hair, sleeping, lying, 1girl, char_b, outfit_b1')
+    expect(r.units[0].positive).toBe('masterpiece, best quality,\n\n1girl, char_a, red hair,\n\nsleeping, lying,\n\n1girl, char_b,\n\noutfit_b1')
     expect(r.units[0].loras2).toBeUndefined() // 角色 B 没有 LoRA
   })
 
@@ -114,7 +114,7 @@ describe('双角色 Prompt 组合', () => {
     // 没有第二角色：沿用旧版男性基础描述
     expect(expandTask(f.lib.task([], { story_id: sid }), loadPlanLibrary(s), s.settings()).units[0].positive).toContain('MALE_BASE_TAG')
     const { units } = expandTask(f.lib.task([], { story_id: sid, second_character_id: f.charM }), loadPlanLibrary(s), s.settings())
-    expect(units[0].positive).toBe('masterpiece, best quality, 1girl, char_a, red hair, scene_a, 1boy, char_m')
+    expect(units[0].positive).toBe('masterpiece, best quality,\n\n1girl, char_a, red hair,\n\nscene_a,\n\n1boy, char_m')
     expect(units[0].loras2).toEqual([{ name: 'charM.safetensors', strength: 0.7 }])
     expect(units[1].positive).not.toContain('char_m')
   })

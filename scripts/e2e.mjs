@@ -55,7 +55,8 @@ const shot = async (name) => {
   await win.waitForTimeout(350)
   await win.screenshot({ path: join(shots, `${name}.png`) })
 }
-const nav = (label) => win.locator('nav button', { hasText: label }).click()
+// 只匹配导航按钮本身（底部的运行状态卡片空闲时也显示「执行队列」）
+const nav = (label) => win.locator('nav button').filter({ hasText: new RegExp(`^${label}$`) }).click()
 
 // 亮色主题检查：找出颜色很浅、且所在背景也很浅的文字（看不清）。颜色按 OKLCH / OKLab 的 L 或 sRGB 亮度近似
 const lightnessCheck = () =>
@@ -144,22 +145,29 @@ try {
 
   // 打开第 1 个姿态详情：选服装、两个表情、20 张、镜头
   await cards.nth(0).click()
-  const panel = win.locator('div.w-\\[380px\\], div.\\32xl\\:w-\\[400px\\]').last()
-  await win.locator('button', { hasText: 'A服装3' }).last().click()
-  await win.locator('button', { hasText: '表情2' }).last().click()
-  await win.locator('button', { hasText: '表情5' }).last().click()
-  await win.locator('button', { hasText: /^20$/ }).last().click()
-  await win.locator('button', { hasText: /^镜头/ }).last().click()
-  await win.locator('button', { hasText: '俯视' }).last().click()
+  // 详情只显示当前选择，点击后在素材选择器中选择
+  const picker = win.locator('[data-testid=material-picker]')
+  await win.locator('[data-testid=pick-outfit]').click()
+  await picker.locator('button', { hasText: 'A服装3' }).click()
+  await win.locator('[data-testid=pick-exprs]').click()
+  await picker.locator('[data-testid=picker-list] button', { hasText: '表情2' }).click()
+  await picker.locator('[data-testid=picker-list] button', { hasText: '表情5' }).click()
+  await picker.locator('[data-testid=picker-done]').click()
+  // 新动作默认竖图 10 张；竖图 +5 两次 = 20 张
+  await win.getByRole('button', { name: '竖图增加 5 张' }).click()
+  await win.getByRole('button', { name: '竖图增加 5 张' }).click()
+  await win.locator('[data-testid=pick-camera]').click()
+  await picker.locator('button', { hasText: '俯视' }).click()
   await shot('03-pose-detail')
   const card0 = await cards.nth(0).innerText()
-  check('姿态详情配置显示在卡片上', card0.includes('A服装3') && card0.includes('表情2、表情5') && card0.includes('20') && card0.includes('俯视'), card0.replace(/\n/g, ' | '))
-  void panel
-  // 不能整除：设为 21 张
-  await win.locator('input[inputmode=numeric]').last().fill('21')
+  check('姿态详情配置显示在卡片上', card0.includes('A服装3') && card0.includes('表情2、表情5') && card0.includes('20') && card0.includes('竖20') && card0.includes('俯视'), card0.replace(/\n/g, ' | '))
+  check('详情面板加宽到 520px（不超出窗口）', await win.locator('[data-testid=detail-title]').evaluate((el) => { const p = el.closest('.rounded-2xl'); const r = p.getBoundingClientRect(); return r.width >= 500 && r.right <= window.innerWidth }))
+  check('尺寸不能直接输入数字', (await win.locator('[data-testid=size-cards] input').count()) === 0)
+  // 不能整除：竖图减到 15 张
+  await win.getByRole('button', { name: '竖图减少 5 张' }).click()
   await win.waitForTimeout(200)
   check('不能整除时卡片显示错误', (await cards.nth(0).innerText()).includes('不能被 2 个表情平均分配'), (await cards.nth(0).innerText()).replace(/\n/g, ' | '))
-  await win.locator('input[inputmode=numeric]').last().fill('20')
+  await win.getByRole('button', { name: '竖图增加 5 张' }).click()
   await win.waitForTimeout(200)
 
   // 预览
@@ -258,7 +266,9 @@ try {
   check('任务中添加双人动作（主体位 · 子体位，插入在选中动作之后）', (await names())[1] === '新主体位 · 新子体位', (await names()).join(','))
   const duoCard = cards.nth(1)
   await duoCard.click()
-  await win.locator('button', { hasText: '新行为' }).last().click()
+  await win.locator('[data-testid=pick-acts]').click()
+  await win.locator('[data-testid=material-picker] [data-testid=picker-list] button', { hasText: '新行为' }).click()
+  await win.locator('[data-testid=picker-done]').click()
   await win.waitForTimeout(300)
   await shot('09c-plan-duo-detail')
   check('行为显示在卡片上', (await duoCard.innerText()).includes('新行为'), (await duoCard.innerText()).replace(/\n/g, ' | '))
@@ -269,9 +279,9 @@ try {
   check('选择第二角色后双人动作启用第二角色，单人动作保持单人', (await duoCard.innerText()).includes('+ 角色B') && !(await cards.nth(0).innerText()).includes('+ 角色B'), (await duoCard.innerText()).replace(/\n/g, ' | '))
   await duoCard.click()
   await win.locator('[data-testid=second-pose]').click()
-  await win.getByRole('option', { name: '动作B', exact: true }).last().click()
+  await win.locator('[data-testid=material-picker] [data-testid=picker-list] button').filter({ hasText: /^动作B/ }).first().click()
   await win.locator('[data-testid=main-pose]').click()
-  await win.getByRole('option', { name: '动作A', exact: true }).last().click()
+  await win.locator('[data-testid=material-picker] [data-testid=picker-list] button').filter({ hasText: /^动作A/ }).first().click()
   await win.waitForTimeout(1200)
   await shot('09d-plan-second-role')
   const roleUnit = await win.evaluate(async () => {
@@ -526,8 +536,10 @@ try {
   // 小窗口布局
   await setSize(1180, 720)
   await nav('套图任务')
-  await cards.nth(1).click()
+  // 小窗口中详情为浮动面板，盖住卡片右侧；点击卡片左侧切换
+  await cards.nth(1).click({ position: { x: 120, y: 20 } })
   await shot('16-plan-small')
+  check('小窗口：浮动详情面板不超出窗口', await win.locator('[data-testid=detail-title]').evaluate((el) => { const r = el.closest('.rounded-2xl').getBoundingClientRect(); return r.right <= window.innerWidth && r.left >= 0 }))
   await nav('执行队列')
   await shot('17-queue-small')
   await setSize(1920, 1040)
@@ -597,7 +609,7 @@ try {
   const defBox = win.locator('[data-testid=settings-defaults]')
   await defBox.getByPlaceholder('留空则使用工作流映射中的模板，例如 %date:yyyy-MM-dd%/image').fill('def/%date:yyyyMMdd%')
   await win.keyboard.press('Tab')
-  await win.evaluate(() => window.api['settings.set']('default_item_count', 4))
+  await win.evaluate(() => window.api['settings.set']('default_item_count', 15))
   await win.waitForTimeout(600)
   await shot('21-settings-defaults')
   await themeCheck('生成默认值')
@@ -642,9 +654,62 @@ try {
   await win.locator('[role=dialog] button', { hasText: '添加 1 个动作' }).click()
   await win.waitForTimeout(1200)
   const fresh = await curTask()
-  check('新任务套用默认文件名前缀，新动作套用默认张数', fresh.id !== oldTask.id && fresh.data.output?.prefix === 'def/%date:yyyyMMdd%' && fresh.data.items.at(-1)?.count === 4, JSON.stringify([fresh.data.output, fresh.data.items.map((i) => i.count)]))
+  check('新任务套用默认文件名前缀，新动作套用默认张数（放在竖图）', fresh.id !== oldTask.id && fresh.data.output?.prefix === 'def/%date:yyyyMMdd%' && fresh.data.items.at(-1)?.count === 15 && fresh.data.items.at(-1)?.sizes?.portrait === 15, JSON.stringify([fresh.data.output, fresh.data.items.map((i) => [i.count, i.sizes])]))
   const oldAfter = await win.evaluate((id) => window.api['tasks.get'](id), oldTask.id)
   check('已有任务不受默认值影响', JSON.stringify(oldAfter.data) === JSON.stringify(oldTask.data))
+
+  // 大量素材：300 个行为，在选择器中搜索、多选、切换搜索后保留、取消单个
+  await win.evaluate(async () => {
+    for (let i = 1; i <= 300; i++) await window.api['templates.save']({ kind: 'act', name: `批量行为${i}`, positive: `bulk_act_${i}, (weight:1.1)` })
+  })
+  await win.reload()
+  await win.locator('nav').waitFor()
+  await nav('套图任务')
+  await win.locator('button', { hasText: '添加动作' }).first().click()
+  await win.locator('[role=dialog] button', { hasText: '双人互动' }).click()
+  await win.locator('[role=dialog] button', { hasText: '新子体位' }).click()
+  await win.locator('[role=dialog] button', { hasText: '添加 1 个动作' }).click()
+  await win.waitForTimeout(500)
+  const duo2 = cards.filter({ hasText: '新主体位 · 新子体位' }).first()
+  await duo2.click({ position: { x: 120, y: 20 } })
+  check('双人动作详情：主体位与子体位按层级显示', (await win.locator('[data-testid=pick-position]').innerText()).includes('新主体位') && (await win.locator('[data-testid=pick-sub]').innerText()).includes('新子体位'))
+  await win.locator('[data-testid=pick-acts]').click()
+  const mp = win.locator('[data-testid=material-picker]')
+  const list = mp.locator('[data-testid=picker-list]')
+  const bulk = await list.locator('button').count()
+  const geo = await mp.evaluate((el) => {
+    const r = el.getBoundingClientRect()
+    const l = el.querySelector('[data-testid=picker-list]')
+    const done = el.querySelector('[data-testid=picker-done]').getBoundingClientRect()
+    return { top: r.top, bottom: r.bottom, vh: window.innerHeight, scroll: l.scrollHeight > l.clientHeight, doneVisible: done.bottom <= window.innerHeight && done.top >= 0 }
+  })
+  check('300 个素材：列表可滚动，标题与完成按钮都在窗口内', bulk >= 300 && geo.scroll && geo.top >= 0 && geo.bottom <= geo.vh && geo.doneVisible, JSON.stringify({ bulk, ...geo }))
+  await mp.getByPlaceholder(/搜索名称/).fill('批量行为12')
+  check('按名称搜索', (await list.locator('button').count()) === 11, String(await list.locator('button').count()))
+  await list.locator('button', { hasText: /^批量行为12bulk/ }).click()
+  await list.locator('button', { hasText: /^批量行为125bulk/ }).click()
+  await mp.getByPlaceholder(/搜索名称/).fill('批量行为250')
+  await list.locator('button', { hasText: /^批量行为250bulk/ }).click()
+  await mp.getByPlaceholder(/搜索名称/).fill('')
+  await shot('24-material-picker')
+  const summary = () => mp.locator('[data-testid=picker-selected]').innerText()
+  const summaryText = await summary()
+  check('切换搜索后已选内容保留', (await summary()).includes('已选 3') && ['批量行为12', '批量行为125', '批量行为250'].every((n) => summaryText.includes(n)), (await summary()).replace(/\n/g, ' '))
+  await mp.getByRole('button', { name: '移除 批量行为125' }).click()
+  await mp.locator('[data-testid=picker-done]').click()
+  await win.waitForTimeout(1200)
+  const acted = await curTask()
+  const actNames = await win.evaluate(async (ids) => { const lib = await window.api['library.load'](); return ids.map((id) => lib.templates.find((t) => t.id === id)?.name) }, acted.data.items.at(-1).act_ids)
+  check('多选结果按点选顺序保存，取消的项不保留', JSON.stringify(actNames) === JSON.stringify(['批量行为12', '批量行为250']), JSON.stringify(actNames))
+  check('详情中只显示已选行为（不平铺 300 个素材）', (await win.locator('[data-testid=pick-acts]').innerText()).includes('批量行为250') && (await win.locator('[data-testid=detail-scene] button').count()) < 20)
+  // 生成设置：多尺寸张数写入计划
+  await win.getByRole('button', { name: '横图增加 5 张' }).click()
+  await win.waitForTimeout(1000)
+  const sp = await planNow()
+  const mine = sp.units.filter((u) => u.item_label === '新主体位 · 新子体位')
+  check('多尺寸：计划中每张带宽高（竖图在前、横图在后）', mine.length === 20 && mine[0].width === 1024 && mine[0].height === 1536 && mine.at(-1).width === 1536 && mine.at(-1).height === 1024, mine.map((u) => `${u.width}x${u.height}`).join(','))
+  check('正面 Prompt 模块之间空一行，与提交内容一致', mine[0].positive.includes(',\n\n') && mine[0].inputs.find((x) => x.source === 'positive')?.value === mine[0].positive)
+  await shot('25-detail-sizes')
 
   check('没有渲染进程错误', errors.length === 0, errors.slice(0, 3).join(' / '))
 } catch (e) {

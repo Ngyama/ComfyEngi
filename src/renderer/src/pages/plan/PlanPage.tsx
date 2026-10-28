@@ -31,9 +31,9 @@ import { api, call } from '@/lib/api'
 import { hueOf } from '@/lib/hooks'
 import { confirm, reloadLib, templatesOf, useLib, useNav, usePlan, useRunner } from '@/lib/stores'
 import { cn } from '@/lib/utils'
-import { defaultItemCount, expandTask, newInteractionItem, newItem, newTaskWithDefaults } from '@shared/planner'
+import { defaultItemCount, defaultSizes, expandTask, newInteractionItem, newItem, newTaskWithDefaults, setItemSizes, sizeCount } from '@shared/planner'
 import type { Plan } from '@shared/api'
-import { DEFAULT_SETTINGS, type Library, type PlanUnit, type TaskData, type TaskItem } from '@shared/types'
+import { DEFAULT_SETTINGS, SIZE_PRESETS, type Library, type PlanUnit, type TaskData, type TaskItem } from '@shared/types'
 import { PlanPreviewDialog, TaskSettingsDialog } from './dialogs'
 import { LoraPanel } from './LoraPanel'
 import { CharacterPicker, GlobalPicker, PosePicker, StoryPicker, WorkflowMenu, type NewAction } from './pickers'
@@ -225,6 +225,11 @@ function PoseCard({
   const exprs = item.expression_ids.map((e) => T(e)?.name ?? '（已删除）')
   const camera = T(item.camera_id)
   const per = exprs.length && item.count % exprs.length === 0 ? item.count / exprs.length : null
+  const sizeText = item.sizes
+    ? SIZE_PRESETS.filter((p) => sizeCount(item.sizes, p.key))
+        .map((p) => `${p.label[0]}${sizeCount(item.sizes, p.key)}`)
+        .join(' ')
+    : null
   return (
     <div
       ref={s.setNodeRef}
@@ -299,7 +304,9 @@ function PoseCard({
       </div>
       <div className="w-16 shrink-0 text-right">
         <div className="text-[17px] leading-none font-semibold tabular-nums">{item.count}</div>
-        <div className="mt-1 text-[10.5px] text-muted-foreground">{per ? `${exprs.length}×${per} 张` : '张'}</div>
+        <div className="mt-1 text-[10.5px] text-muted-foreground" title={per ? `${exprs.length} 个表情，每个 ${per} 张` : undefined}>
+          {sizeText || (per ? `${exprs.length}×${per} 张` : '张')}
+        </div>
       </div>
     </div>
   )
@@ -372,12 +379,17 @@ export default function PlanPage() {
     const prev = at > 0 ? items[at - 1] : null
     // 服装默认继承上一个动作
     // 双人互动在选择了第二角色时默认让第二角色出场；单人动作默认是单人图片
-    const count = defaultItemCount(lib?.settings)
+    // 新动作使用尺寸配置：默认张数放在竖图
+    const sizes = defaultSizes(defaultItemCount(lib?.settings))
     update((x) =>
       x.items.splice(
         at,
         0,
-        ...ids.map((a) => ({ ...('pose_id' in a ? newItem(a.pose_id, prev?.outfit_id ?? null) : newInteractionItem(a.position_id, a.subposition_id, prev?.outfit_id ?? null, !!x.second_character_id)), count })),
+        ...ids.map((a) => {
+          const it = 'pose_id' in a ? newItem(a.pose_id, prev?.outfit_id ?? null) : newInteractionItem(a.position_id, a.subposition_id, prev?.outfit_id ?? null, !!x.second_character_id)
+          setItemSizes(it, sizes)
+          return it
+        }),
       ),
     )
     setKeysAfter((k) => [...k.slice(0, at), ...ids.map(() => Math.random().toString(36).slice(2)), ...k.slice(at)])
@@ -664,7 +676,7 @@ export default function PlanPage() {
 
       {/* 姿态详情：宽屏时并排，窄屏时浮在序列上方 */}
       {detailOpen && (
-        <div className="absolute top-3 right-3 bottom-[76px] z-30 w-[380px] overflow-hidden rounded-2xl bg-popover shadow-2xl ring-1 shadow-tint/15 ring-tint/[0.128] 2xl:static 2xl:my-3 2xl:mr-3 2xl:w-[400px] 2xl:shrink-0 2xl:bg-card 2xl:shadow-none">
+        <div className="absolute top-3 right-3 bottom-[76px] z-30 w-[520px] max-w-[calc(100%-24px)] overflow-hidden rounded-2xl bg-popover shadow-2xl ring-1 shadow-tint/15 ring-tint/[0.128] 2xl:static 2xl:my-3 2xl:mr-3 2xl:w-[520px] 2xl:shrink-0 2xl:bg-inset/60 2xl:shadow-none">
           <PoseDetail index={selected!} firstUnit={firstUnitOf(selected!)} onClose={() => select(null)} />
         </div>
       )}

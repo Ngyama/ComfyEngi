@@ -4,12 +4,13 @@
 // - Seed：被其他节点引用的 Seed 节点是主 Seed；采样器里独立填写的 Seed 需要确认，不会擅自同步
 // - LoRA Loader：可识别的 Loader 由套图任务直接控制（不生成映射建议），无法识别的给出提示
 // - 输出：最终（不再被其他节点使用的）保存节点
+// - 生成尺寸：创建空 latent 的节点的 width / height；连接自上游整数节点时映射到上游节点（放大、分块等参数不会被当作尺寸）
 // 所有建议都只是候选，由用户确认后才写入映射。
 
 import { DEFAULT_PREFIX_TEMPLATE, findLoraLoaders, isLink, newEntry, nodeTitle, sortNodeIds, type LoraLoaderInfo } from './mapping'
 import type { ApiNode, ApiWorkflow, MappingEntry } from './types'
 
-export type SuggestionGroup = 'prompt' | 'seed' | 'lora' | 'output'
+export type SuggestionGroup = 'prompt' | 'seed' | 'lora' | 'output' | 'size'
 export interface Suggestion {
   group: SuggestionGroup
   /** 勾选后写入的映射（同一个 Prompt 可以写入同一节点的多个字段） */
@@ -245,7 +246,62 @@ export function analyzeWorkflow(api: ApiWorkflow): WorkflowAnalysis {
       preview: String(api[nid].inputs.filename_prefix),
     })
   }
+  analyzeSizes(api, cons, suggestions, notes)
   return { suggestions, notes }
+}
+
+/** 处理已有图像 / latent 的输入：有这些连接的节点是缩放、放大、裁剪等，不是基础生成尺寸 */
+const IMAGE_INPUT = /^(image|images|pixels|samples|latent|latent_image|mask|upscale_model)$/
+/** 上游整数节点中保存数值的字段（按优先级） */
+const INT_FIELDS = ['value', 'int', 'Value', 'INT', 'number', 'width', 'height']
+
+/** 创建空 latent 的节点：直接带 width 与 height 输入，类型名含 Latent 或有 batch_size，且不读取已有图像 / latent */
+export function findLatentGenerators(api: ApiWorkflow): string[] {
+  return sortNodeIds(Object.keys(api)).filter((nid) => {
+    const n = api[nid]
+    const i = n?.inputs ?? {}
+    if (!('width' in i) || !('height' in i)) return false
+    if (Object.entries(i).some(([k, v]) => isLink(v) && IMAGE_INPUT.test(k))) return false
+    return /latent/i.test(n.class_type) || 'batch_size' in i
+  })
+}
+
+function analyzeSizes(api: ApiWorkflow, cons: Map<string, string[]>, suggestions: Suggestion[], notes: string[]) {
+  const gens = findLatentGenerators(api)
+  if (gens.length > 1) notes.push(`有 ${gens.length} 个创建空 latent 的节点（${gens.map((g) => `#${g}`).join('、')}）：请确认哪个用于基础生成尺寸。`)
+  for (const g of gens) {
+    for (const dim of ['width', 'height'] as const) {
+      const v = api[g].inputs[dim]
+      let node = g
+      let input: string = dim
+      let why = `${label(api, g)} 的 ${dim}（基础生成尺寸）`
+      if (isLink(v)) {
+        const up = api[v[0]]
+        const ui = up?.inputs ?? {}
+        const field = Object.values(ui).some((x) => isLink(x)) ? undefined : INT_FIELDS.find((f) => Number.isInteger(ui[f]))
+        if (!up || !field) {
+          notes.push(`${label(api, g)} 的 ${dim} 连接自 ${label(api, v[0])}，无法自动识别其中的数值，需要在映射中手动指定（或保持工作流默认尺寸）。`)
+          continue
+        }
+        node = v[0]
+        input = field
+        const others = (cons.get(node) ?? []).filter((x) => x !== g)
+        why = `${label(api, g)} 的 ${dim} 连接自这个整数节点${others.length ? `；它同时被 ${others.map((x) => `#${x}`).join('、')} 使用，会一起改变` : ''}`
+      } else if (!Number.isInteger(v)) continue
+      const high = gens.length === 1
+      suggestions.push({
+        group: 'size',
+        entries: [newEntry(dim, node, input)],
+        checked: high,
+        confidence: high ? 'high' : 'confirm',
+        title: `${dim === 'width' ? '生成宽度' : '生成高度'} → ${input}`,
+        why: high ? why : `${why}；有多个空 latent 节点，请确认`,
+        node,
+        nodeLabel: label(api, node),
+        preview: String(api[node].inputs[input]),
+      })
+    }
+  }
 }
 
 /** 应用建议时合并映射：同一节点输入已有映射的跳过（多 LoRA Loader 的列表绑定按槽位区分） */

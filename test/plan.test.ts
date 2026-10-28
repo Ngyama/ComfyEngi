@@ -38,9 +38,10 @@ describe('模板与 Prompt', () => {
     const s = newStore()
     const set = s.settings()
     const mods = { global: ['(best:1.2)', ''], character: ['<lora:x:0.8>, {a|b}', ''], content: ['', ''], camera: ['pov', ''] } as Record<string, [string, string]>
-    expect(compose(mods, set)[0]).toBe('(best:1.2), pov, <lora:x:0.8>, {a|b}') // 默认：全局 → 场景 → 镜头 → 主角色
+    // 默认：全局 → 场景 → 镜头 → 主角色；模块之间空一行，模块内容原样
+    expect(compose(mods, set)[0]).toBe('(best:1.2),\n\npov,\n\n<lora:x:0.8>, {a|b}')
     set.compose_order = ['camera', 'character', 'global']
-    set.pos_separator = '\\nBREAK\\n'
+    set.pos_module_separator = '\\nBREAK\\n'
     expect(compose(mods, set)[0]).toBe('pov\nBREAK\n<lora:x:0.8>, {a|b}\nBREAK\n(best:1.2)')
   })
 
@@ -104,7 +105,7 @@ describe('任务展开', () => {
     const { units, errors } = expandTask(lib.task([lib.item('动作A', lib.outfitsA[1], [e[2], e[6], e[8]], 30)]), loadPlanLibrary(s), s.settings())
     expect(errors).toEqual([])
     expect(units.map((u) => u.meta.expression)).toEqual([...Array(10).fill('表情3'), ...Array(10).fill('表情7'), ...Array(10).fill('表情9')])
-    for (const u of units) expect(u.positive.split(', ').filter((t) => /^expr\d$/.test(t)).length).toBe(1)
+    for (const u of units) expect(u.positive.split(/,\s*/).filter((t) => /^expr\d$/.test(t)).length).toBe(1)
   })
 
   it('不能整除时报错，未选表情使用空表情', () => {
@@ -162,10 +163,10 @@ describe('任务展开', () => {
     const set = s.settings()
     const data = lib.task([lib.item('睡觉', lib.outfitsA[0], [lib.exprs[0]], 1, { camera_id: lib.above })])
     let { units } = expandTask(data, loadPlanLibrary(s), set)
-    expect(units[0].positive).toBe('masterpiece, best quality, from above, 1girl, char_a, red hair, outfit_a1, sleeping, lying, expr1')
+    expect(units[0].positive).toBe('masterpiece, best quality,\n\nfrom above,\n\n1girl, char_a, red hair,\n\noutfit_a1,\n\nsleeping, lying,\n\nexpr1')
     set.compose_order = ['camera', 'global', 'character', 'outfit', 'content', 'expression', 'male', 'extra']
     ;({ units } = expandTask(data, loadPlanLibrary(s), set))
-    expect(units[0].positive.startsWith('from above, masterpiece')).toBe(true)
+    expect(units[0].positive.startsWith('from above,\n\nmasterpiece')).toBe(true)
     expect(units[0].meta.camera).toBe('俯视')
   })
 

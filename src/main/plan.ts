@@ -183,6 +183,12 @@ export function planForTask(store: Store, task: Task, settings?: Settings, dateS
           once(warnings, `工作流「${wf.name}」没有映射「输出文件前缀」，任务中设置的文件名前缀不会生效（最终图片仍会复制到输出目录）。可在工作流映射中用「自动识别」添加`)
         for (const u of units) u.inputs = u.inputs!.map((x) => (x.source === 'filename_prefix' ? { ...x, value: renderPrefix(prefix, u, dateStr) } : x))
       }
+      // 动作的尺寸配置需要工作流映射「生成宽度 / 高度」才会生效
+      if (units.some((u) => u.width)) {
+        const missing = (['width', 'height'] as const).filter((s) => !wf.mapping.some((m) => m.source === s))
+        if (missing.length)
+          once(warnings, `工作流「${wf.name}」没有映射「${missing.map((s) => (s === 'width' ? '生成宽度' : '生成高度')).join('、')}」，动作中设置的尺寸不会生效（将使用工作流默认尺寸）。可在工作流管理中用「自动识别」添加`)
+      }
     }
   }
   // 输出目录：完成后把最终图片从 ComfyUI 复制到这里（默认工作区 output/）；入队时随计划冻结

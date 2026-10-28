@@ -11,14 +11,54 @@ import type {
   Outfit,
   PlanUnit,
   Settings,
+  SizeCounts,
+  SizeKey,
   Story,
   TaskData,
   TaskItem,
   Template,
   UnitMeta,
 } from './types'
+import { SIZE_PRESETS, SIZE_STEP } from './types'
 
 export const SEED_MOD = 2 ** 32
+
+// ---------------------------------------------------------------- 动作尺寸
+/** 某尺寸的张数（非整数、负数按 0 处理） */
+export const sizeCount = (s: SizeCounts | undefined, k: SizeKey): number => {
+  const n = Math.trunc(Number(s?.[k] ?? 0))
+  return Number.isFinite(n) && n > 0 ? n : 0
+}
+export const sizeTotal = (s: SizeCounts | undefined): number => SIZE_PRESETS.reduce((a, p) => a + sizeCount(s, p.key), 0)
+/** 加减一步（每次 5 张，最小 0） */
+export const stepSize = (v: number, dir: 1 | -1): number => Math.max(0, v + dir * SIZE_STEP)
+/** 新动作的尺寸配置：默认张数放在竖图（按 5 张取整，至少 5 张） */
+export function defaultSizes(count: number): SizeCounts {
+  return { portrait: Math.max(SIZE_STEP, Math.round(count / SIZE_STEP) * SIZE_STEP), landscape: 0, square: 0 }
+}
+/** 修改尺寸张数：同步 count 为总数（count 只用于显示和旧逻辑） */
+export function setItemSizes(item: TaskItem, sizes: SizeCounts) {
+  item.sizes = { portrait: sizeCount(sizes, 'portrait'), landscape: sizeCount(sizes, 'landscape'), square: sizeCount(sizes, 'square') }
+  item.count = sizeTotal(item.sizes)
+}
+
+/**
+ * 动作的生成顺序：按竖图、横图、方图依次生成，同尺寸连续。
+ * 表情（nExpr > 0）在整个动作内按轮转分配，保证每个表情的总张数相同（总数需能被表情数整除）；
+ * 同一尺寸内再按表情顺序分组。分配完全确定，不随机。
+ */
+export function sizeSchedule(sizes: SizeCounts | undefined, nExpr: number): { size: (typeof SIZE_PRESETS)[number]; expr: number | null }[] {
+  const out: { size: (typeof SIZE_PRESETS)[number]; expr: number | null }[] = []
+  let t = 0
+  for (const p of SIZE_PRESETS) {
+    const n = sizeCount(sizes, p.key)
+    const exprs = Array.from({ length: n }, (_, i) => (nExpr ? (t + i) % nExpr : null))
+    t += n
+    if (nExpr) exprs.sort((a, b) => a! - b!)
+    for (const e of exprs) out.push({ size: p, expr: e })
+  }
+  return out
+}
 
 export function newItem(poseId: number | null = null, outfitId: number | null = null): TaskItem {
   return {
@@ -234,6 +274,7 @@ export function expandTask(data: TaskData, lib: PlanLibrary, settings: Settings,
     modules: Modules,
     meta: UnitMeta,
     withSecond = false,
+    size?: { width: number; height: number },
   ) => {
     const [positive, negative] = compose(modules, settings)
     const u: PlanUnit = {
@@ -252,6 +293,10 @@ export function expandTask(data: TaskData, lib: PlanLibrary, settings: Settings,
     // 第二角色的 LoRA 只在其出场时加入；字段只在有内容时写入，旧任务的计划结构不变
     if (withSecond && loras2.length) u.loras2 = loras2
     if (taskLoras.length) u.task_loras = taskLoras
+    if (size) {
+      u.width = size.width
+      u.height = size.height
+    }
     units.push(u)
   }
 
@@ -356,71 +401,84 @@ export function expandTask(data: TaskData, lib: PlanLibrary, settings: Settings,
       joinParts(parts.map((x) => x[0]), unescapeSeparator(settings.pos_separator ?? ', '), trim),
       joinParts(parts.map((x) => x[1]), unescapeSeparator(settings.neg_separator ?? ', '), trim),
     ]
-    const count = toInt(it.count)
+    // 有尺寸配置时总张数为各尺寸之和；旧动作沿用 count，并保持工作流默认尺寸
+    const sized = !!it.sizes
+    const count = sized ? sizeTotal(it.sizes) : toInt(it.count)
     if (count <= 0) {
-      errors.push(`${where}：生成张数必须大于 0`)
+      errors.push(sized ? `${where}：竖图、横图、方图的张数都为 0，请至少为一种尺寸设置张数` : `${where}：生成张数必须大于 0`)
       return
     }
-    let groups: [Template | null, number][]
-    if (exprs.length) {
-      if (count % exprs.length) {
-        errors.push(`${where}：张数 ${count} 不能被 ${exprs.length} 个表情平均分配，请修改张数`)
-        return
+    if (exprs.length && count % exprs.length) {
+      errors.push(`${where}：张数 ${count} 不能被 ${exprs.length} 个表情平均分配，请修改张数`)
+      return
+    }
+    const per = exprs.length ? count / exprs.length : count
+    // 每张：表情、该表情内的序号、尺寸（旧动作没有尺寸）
+    const slots: { e: Template | null; j: number; size?: (typeof SIZE_PRESETS)[number] }[] = []
+    if (sized) {
+      const seen = new Map<number | null, number>()
+      for (const s of sizeSchedule(it.sizes, exprs.length)) {
+        const j = seen.get(s.expr) ?? 0
+        seen.set(s.expr, j + 1)
+        slots.push({ e: s.expr === null ? null : exprs[s.expr], j, size: s.size })
       }
-      groups = exprs.map((e) => [e, count / exprs.length])
     } else {
-      groups = [[null, count]]
+      for (const e of exprs.length ? exprs : [null]) for (let j = 0; j < per; j++) slots.push({ e, j })
     }
     let k = 0
-    for (const [e, n] of groups) {
-      for (let j = 0; j < n; j++) {
-        const m = baseModules(outfit)
-        m.content = filled(pose, char)
-        m.expression = filled(e, char)
-        // 男性模块：基础描述 + 男性动作 + 男性表情 + 旧版男性模板 + 附加文本；未启用男性时一律为空
-        m.male = maleOn ? maleModule(maleBase, [...malePoses, ...maleExprs, ...maleTs], it.male_extra ?? '', settings, char) : ['', '']
-        m.camera = filled(camera, char)
-        m.extra = [fillPlaceholders(it.extra_positive ?? '', char), fillPlaceholders(it.extra_negative ?? '', char)]
-        // 新模块只在有内容时写入，旧任务的计划与快照结构保持不变
-        if (interaction[0] || interaction[1]) m.interaction = interaction
-        if (scene) m.scene = filled(scene, char)
-        if (second) {
-          m.character2 = pair(char2)
-          m.outfit2 = pair(outfit2)
-          m.content2 = filled(pose2, char2)
-          m.expression2 = filled(expr2, char2)
-        }
-        const meta: UnitMeta = {
-          task: taskName,
-          character: charName,
-          story: story?.name ?? '',
-          genre: story?.genre ?? '',
-          section: '动作',
-          item: label,
-          item_no: pi + 1,
-          outfit: outfit?.name ?? '',
-          expression: e?.name ?? '',
-          expression_n: j + 1,
-          expression_of: n,
-          camera: camera?.name ?? '',
-          male: maleOn,
-          male_templates: maleOn ? [...malePoses, ...maleExprs, ...maleTs].map((t) => t.name) : [],
-          n: k + 1,
-          of: count,
-        }
-        if (scene) meta.scene = scene.name
-        if (position) meta.position = position.name
-        if (sub) meta.subposition = sub.name
-        if (acts.length) meta.acts = acts.map((a) => a.name)
-        if (second) {
-          meta.character2 = char2!.name
-          if (outfit2) meta.outfit2 = outfit2.name
-          if (pose2) meta.action2 = pose2.name
-          if (expr2) meta.expression2 = expr2.name
-        }
-        add('pose', pi, label, k, m, meta, second)
-        k++
+    for (const { e, j, size } of slots) {
+      const n = per
+      const m = baseModules(outfit)
+      m.content = filled(pose, char)
+      m.expression = filled(e, char)
+      // 男性模块：基础描述 + 男性动作 + 男性表情 + 旧版男性模板 + 附加文本；未启用男性时一律为空
+      m.male = maleOn ? maleModule(maleBase, [...malePoses, ...maleExprs, ...maleTs], it.male_extra ?? '', settings, char) : ['', '']
+      m.camera = filled(camera, char)
+      m.extra = [fillPlaceholders(it.extra_positive ?? '', char), fillPlaceholders(it.extra_negative ?? '', char)]
+      // 新模块只在有内容时写入，旧任务的计划与快照结构保持不变
+      if (interaction[0] || interaction[1]) m.interaction = interaction
+      if (scene) m.scene = filled(scene, char)
+      if (second) {
+        m.character2 = pair(char2)
+        m.outfit2 = pair(outfit2)
+        m.content2 = filled(pose2, char2)
+        m.expression2 = filled(expr2, char2)
       }
+      const meta: UnitMeta = {
+        task: taskName,
+        character: charName,
+        story: story?.name ?? '',
+        genre: story?.genre ?? '',
+        section: '动作',
+        item: label,
+        item_no: pi + 1,
+        outfit: outfit?.name ?? '',
+        expression: e?.name ?? '',
+        expression_n: j + 1,
+        expression_of: n,
+        camera: camera?.name ?? '',
+        male: maleOn,
+        male_templates: maleOn ? [...malePoses, ...maleExprs, ...maleTs].map((t) => t.name) : [],
+        n: k + 1,
+        of: count,
+      }
+      if (scene) meta.scene = scene.name
+      if (position) meta.position = position.name
+      if (sub) meta.subposition = sub.name
+      if (acts.length) meta.acts = acts.map((a) => a.name)
+      if (second) {
+        meta.character2 = char2!.name
+        if (outfit2) meta.outfit2 = outfit2.name
+        if (pose2) meta.action2 = pose2.name
+        if (expr2) meta.expression2 = expr2.name
+      }
+      if (size) {
+        meta.size = size.label
+        meta.width = size.width
+        meta.height = size.height
+      }
+      add('pose', pi, label, k, m, meta, second, size)
+      k++
     }
   })
 

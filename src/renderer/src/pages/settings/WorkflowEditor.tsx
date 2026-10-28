@@ -53,6 +53,7 @@ const GROUPS: [Suggestion['group'], string][] = [
   ['seed', 'Seed'],
   ['lora', 'LoRA Loader'],
   ['output', '输出'],
+  ['size', '生成尺寸'],
 ]
 
 function SuggestDialog({ open, onOpenChange, analysis, onApply }: { open: boolean; onOpenChange: (o: boolean) => void; analysis: WorkflowAnalysis | null; onApply: (e: MappingEntry[]) => void }) {

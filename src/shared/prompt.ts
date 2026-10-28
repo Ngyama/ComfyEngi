@@ -106,16 +106,34 @@ export function normalizedOrder(order: string[] | null | undefined): string[] {
   return out
 }
 
-type ComposeSettings = Pick<Settings, 'compose_order' | 'pos_separator' | 'neg_separator' | 'trim_modules'>
+/**
+ * 顶层模块之间的拼接：空模块跳过；连接符以逗号开头时（例如 ",\n\n"），去掉前一个模块末尾已有的逗号，
+ * 避免出现 ",," 。模块内容的其余部分（标签、权重、动态语法、换行）原样保留。
+ */
+export function joinModules(parts: (string | null | undefined)[], sep: string, trim = true): string {
+  const texts: string[] = []
+  for (const p of parts) {
+    if (p == null || !strip(p)) continue
+    texts.push(trim ? strip(p) : p)
+  }
+  const commaLead = sep.replace(/^[ \t]+/, '').startsWith(',')
+  return texts.map((t, i) => (commaLead && i < texts.length - 1 ? t.replace(/,[ \t]*$/, '') : t)).join(sep)
+}
 
-/** modules: {模块: [正面, 负面]}；only: 只拼接这些模块（用于多 Prompt 节点）。返回 [正面, 负面] */
+export type ComposeSettings = Pick<Settings, 'compose_order' | 'pos_separator' | 'neg_separator' | 'trim_modules'> & Partial<Pick<Settings, 'pos_module_separator'>>
+
+/**
+ * modules: {模块: [正面, 负面]}；only: 只拼接这些模块（用于多 Prompt 节点）。返回 [正面, 负面]
+ * 正面：顶层模块之间用 pos_module_separator（默认空一行），模块内部各部分在生成模块时已用 pos_separator 拼接；
+ * 负面：保持原有方式，模块之间用 neg_separator。
+ */
 export function compose(modules: Modules, settings: ComposeSettings, only?: string[]): [string, string] {
   let order = normalizedOrder(settings.compose_order)
   if (only && only.length) order = order.filter((m) => only.includes(m))
   const trim = settings.trim_modules ?? true
-  const posSep = unescapeSeparator(settings.pos_separator ?? ', ')
+  const moduleSep = unescapeSeparator(settings.pos_module_separator ?? settings.pos_separator ?? ', ')
   const negSep = unescapeSeparator(settings.neg_separator ?? ', ')
-  const pos = joinParts(order.map((m) => (modules[m] ?? ['', ''])[0]), posSep, trim)
+  const pos = joinModules(order.map((m) => (modules[m] ?? ['', ''])[0]), moduleSep, trim)
   const neg = joinParts(order.map((m) => (modules[m] ?? ['', ''])[1]), negSep, trim)
   return [pos, neg]
 }

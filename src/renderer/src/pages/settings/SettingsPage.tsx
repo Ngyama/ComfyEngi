@@ -13,7 +13,7 @@ import { useAsync } from '@/lib/hooks'
 import { reloadLib, templatesOf, useLib, useNav } from '@/lib/stores'
 import { cn } from '@/lib/utils'
 import { renderPrefix } from '@shared/mapping'
-import { defaultItemCount } from '@shared/planner'
+import { defaultItemCount, defaultSizes } from '@shared/planner'
 import { compose, MODULE_LABELS, normalizedOrder } from '@shared/prompt'
 import type { Settings } from '@shared/types'
 import type { UpdateCheck } from '@shared/update'
@@ -152,7 +152,11 @@ function DefaultsSection({ s }: { s: Settings }) {
             options={[...(s.default_workflow_id ? [] : [['', '（未设置）'] as [string, string]]), ...wfs.map((w): [string, string] => [String(w.id), w.name])]}
           />,
         )}
-        {row('新动作默认张数', '添加动作时的生成张数', <NumberStepper value={defaultItemCount(s)} min={1} max={999} onChange={(v) => void setSetting('default_item_count', v)} />)}
+        {row(
+          '新动作默认张数',
+          '添加动作时放在竖图，以 5 张为单位；之后可在动作详情中按尺寸调整',
+          <NumberStepper value={defaultSizes(defaultItemCount(s)).portrait!} min={5} max={995} step={5} onChange={(v) => void setSetting('default_item_count', v)} />,
+        )}
       </Card>
       <Card title="新任务默认输出" description="ComfyUI 先按文件名前缀保存到它自己的 output 目录，完成后本软件把最终图片复制到任务的输出目录（不覆盖同名文件，ComfyUI 原文件保留）。新建任务时把这里的值写入任务设置。">
         <FieldLabel>输出目录</FieldLabel>
@@ -263,6 +267,7 @@ function ModuleChip({ id }: { id: string }) {
 function ComposeSection({ s }: { s: Settings }) {
   const order = normalizedOrder(s.compose_order)
   const [pos, setPos] = useState(s.pos_separator)
+  const [posModule, setPosModule] = useState(s.pos_module_separator)
   const [neg, setNeg] = useState(s.neg_separator)
   const sample = Object.fromEntries(order.map((m) => [m, [`〔${MODULE_LABELS[m]}〕`, ''] as [string, string]]))
   return (
@@ -277,10 +282,17 @@ function ComposeSection({ s }: { s: Settings }) {
           </div>
         </SortableArea>
       </Card>
-      <Card title="连接符" description={'原样插入模块之间，可写 \\n 表示换行，例如 ", "、",\\n" 或 "\\nBREAK\\n"。'}>
-        <div className="grid grid-cols-2 gap-3">
+      <Card
+        title="连接符"
+        description={'原样插入，可写 \\n 表示换行。正面：顶层模块之间默认空一行（",\\n\\n"，前一个模块末尾已有逗号时不会重复）；模块内部（例如主体位、子体位、行为之间）使用「模块内部」连接符。负面保持原有方式。'}
+      >
+        <div className="grid grid-cols-3 gap-3">
           <div>
-            <FieldLabel>正面</FieldLabel>
+            <FieldLabel>正面 · 模块之间</FieldLabel>
+            <TextInput value={posModule} onChange={setPosModule} onBlur={() => void setSetting('pos_module_separator', posModule)} mono />
+          </div>
+          <div>
+            <FieldLabel>正面 · 模块内部</FieldLabel>
             <TextInput value={pos} onChange={setPos} onBlur={() => void setSetting('pos_separator', pos)} mono />
           </div>
           <div>
@@ -294,7 +306,7 @@ function ComposeSection({ s }: { s: Settings }) {
         </label>
         <div className="mt-4">
           <FieldLabel>示例</FieldLabel>
-          <pre className="rounded-xl bg-inset p-3 font-mono text-[12px] whitespace-pre-wrap">{compose(sample, { ...s, pos_separator: pos })[0]}</pre>
+          <pre className="rounded-xl bg-inset p-3 font-mono text-[12px] whitespace-pre-wrap">{compose(sample, { ...s, pos_separator: pos, pos_module_separator: posModule })[0]}</pre>
         </div>
       </Card>
     </div>

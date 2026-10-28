@@ -124,7 +124,7 @@ describe('写入与提交（Test.json）', () => {
     expect(g['4'].inputs.populated_text).toBe(u.negative)
     // 采样器 #46 的 positive ← #43 CLIP Text Encode ← #47 正则 ← #45 拼接 ← #3
     expect(evalText(g, g['43'].inputs.text)).toBe(u.positive.replace(/^,|,$/g, '').replace(/^,/, ''))
-    expect(evalText(g, g['43'].inputs.text)).toContain('masterpiece, best quality, 1girl, char_a')
+    expect(evalText(g, g['43'].inputs.text)).toContain('masterpiece, best quality,\n\n1girl, char_a')
     expect(evalText(g, g['44'].inputs.text)).toBe(u.negative)
     // 预览中的值就是提交的值；入队后快照一致
     expect(u.inputs!.find((x) => x.source === 'positive')!.value).toBe(u.positive)
@@ -142,7 +142,9 @@ describe('写入与提交（Test.json）', () => {
     for (const id of Object.keys(WF)) if (!touched.has(id)) expect(g[id]).toEqual(WF[id])
     // 采样器设置、模型连接不变
     for (const id of ['46', '103', '107']) expect(g[id]).toEqual(WF[id])
-    expect(touched).toEqual(new Set(['3', '4', '32', '121', '5']))
+    // 自动识别同时映射了生成宽高（#1、#12）；这里的动作没有尺寸配置（旧动作），保持工作流默认尺寸
+    expect(touched).toEqual(new Set(['3', '4', '32', '121', '5', '1', '12']))
+    expect([g['1'], g['12']]).toEqual([WF['1'], WF['12']])
   })
 
   it('多 LoRA Loader：追加角色 LoRA、替换 / 停用 / 调整任务 LoRA，未交给任务控制的固定 LoRA 保持不变', () => {
