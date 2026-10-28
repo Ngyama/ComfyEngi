@@ -12,19 +12,50 @@ import type { ExtractedPrompt } from './prompt-source'
 import { tokenizePrompt, type PromptToken, type TagDictionary } from './tags'
 import type { TemplateKind } from './types'
 
+/** 图片中的一个文本元数据字段（只有摘要；原文通过 mining.meta 按需读取） */
+export interface MetaFieldInfo {
+  key: string
+  /** 存放位置：tEXt / zTXt / iTXt / EXIF UserComment … */
+  via: string
+  /** 字符数 */
+  size: number
+}
+
 /** 扫描得到的一张图片（id 为完整路径） */
 export interface ScannedImage extends ExtractedPrompt {
   id: string
   name: string
   folder: string
   size: number
+  /** 按文件内容识别的格式；无法读取时为 null */
+  format: 'png' | 'jpeg' | 'webp' | null
+  fields: MetaFieldInfo[]
+}
+
+/** 扫描范围统计 */
+export interface ScanFound {
+  /** 找到的支持格式图片数 */
+  images: number
+  byExt: Record<string, number>
+  /** 找到但不支持读取的图片（按扩展名） */
+  unsupported: Record<string, number>
+  folders: number
 }
 
 export interface ScanResult {
   images: ScannedImage[]
   cancelled: boolean
-  /** 扫描文件夹时的问题（例如无法读取的子目录、超出数量上限） */
+  /** 扫描文件夹时的问题（例如无法读取的子目录、超出数量上限、没有找到图片） */
   errors: string[]
+  found: ScanFound
+}
+
+/** 原始元数据（用于诊断）：每个字段的文本可能被截断显示，复制时读取完整原文 */
+export interface RawMeta {
+  format: 'png' | 'jpeg' | 'webp' | null
+  fields: { key: string; via: string; size: number; json: boolean; truncated: boolean; text: string }[]
+  warnings: string[]
+  error?: string
 }
 
 export interface DictionaryInfo {

@@ -1,7 +1,7 @@
 // Renderer ↔ 主进程 的 IPC 契约。Preload 只暴露这里列出的方法，主进程逐个校验参数。
 
 import type { UpdateCheck } from './update'
-import type { DictionaryInfo, MiningImage, MiningParams, MiningResult, MiningSaveItem, MiningSaveOutcome, ScanResult } from './mining'
+import type { DictionaryInfo, MiningImage, MiningParams, MiningResult, MiningSaveItem, MiningSaveOutcome, RawMeta, ScanResult } from './mining'
 import type {
   ApiWorkflow,
   LoraResource,
@@ -125,6 +125,10 @@ export interface Api {
   /** 已扫描图片的缩略图（只允许本次会话读取过的文件） */
   'mining.image'(path: string, width: number): string | null
   'mining.showInFolder'(path: string): void
+  /** 已读取图片的原始文本元数据（诊断用；超长字段截断显示） */
+  'mining.meta'(path: string): RawMeta
+  /** 把某个字段的完整原文复制到剪贴板，返回字符数 */
+  'mining.copyMeta'(path: string, index: number): number
   'mining.analyze'(images: MiningImage[], params: Partial<MiningParams>): MiningResult
   'mining.dictInfo'(): DictionaryInfo | null
   'mining.dictImport'(): DictionaryInfo | null
@@ -149,7 +153,7 @@ export const API_METHODS: ApiMethod[] = [
   'runner.status', 'runner.precheck', 'runner.start', 'runner.pause', 'runner.stop', 'runner.interrupt', 'runner.logs',
   'history.list', 'history.image', 'history.openImage', 'history.showInFolder',
   'comfy.test', 'app.info', 'app.openDataDir', 'app.backupNow', 'app.chooseOutputDir', 'app.checkUpdate', 'app.openReleasePage',
-  'mining.addFiles', 'mining.addFolder', 'mining.cancelScan', 'mining.image', 'mining.showInFolder', 'mining.analyze', 'mining.dictInfo', 'mining.dictImport', 'mining.dictRemove', 'mining.save',
+  'mining.addFiles', 'mining.addFolder', 'mining.cancelScan', 'mining.image', 'mining.showInFolder', 'mining.meta', 'mining.copyMeta', 'mining.analyze', 'mining.dictInfo', 'mining.dictImport', 'mining.dictRemove', 'mining.save',
 ]
 
 /** Renderer 侧看到的 API：每个方法都是异步的 */

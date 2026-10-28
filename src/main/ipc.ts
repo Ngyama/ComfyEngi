@@ -1,10 +1,10 @@
 import { LoraManager, pathKey } from './lora-manager'
 // IPC 处理：只响应白名单方法，并对每个参数做类型校验；Renderer 无法直接访问文件系统或数据库。
 
-import { existsSync, rmSync } from 'node:fs'
+import { existsSync, readFileSync, rmSync, statSync } from 'node:fs'
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { dirname, extname, join } from 'node:path'
-import { BrowserWindow, dialog, ipcMain, nativeImage, shell, app } from 'electron'
+import { BrowserWindow, clipboard, dialog, ipcMain, nativeImage, shell, app } from 'electron'
 import { API_METHODS, INVOKE_CHANNEL, RUNNER_EVENT_CHANNEL, type Api, type ApiMethod } from '@shared/api'
 import { checkAgainstObjectInfo, ComfyError, loadApiWorkflow, mappingValues, validateMapping } from '@shared/mapping'
 import { normalizeTaskData } from '@shared/planner'
@@ -14,7 +14,7 @@ import { checkForUpdate } from './update'
 import { INSTALL_DIR_ERROR, insideInstallDir } from './install-dir'
 import { RELEASES_PAGE } from '@shared/update'
 import { enqueueTask, finalWorkflow, planForTask } from './plan'
-import { dictionaryInfo, dictionaryPath, importDictionary, MiningScanner, saveMined } from './mining'
+import { dictionaryInfo, dictionaryPath, importDictionary, MiningScanner, rawField, rawMeta, saveMined } from './mining'
 import { analyzeInWorker } from './mining-run'
 import { MINING_LIMITS, MINING_SAVE_KINDS } from '@shared/mining'
 import type { Runner } from './runner'
@@ -434,12 +434,12 @@ export function registerIpc(ctx: IpcContext) {
       void shell.openExternal(u)
     },
     'mining.addFiles': async () => {
-      const r = await dialog.showOpenDialog(ctx.window()!, { title: '选择保留生成参数的 PNG 图片（只读取，不会修改图片）', filters: [{ name: 'PNG', extensions: ['png'] }], properties: ['openFile', 'multiSelections'] })
+      const r = await dialog.showOpenDialog(ctx.window()!, { title: '选择保留生成参数的图片（只读取，不会修改图片）', filters: [{ name: '图片（PNG / JPEG / WebP）', extensions: ['png', 'jpg', 'jpeg', 'webp'] }], properties: ['openFile', 'multiSelections'] })
       if (r.canceled || !r.filePaths.length) return null
       return scanner.scan(r.filePaths, [], false, progress)
     },
     'mining.addFolder': async (recursive) => {
-      const r = await dialog.showOpenDialog(ctx.window()!, { title: '选择包含 PNG 图片的文件夹（只读取，不会修改图片）', properties: ['openDirectory'] })
+      const r = await dialog.showOpenDialog(ctx.window()!, { title: '选择包含生成图片的文件夹（只读取，不会修改图片）', properties: ['openDirectory'] })
       if (r.canceled || !r.filePaths[0]) return null
       return scanner.scan([], [r.filePaths[0]], !!recursive, progress)
     },
@@ -448,7 +448,13 @@ export function registerIpc(ctx: IpcContext) {
       const p = str(path)
       if (!scanner.allowed.has(p)) throw new BadArg('只能预览已读取的图片')
       const img = nativeImage.createFromPath(p)
-      if (img.isEmpty()) return null
+      if (img.isEmpty()) {
+        // nativeImage 不支持 WebP：小文件直接交给页面显示
+        const st = statSync(p)
+        if (st.size > 25 * 1024 * 1024) return null
+        const head = readFileSync(p)
+        return head.toString('latin1', 8, 12) === 'WEBP' ? `data:image/webp;base64,${head.toString('base64')}` : null
+      }
       const width = Math.max(64, Math.min(2048, int(size)))
       const out = img.getSize().width > width ? img.resize({ width, quality: 'good' }) : img
       return `data:image/jpeg;base64,${out.toJPEG(85).toString('base64')}`
@@ -457,6 +463,18 @@ export function registerIpc(ctx: IpcContext) {
       const p = str(path)
       if (!scanner.allowed.has(p)) throw new BadArg('只能打开已读取的图片')
       shell.showItemInFolder(p)
+    },
+    'mining.meta': (path) => {
+      const p = str(path)
+      if (!scanner.allowed.has(p)) throw new BadArg('只能查看已读取的图片')
+      return rawMeta(p)
+    },
+    'mining.copyMeta': (path, index) => {
+      const p = str(path)
+      if (!scanner.allowed.has(p)) throw new BadArg('只能查看已读取的图片')
+      const text = rawField(p, int(index, 'index'))
+      clipboard.writeText(text)
+      return text.length
     },
     'mining.analyze': (images, params) => {
       if (!Array.isArray(images)) throw new BadArg('images 必须是数组')

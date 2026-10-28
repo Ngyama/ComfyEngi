@@ -1,6 +1,7 @@
 // 历史 Prompt 提取端到端测试：在真实窗口中添加一个 PNG 文件夹（含子文件夹、无元数据、损坏、需确认的图片），
 // 验证读取进度与统计、自动分析、找回预设组合、全局公共标签、来源与变化标签、编辑后批量保存为素材、重复跳过、
-// 参数重新分析、词典导入，以及原图片完全不变。
+// 参数重新分析、词典导入；无法自动识别的图片：失败原因分组、原始元数据查看与复制、手动指定来源并应用到同结构图片；
+// 以及原图片完全不变。
 //
 // 用法：npx electron-vite build && node --experimental-strip-types --no-warnings scripts/e2e-mining.mjs [--shots <目录>]
 
@@ -10,6 +11,7 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { _electron as electron } from 'playwright-core'
 import { comfyGraph, COWGIRL, dataset, MISSIONARY, withText } from '../test/mining-fixtures.ts'
+import { A1111, apiCustomComposer, makeJpeg, tiff, userComment } from '../test/meta-fixtures.ts'
 
 const root = resolve(import.meta.dirname, '..')
 const argOf = (k) => (process.argv.includes(k) ? process.argv[process.argv.indexOf(k) + 1] : null)
@@ -218,6 +220,55 @@ try {
   await win.waitForTimeout(1500)
   await win.locator('[data-testid=tab-tags]').click()
   check('有词典时可筛选词典外标签', (await win.getByText(/不在词典中 \d+/).count()) === 1)
+
+  // 无法自动识别的图片：查看原始元数据，手动指定来源并应用到同结构的其他图片
+  const customDir = join(dataDir, 'custom')
+  mkdirSync(customDir)
+  const subjects = ['silver hair, 1girl, maid', 'black hair, 1girl, nurse', 'blonde hair, 1girl, idol']
+  for (const [i, t] of subjects.entries()) writeFileSync(join(customDir, `composer_${i}.png`), withText(Buffer.from(await canvasPng(i * 40), 'base64'), { prompt: JSON.stringify(apiCustomComposer(t, i === 2 ? 100 : 0)) }))
+  writeFileSync(join(customDir, 'webui.jpg'), makeJpeg(tiff([], [[0x9286, 7, userComment(A1111)]])))
+  const customBefore = snapshot(customDir)
+  const okBefore = await stat('ok')
+  await stubOpen([customDir])
+  await win.locator('[data-testid=add-folder]').first().click()
+  await win.waitForTimeout(1500)
+  check('新增文件夹：JPEG 的 WebUI 参数直接读取', (await stat('ok')) === okBefore + 1 && (await win.locator('[data-testid=mining-image]').filter({ hasText: 'webui.jpg' }).innerText()).includes('masterpiece, best quality, 1girl,'))
+  check('统计「读到元数据」', (await stat('meta')) === 23, String(await stat('meta')))
+  await win.locator('[data-testid=toggle-reasons]').click()
+  const reasons = await win.locator('[data-testid=fail-reason]').allInnerTexts()
+  check('失败原因分组：自定义节点 3 张', reasons.some((r) => r.includes('PromptComposer') && r.includes('3 张')), reasons.join(' / '))
+  await shot('m11-fail-reasons')
+  await win.locator('[data-testid=mining-image]').filter({ hasText: 'composer_0.png' }).locator('button').last().click()
+  await imgDlg.waitFor()
+  check('图片详情显示失败原因', (await imgDlg.locator('[data-testid=img-error]').innerText()).includes('无法识别的节点 #50（PromptComposer）'))
+  await imgDlg.locator('[data-testid=goto-raw]').click()
+  await imgDlg.locator('[data-testid=raw-field]').first().waitFor()
+  const rawText = await imgDlg.locator('[data-testid=raw-text]').first().innerText()
+  check('原始元数据：prompt 字段格式化显示', (await imgDlg.locator('[data-testid=raw-field]').first().innerText()).includes('prompt') && rawText.includes('"class_type": "PromptComposer"'), rawText.slice(0, 80))
+  await imgDlg.locator('[data-testid=raw-copy]').first().click()
+  await win.waitForTimeout(300)
+  const clip = await app.evaluate(({ clipboard }) => clipboard.readText())
+  check('复制原文 = PNG 中保存的原始文本', clip === JSON.stringify(apiCustomComposer(subjects[0])))
+  await shot('m12-raw')
+  await imgDlg.locator('[data-testid=img-tab-sources]').click()
+  const src = imgDlg.locator('[data-testid=img-source]').filter({ hasText: 'prompt_text' })
+  check('Prompt 来源列出自定义节点的文本（连到正向）', (await src.getAttribute('data-role')) === 'positive' && (await src.innerText()).includes(subjects[0]))
+  await src.locator('[data-testid=use-source]').click()
+  const box = await imgDlg.locator('[data-testid=apply-rule-box]').innerText()
+  check('同结构的其他 2 张可应用（节点编号不同的也能匹配）', box.includes('另有 2 张'), box)
+  await shot('m13-sources')
+  await imgDlg.locator('[data-testid=apply-rule]').click()
+  await imgDlg.locator('[data-testid=img-tab-prompt]').click()
+  check('手动指定后的 Prompt', (await imgDlg.locator('textarea').first().inputValue()) === subjects[0])
+  await closeDialogs()
+  const manualRows = await win.locator('[data-testid=mining-image][data-manual]').allInnerTexts()
+  check('3 张图片使用手动指定的来源', manualRows.length === 3 && subjects.every((t) => manualRows.some((r) => r.includes(t))), manualRows.join(' / '))
+  check('需确认的图片可以一键纳入分析', (await win.locator('[data-testid=check-banner]').count()) === 1)
+  await win.locator('[data-testid=include-check]').click()
+  await win.locator('[data-testid=analyze]').click()
+  await win.waitForTimeout(1500)
+  check('手动指定的图片与需确认的图片进入组合分析', (await win.locator('[data-testid=mining-summary]').innerText()).includes('分析 23 张'), await win.locator('[data-testid=mining-summary]').innerText())
+  check('新增文件夹中的图片没有被修改', JSON.stringify(snapshot(customDir)) === JSON.stringify(customBefore))
 
   // 素材库入口
   await nav('素材库')

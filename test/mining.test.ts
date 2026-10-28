@@ -52,7 +52,9 @@ describe('PNG 元数据读取', () => {
     expect(res.none.status).toBe('error')
     expect(res.none.error).toMatch(/没有找到生成参数/)
     expect(res.fake.error).toMatch(/不是 PNG/)
-    expect(res.cut.error).toMatch(/截断|不完整/)
+    // 文件被截断时，截断之前的元数据仍然读取，并给出提示
+    expect(res.cut.positive).toBe('1girl')
+    expect(res.cut.notes.join()).toMatch(/截断|不完整/)
     expect(res.bad.error).toMatch(/损坏/)
     expect(res.huge.error).toMatch(/截断|过大/)
   })

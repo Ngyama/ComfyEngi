@@ -4,24 +4,31 @@
 import { existsSync, mkdirSync, readFileSync, statSync } from 'node:fs'
 import { readdir, stat } from 'node:fs/promises'
 import { basename, dirname, extname, join } from 'node:path'
-import { MINING_LIMITS, MINING_SAVE_KINDS, type DictionaryInfo, type MiningSaveItem, type MiningSaveOutcome, type ScannedImage, type ScanResult } from '@shared/mining'
-import { extractPrompt } from '@shared/prompt-source'
+import { MINING_LIMITS, MINING_SAVE_KINDS, type DictionaryInfo, type MiningSaveItem, type MiningSaveOutcome, type RawMeta, type ScannedImage, type ScanFound, type ScanResult } from '@shared/mining'
+import { extractPrompt, parseJsonLoose } from '@shared/prompt-source'
 import { parseDictionary, promptSignature } from '@shared/tags'
 import { TEMPLATE_KINDS } from '@shared/types'
 import { atomic } from './file-library'
-import { readPngText } from './png-meta'
+import { fieldMap, readImageMeta } from './png-meta'
 import type { Store } from './store'
 
 /** 单个 PNG 文件的最大大小（超过时不读取） */
 export const MAX_PNG_BYTES = 512 * 1024 * 1024
 export const MAX_DICT_BYTES = 128 * 1024 * 1024
 
-const isPng = (p: string) => extname(p).toLowerCase() === '.png'
+/** 可以读取生成参数的图片格式（按内容识别，扩展名只用于筛选文件） */
+export const IMAGE_EXTS = ['.png', '.jpg', '.jpeg', '.webp']
+/** 不支持读取、但会在扫描结果中计数提示的图片格式 */
+const OTHER_IMAGE_EXTS = ['.avif', '.gif', '.bmp', '.tif', '.tiff', '.heic', '.jxl']
+const isImage = (p: string) => IMAGE_EXTS.includes(extname(p).toLowerCase())
 
-/** 列出文件夹中的 PNG（可递归；跳过符号链接与隐藏目录）；超过上限时停止并报告 */
-export async function listPngs(dir: string, recursive: boolean, errors: string[], limit = MINING_LIMITS.maxImages, isCancelled = () => false): Promise<string[]> {
+export const newFound = (): ScanFound => ({ images: 0, byExt: {}, unsupported: {}, folders: 0 })
+
+/** 列出文件夹中支持的图片（可递归；跳过符号链接与隐藏目录）；超过上限时停止并报告 */
+export async function listPngs(dir: string, recursive: boolean, errors: string[], limit = MINING_LIMITS.maxImages, isCancelled = () => false, found = newFound()): Promise<string[]> {
   const out: string[] = []
   const walk = async (d: string) => {
+    found.folders++
     if (isCancelled() || out.length > limit) return
     let entries
     try {
@@ -34,14 +41,18 @@ export async function listPngs(dir: string, recursive: boolean, errors: string[]
     for (const e of entries) {
       if (e.isSymbolicLink()) continue
       const p = join(d, e.name)
-      if (e.isFile() && isPng(e.name)) out.push(p)
+      const ext = extname(e.name).toLowerCase()
+      if (e.isFile() && isImage(e.name)) {
+        out.push(p)
+        found.byExt[ext] = (found.byExt[ext] ?? 0) + 1
+      } else if (e.isFile() && OTHER_IMAGE_EXTS.includes(ext)) found.unsupported[ext] = (found.unsupported[ext] ?? 0) + 1
       else if (recursive && e.isDirectory() && !e.name.startsWith('.')) await walk(p)
       if (out.length > limit) return
     }
   }
   await walk(dir)
   if (out.length > limit) {
-    errors.push(`PNG 数量超过 ${limit} 张，只读取前 ${limit} 张`)
+    errors.push(`图片数量超过 ${limit} 张，只读取前 ${limit} 张`)
     out.length = limit
   }
   return out
@@ -49,18 +60,58 @@ export async function listPngs(dir: string, recursive: boolean, errors: string[]
 
 /** 读取一张图片的 Prompt：任何异常都转为该图片的错误，不影响整批 */
 export async function scanImage(path: string): Promise<ScannedImage> {
-  const base = { id: path, name: basename(path), folder: dirname(path), size: 0 }
+  const base: Pick<ScannedImage, 'id' | 'name' | 'folder' | 'size' | 'format' | 'fields'> = { id: path, name: basename(path), folder: dirname(path), size: 0, format: null, fields: [] }
   try {
     const st = await stat(path)
     base.size = st.size
     if (!st.isFile()) throw new Error('不是文件')
     if (st.size > MAX_PNG_BYTES) throw new Error('文件过大')
-    if (!isPng(path)) throw new Error('只支持 PNG 图片')
-    const chunks = await readPngText(path)
-    return { ...base, ...extractPrompt(chunks) }
+    if (!isImage(path)) throw new Error('只支持 PNG / JPEG / WebP 图片')
+    const meta = readImageMeta(path)
+    base.format = meta.format
+    base.fields = meta.fields.map((f) => ({ key: f.key, via: f.via, size: f.text.length }))
+    const r = extractPrompt(fieldMap(meta.fields))
+    return { ...base, ...r, notes: [...meta.warnings, ...r.notes] }
   } catch (e) {
-    return { ...base, status: 'error', positive: '', negative: '', source: null, notes: [], error: (e as Error).message || String(e) }
+    return { ...base, status: 'error', positive: '', negative: '', source: null, notes: [], candidates: [], error: (e as Error).message || String(e) }
   }
+}
+
+/** 原始元数据查看：每个字段最多显示 maxShow 个字符；JSON 在不太大时格式化 */
+export const RAW_LIMITS = { maxShow: 400 * 1024, maxPretty: 8 * 1024 * 1024 }
+
+export function rawMeta(path: string): RawMeta {
+  try {
+    const meta = readImageMeta(path)
+    return {
+      format: meta.format,
+      warnings: meta.warnings,
+      fields: meta.fields.map((f) => {
+        let text = f.text
+        let json = false
+        if (/^\s*[[{]/.test(text) && text.length <= RAW_LIMITS.maxPretty) {
+          try {
+            // 节点连线 ["4", 0] 保持在一行，便于阅读
+            text = JSON.stringify(parseJsonLoose(text), null, 2).replace(/\[\s+("(?:[^"\\]|\\.)*"|-?\d+),\s+(-?\d+)\s+\]/g, '[$1, $2]')
+            json = true
+          } catch {
+            // 不是有效 JSON：原样显示
+          }
+        }
+        const truncated = text.length > RAW_LIMITS.maxShow
+        return { key: f.key, via: f.via, size: f.text.length, json, truncated, text: truncated ? text.slice(0, RAW_LIMITS.maxShow) : text }
+      }),
+    }
+  } catch (e) {
+    return { format: null, warnings: [], fields: [], error: (e as Error).message || String(e) }
+  }
+}
+
+/** 某个字段的完整原文（用于复制） */
+export function rawField(path: string, index: number): string {
+  const f = readImageMeta(path).fields[index]
+  if (!f) throw new Error('字段不存在')
+  return f.text
 }
 
 /** 一次扫描任务：可取消；只记录本次读取过的路径（缩略图只允许读取这些文件） */
@@ -80,19 +131,22 @@ export class MiningScanner {
     this.cancelled = false
     const job = ++this.job
     const errors: string[] = []
+    const found = newFound()
     try {
-      const paths = files.filter(isPng)
-      if (files.length > paths.length) errors.push(`已跳过 ${files.length - paths.length} 个非 PNG 文件`)
-      for (const f of folders) paths.push(...(await listPngs(f, recursive, errors, MINING_LIMITS.maxImages, () => this.cancelled)))
+      const paths = files.filter(isImage)
+      for (const p of paths) found.byExt[extname(p).toLowerCase()] = (found.byExt[extname(p).toLowerCase()] ?? 0) + 1
+      if (files.length > paths.length) errors.push(`已跳过 ${files.length - paths.length} 个不支持的文件（支持 PNG / JPEG / WebP）`)
+      for (const f of folders) paths.push(...(await listPngs(f, recursive, errors, MINING_LIMITS.maxImages, () => this.cancelled, found)))
       const unique = [...new Set(paths)]
       if (unique.length > MINING_LIMITS.maxImages) {
         errors.push(`一次最多读取 ${MINING_LIMITS.maxImages} 张图片，已忽略其余 ${unique.length - MINING_LIMITS.maxImages} 张`)
         unique.length = MINING_LIMITS.maxImages
       }
+      found.images = unique.length
       const images: ScannedImage[] = []
       let last = 0
       for (let i = 0; i < unique.length; i++) {
-        if (this.cancelled || job !== this.job) return { images, cancelled: true, errors }
+        if (this.cancelled || job !== this.job) return { images, cancelled: true, errors, found }
         images.push(await scanImage(unique[i]))
         this.allowed.add(unique[i])
         const now = Date.now()
@@ -101,8 +155,12 @@ export class MiningScanner {
           onProgress(i + 1, unique.length, basename(unique[i]))
         }
       }
-      if (!unique.length) onProgress(0, 0, '')
-      return { images, cancelled: false, errors }
+      if (!unique.length) {
+        onProgress(0, 0, '')
+        const other = Object.entries(found.unsupported).map(([e, n]) => `${e} ${n} 个`).join('、')
+        if (folders.length) errors.push(`没有找到 PNG / JPEG / WebP 图片（扫描了 ${found.folders} 个文件夹${recursive ? '，包含子文件夹' : '，未包含子文件夹'}）${other ? `；另有不支持的图片：${other}` : ''}`)
+      } else if (Object.keys(found.unsupported).length) errors.push(`已跳过不支持读取的图片：${Object.entries(found.unsupported).map(([e, n]) => `${e} ${n} 个`).join('、')}`)
+      return { images, cancelled: false, errors, found }
     } finally {
       this.running = false
     }

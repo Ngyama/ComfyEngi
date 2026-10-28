@@ -105,16 +105,29 @@ ComfyUI 只能保存到它自己的 output 目录，因此分两步：
 
 ## 历史 Prompt 提取
 
-入口：侧边栏「Prompt 提取」，或素材库右上角「从历史图片提取」。读取过去生成的 PNG，找出反复出现的标签组合，选择后保存为素材。全部在本地完成：不联网、不调用任何 AI 服务、不需要 ComfyUI 运行。图片只以只读方式读取元数据，不修改、移动或重新编码。
+入口：侧边栏「Prompt 提取」，或素材库右上角「从历史图片提取」。读取过去生成的图片（PNG，以及 JPEG / WebP 的 EXIF 参数），找出反复出现的标签组合，选择后保存为素材。全部在本地完成：不联网、不调用任何 AI 服务、不需要 ComfyUI 运行。图片只以只读方式读取元数据，不修改、移动或重新编码。
 
-1. 读取：「添加图片」（可多选 PNG）或「添加文件夹」（可勾选包含子文件夹），可多次添加。左侧显示总数 / 成功 / 需确认 / 失败和读取进度，扫描可取消；单张失败只显示原因（不是 PNG、文件截断、没有生成参数、不支持的自定义节点等），不影响整批。点击图片查看预览、原始正向 Prompt 与负向 Prompt。
-2. 正向 Prompt 的识别：ComfyUI 的 `prompt` 元数据是整个 API 工作流，程序从采样器（KSampler 等）的 positive 输入沿连线向上追踪到文本编码节点，再解析文本（字面值、上游字符串节点、文本拼接节点、ConditioningCombine / ControlNet 等）。不会把所有 CLIPTextEncode 的文本拼在一起，未连接到采样器的文本节点不读取。两阶段工作流中各采样器 Prompt 相同时正常读取，不同时采用第一阶段（latent 来自空 Latent 的采样器）。同一文本节点同时连到正负两侧、或无法确定主采样器时标记为「需要确认」，默认不参与分析（可手动勾选）。没有 `prompt` 时退回读取界面格式的 `workflow`（只支持原生节点），WebUI 的 `parameters` 也可读取。
-3. 分析：读取完成后自动分析，可调整参数后「重新分析」。参数：最小共同出现（默认 3 张）、全局公共阈值（默认 90%）、最少标签数（默认 2）、关联强度（默认 2×）、最多显示（默认 60）。
-4. 结果分三页：
+1. 读取：「添加图片」（可多选）或「添加文件夹」（可勾选包含子文件夹），可多次添加。左侧显示发现图片 / 读到元数据 / 提取成功 / 需确认 / 失败 / 参与分析的数量和读取进度，扫描可取消；单张失败只显示原因，不影响整批。失败原因按类别汇总（点击可筛选出对应图片）。文件夹中没有可读取的图片时，会说明扫描了几个文件夹、是否包含子文件夹，以及找到了哪些不支持的格式。
+2. 正向 Prompt 的识别（详见下方「支持的元数据格式」）：ComfyUI 的 `prompt` 元数据是整个 API 工作流，程序从采样器的 positive 输入沿连线向上追踪到文本编码节点，再解析文本。不会把所有 CLIPTextEncode 的文本拼在一起，未连接到采样器的文本节点不读取；多个采样阶段的 Prompt 不拼接。同一文本节点同时连到正负两侧、无法确定主采样器、或经过 Prompt 风格节点（模板内容未保存）时标记为「需要确认」，默认不参与分析，左侧会提示并可「全部纳入」或逐张检查。
+3. 检查与补救：点击图片打开详情，有三页——
+   - 正向 Prompt：提取结果、负向 Prompt、提取说明或失败原因；可「手动修改」或（失败时）「手动输入 Prompt」，「恢复自动提取」撤销。
+   - Prompt 来源：元数据中所有可能是 Prompt 的文本（工作流中每个文本节点 / 编码节点、parameters 的正向部分、NovelAI 的 prompt、其他文本字段），标出它连到正向、负向还是未连接采样器。选择一项即作为这张图片的正向 Prompt。之后可「应用到 N 张」使用相同工作流的其他图片：工作流节点按「节点类型 + 输入名 + 周围连接结构」生成的指纹匹配，不依赖节点编号（同一工作流重新编号后仍能匹配，结构不同的工作流不会匹配）；只有同一结构中存在多个完全相同的节点时，才在结构完全一致的前提下用节点编号区分。直接保存在字段中的文本（如 parameters、Comment）按字段名应用。手动修改过文本的图片不会被批量覆盖。
+   - 原始元数据：图片实际包含的全部文本字段（字段名、存放位置如 tEXt / iTXt / EXIF UserComment、字符数），可展开查看，JSON 自动格式化；单个字段只显示前 40 万字符，「复制原文」复制完整内容。提取失败时也能查看。
+4. 分析：读取完成后自动分析（手动指定的图片也参与），可调整参数后「重新分析」。参数：最小共同出现（默认 3 张）、全局公共阈值（默认 90%）、最少标签数（默认 2）、关联强度（默认 2×）、最多显示（默认 60）。
+5. 结果分三页：
    - 重复组合：每个组合显示完整标签、覆盖图片数与比例、关联度、来源图片、与已有素材是否重复。可修改名称（默认「提取组合 001」这类临时编号，不推断含义）、直接编辑 Prompt、删除其中的标签。展开后可查看变化标签（只在部分图片中出现的标签，只描述共现差异，不代表互斥）、扩展组合（在部分图片中还一起出现的其他标签），以及弱关联标签；可以把选中的标签加入组合或另存为新组合。
    - 全局公共：出现比例达到阈值的标签及频率，可作为组合加入保存列表。
    - 全部标签：每个标签的出现次数、比例、不同写法（权重）与来源，默认显示未被任何组合覆盖的标签（只出现一次的也会显示），可勾选若干标签创建组合。
-5. 保存：勾选组合（可全选），选择保存类别（单人动作、主体位、子体位（需选所属主体位）、行为、表情、场景、镜头、全局 Prompt），点击「保存所选」。通过现有的素材保存接口写入 Vault 的 Markdown 文件（新 ID、名称、positive，负面为空），遵守现有的文件命名与冲突规则。标签集合（忽略顺序与权重）与已有素材或本批更早的组合相同时提示并跳过，不覆盖、不修改任何已有素材，也不影响任务、队列与运行记录。
+6. 保存：勾选组合（可全选），选择保存类别（单人动作、主体位、子体位（需选所属主体位）、行为、表情、场景、镜头、全局 Prompt），点击「保存所选」。通过现有的素材保存接口写入 Vault 的 Markdown 文件（新 ID、名称、positive，负面为空），遵守现有的文件命名与冲突规则。标签集合（忽略顺序与权重）与已有素材或本批更早的组合相同时提示并跳过，不覆盖、不修改任何已有素材，也不影响任务、队列与运行记录。
+
+支持的元数据格式（按文件内容识别，扩展名与内容不符时按实际格式读取并提示）：
+
+- PNG 文本块 tEXt / zTXt / iTXt（中文按 UTF-8）；JPEG 的 EXIF、注释与 XMP；WebP 的 EXIF / XMP。文件在中途截断时，之前已读到的元数据仍然有效。
+- ComfyUI `prompt`（API 工作流，优先）：原生 KSampler / KSamplerAdvanced / SamplerCustom、SamplerCustomAdvanced + CFGGuider / BasicGuider；CLIPTextEncode、SDXL（text_g / text_l）、Flux（clip_l / t5xxl，负向为 ConditioningZeroOut 时不误判）以及名称含 TextEncode 的自定义编码节点；ConditioningCombine / Concat / SetArea、FluxGuidance、ControlNet（按输出槽区分正负）；字符串常量、Text Multiline、文本拼接（StringConcatenate、WAS Text Concatenate、Join Strings 等，忽略 clean_whitespace 之类的选项）；Efficiency Nodes（Efficient Loader + KSampler (Efficient)）、Easy-Use / ttN 管道采样、rgthree Power Prompt、Impact Pack 通配符编码（采用保存的展开后文本）。Hires 第二阶段、FaceDetailer 等使用不同 Prompt 时采用第一阶段。Python 写出的 `NaN` / `Infinity` 也能读取。
+- ComfyUI `workflow`（界面格式，没有可用的 `prompt` 时）：原生节点、字符串常量节点、被绕过的节点（直通）、KJNodes Set / Get 节点；子图无法展开。ComfyUI 保存的 WebP（EXIF 中的 `prompt:` / `workflow:`）同样读取。
+- WebUI / Forge / reForge 的 `parameters`（PNG 文本块，或 JPEG / WebP 的 EXIF UserComment）：`Negative prompt:` 之前的全部行为正向，多行、BREAK、LoRA、权重原样保留。工作流有歧义而自定义保存节点另外写了 `parameters` 时，采用 `parameters`。
+- NovelAI（Comment 的 prompt / uc，或 Description；V4 的角色提示词单独列在来源中）、InvokeAI（invokeai_metadata、sd-metadata、Dream）、SwarmUI 与 Fooocus（JSON 格式的 parameters）、Easy Diffusion（纯文本 prompt 字段）。
+- 不能恢复的情况：动态 Prompt / 随机通配符 / LLM 生成 / 图像反推（WD14 Tagger 等）节点在运行时生成文本，PNG 中只有模板或设置，程序报告原因而不把模板当作结果；未保存展开结果的通配符同理。这类图片可在「Prompt 来源」中选择最接近的文本或手动输入。NovelAI 的隐写（alpha 通道）元数据、AVIF / GIF 等格式不读取。
 
 挖掘算法（确定性）：
 

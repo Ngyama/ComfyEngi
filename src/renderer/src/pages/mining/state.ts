@@ -5,7 +5,8 @@ import { create } from 'zustand'
 import { toast } from 'sonner'
 import { api, call } from '@/lib/api'
 import { reloadLib } from '@/lib/stores'
-import { DEFAULT_MINING, type Candidate, type DictionaryInfo, type MiningParams, type MiningResult, type MiningSaveOutcome, type ScannedImage, type ScanResult } from '@shared/mining'
+import { DEFAULT_MINING, type Candidate, type DictionaryInfo, type MiningParams, type MiningResult, type MiningSaveOutcome, type ScanFound, type ScannedImage, type ScanResult } from '@shared/mining'
+import { matchRule, type PromptCandidate, type SourceRule } from '@shared/prompt-source'
 import type { TemplateKind } from '@shared/types'
 
 export interface Draft {
@@ -18,8 +19,21 @@ export interface Draft {
   saved?: { id: number; kind: TemplateKind }
 }
 
+/** 手动指定的正向 Prompt（来自某个候选来源，或手动修改的文本） */
+export interface ManualPrompt {
+  positive: string
+  /** 来源说明；手动修改过文本时为 null */
+  label: string | null
+  rule?: SourceRule
+  /** 文本经过手动修改（批量应用规则时不会覆盖） */
+  edited?: boolean
+}
+
 interface MiningState {
   images: ScannedImage[]
+  manual: Record<string, ManualPrompt>
+  /** 最近一次扫描的范围统计 */
+  found: ScanFound | null
   /** 是否参与分析（「需要确认」的图片默认不参与） */
   include: Record<string, boolean>
   scanning: boolean
@@ -42,6 +56,8 @@ interface MiningState {
 
 export const useMining = create<MiningState>((set) => ({
   images: [],
+  manual: {},
+  found: null,
   include: {},
   scanning: false,
   progress: null,
@@ -69,8 +85,21 @@ api.onRunnerEvent((e) => {
 
 export const draftName = (n: number) => `提取组合 ${String(n).padStart(3, '0')}`
 
+/** 考虑手动指定后的状态与正向 Prompt */
+export function effective(im: ScannedImage, manual: Record<string, ManualPrompt>): { status: ScannedImage['status']; positive: string; manual?: ManualPrompt } {
+  const m = manual[im.id]
+  if (m && m.positive.trim()) return { status: 'ok', positive: m.positive, manual: m }
+  return { status: im.status, positive: im.positive }
+}
+
+/** 是否参与分析：「需要确认」的图片默认不参与，手动指定后默认参与 */
+export const isIncluded = (im: ScannedImage, s: Pick<MiningState, 'include' | 'manual'>) => {
+  const e = effective(im, s.manual)
+  return e.status !== 'error' && (s.include[im.id] ?? e.status === 'ok')
+}
+
 /** 参与分析的图片 */
-export const includedImages = (s: Pick<MiningState, 'images' | 'include'>) => s.images.filter((i) => i.status !== 'error' && (s.include[i.id] ?? i.status === 'ok'))
+export const includedImages = (s: Pick<MiningState, 'images' | 'include' | 'manual'>) => s.images.filter((i) => isIncluded(i, s))
 
 async function runScan(p: Promise<ScanResult | null>) {
   setS({ scanning: true, progress: null })
@@ -81,12 +110,17 @@ async function runScan(p: Promise<ScanResult | null>) {
   const byId = new Map(s.images.map((i) => [i.id, i]))
   for (const im of r.images) byId.set(im.id, im)
   const images = [...byId.values()].sort((a, b) => (a.id.toLowerCase() < b.id.toLowerCase() ? -1 : a.id.toLowerCase() > b.id.toLowerCase() ? 1 : 0))
-  setS({ images, scanErrors: r.errors, stale: true })
+  setS({ images, scanErrors: r.errors, found: r.found, stale: true })
   const n = (st: string) => r.images.filter((i) => i.status === st).length
-  const detail = `成功 ${n('ok')}${n('check') ? `，需确认 ${n('check')}` : ''}${n('error') ? `，失败 ${n('error')}` : ''}`
+  const meta = r.images.filter((i) => i.fields.length).length
+  const detail = `读到元数据 ${meta} 张，提取成功 ${n('ok')}${n('check') ? `，需确认 ${n('check')}` : ''}${n('error') ? `，失败 ${n('error')}` : ''}`
   if (r.cancelled) toast.info(`已取消扫描：读取了 ${r.images.length} 张（${detail}）`)
-  else toast.success(`读取 ${r.images.length} 张图片：${detail}`)
-  if (!r.cancelled && includedImages(get()).length) await analyze()
+  else if (!r.images.length) toast.warning('没有找到可读取的图片', { description: r.errors.join('\n') })
+  else if (!n('ok') && !n('check')) toast.error(`读取 ${r.images.length} 张图片，没有提取到正向 Prompt`, { description: `${detail}。点击图片可查看原始元数据和失败原因。` })
+  else toast.success(`读取 ${r.images.length} 张图片`, { description: detail })
+  if (r.cancelled) return
+  if (includedImages(get()).length) await analyze()
+  else if (n('check')) toast.info(`${n('check')} 张图片需要确认，默认不参与分析`, { description: '可以在左侧「需确认」中逐张检查，或点「全部纳入分析」。' })
 }
 
 export const addFiles = () => runScan(api['mining.addFiles']())
@@ -94,7 +128,63 @@ export const addFolder = () => runScan(api['mining.addFolder'](get().recursive))
 export const cancelScan = () => void api['mining.cancelScan']()
 
 export function clearAll() {
-  setS({ images: [], include: {}, result: null, drafts: [], nextNo: 1, stale: false, scanErrors: [], lastSave: null })
+  setS({ images: [], include: {}, manual: {}, found: null, result: null, drafts: [], nextNo: 1, stale: false, scanErrors: [], lastSave: null })
+}
+
+/** 把所有「需要确认」的图片纳入分析 */
+export function includeAllCheck() {
+  const s = get()
+  const include = { ...s.include }
+  for (const im of s.images) if (effective(im, s.manual).status === 'check') include[im.id] = true
+  setS({ include, stale: true })
+}
+
+/** 使用某个候选来源作为正向 Prompt */
+export function pickCandidate(id: string, c: PromptCandidate) {
+  const s = get()
+  setS({ manual: { ...s.manual, [id]: { positive: c.text, label: c.label, rule: c.rule } }, include: { ...s.include, [id]: true }, stale: true })
+}
+
+/** 手动修改正向 Prompt */
+export function setManualText(id: string, positive: string) {
+  const s = get()
+  setS({ manual: { ...s.manual, [id]: { positive, label: null, edited: true } }, include: { ...s.include, [id]: true }, stale: true })
+}
+
+export function clearManual(id: string) {
+  const s = get()
+  const manual = { ...s.manual }
+  delete manual[id]
+  const include = { ...s.include }
+  delete include[id]
+  setS({ manual, include, stale: true })
+}
+
+/** 可以应用某个来源规则的其他图片（跳过手动修改过文本的图片） */
+export function ruleTargets(rule: SourceRule, fromId: string, s: Pick<MiningState, 'images' | 'manual'> = get()): { im: ScannedImage; c: PromptCandidate }[] {
+  const out: { im: ScannedImage; c: PromptCandidate }[] = []
+  for (const im of s.images) {
+    if (im.id === fromId || s.manual[im.id]?.edited) continue
+    const c = matchRule(rule, im)
+    if (c && s.manual[im.id]?.positive !== c.text) out.push({ im, c })
+  }
+  return out
+}
+
+/** 把来源规则应用到相同结构 / 含相同字段的其他图片 */
+export function applyRule(rule: SourceRule, fromId: string): number {
+  const s = get()
+  const targets = ruleTargets(rule, fromId, s)
+  if (!targets.length) return 0
+  const manual = { ...s.manual }
+  const include = { ...s.include }
+  for (const { im, c } of targets) {
+    manual[im.id] = { positive: c.text, label: c.label, rule: c.rule }
+    include[im.id] = true
+  }
+  setS({ manual, include, stale: true })
+  toast.success(`已应用到 ${targets.length} 张图片`)
+  return targets.length
 }
 
 export function toggleInclude(id: string, on: boolean) {
@@ -108,7 +198,7 @@ export function setParams(p: Partial<MiningParams>) {
 let analyzeSeq = 0
 export async function analyze() {
   const s = get()
-  const imgs = includedImages(s).map((i) => ({ id: i.id, positive: i.positive }))
+  const imgs = includedImages(s).map((i) => ({ id: i.id, positive: effective(i, s.manual).positive }))
   if (!imgs.length) {
     toast.error('没有可分析的图片')
     return
