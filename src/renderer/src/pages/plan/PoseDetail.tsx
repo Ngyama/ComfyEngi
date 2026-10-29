@@ -33,7 +33,7 @@ function MultiChips({ list, value, onChange }: { list: Template[]; value: number
 }
 
 /** 详情中的一个字段：显示当前选择，点击打开选择器 */
-function PickField({ label, icon, names, placeholder, onOpen, onClear, disabled, hint, testId }: { label: string; icon?: ReactNode; names: string[]; placeholder: string; onOpen: () => void; onClear?: () => void; disabled?: boolean; hint?: ReactNode; testId?: string }) {
+export function PickField({ label, icon, names, placeholder, onOpen, onClear, disabled, hint, testId }: { label: string; icon?: ReactNode; names: string[]; placeholder: string; onOpen: () => void; onClear?: () => void; disabled?: boolean; hint?: ReactNode; testId?: string }) {
   return (
     <div className="grid grid-cols-[88px_1fr] items-start gap-2">
       <div className="flex items-center gap-1 pt-2 text-[12px] text-muted-foreground [&_svg]:size-3">
@@ -71,7 +71,7 @@ function PickField({ label, icon, names, placeholder, onOpen, onClear, disabled,
   )
 }
 
-function Section({ title, right, children, testId }: { title: string; right?: ReactNode; children: ReactNode; testId?: string }) {
+export function Section({ title, right, children, testId }: { title: string; right?: ReactNode; children: ReactNode; testId?: string }) {
   return (
     <section className="rounded-xl bg-card p-3.5 ring-1 ring-tint/[0.07]" data-testid={testId}>
       <div className="mb-3 flex items-center gap-2">
@@ -87,7 +87,7 @@ function Section({ title, right, children, testId }: { title: string; right?: Re
 const ASPECT: Record<SizeKey, string> = { portrait: 'h-6 w-4', landscape: 'h-4 w-6', square: 'size-5' }
 
 /** 三种尺寸各自的张数：每次加减 5 张，最小 0，不能直接输入 */
-function SizeCards({ item, onChange }: { item: TaskItem; onChange: (k: SizeKey, v: number) => void }) {
+export function SizeCards({ item, onChange }: { item: TaskItem; onChange: (k: SizeKey, v: number) => void }) {
   return (
     <div className="grid grid-cols-3 gap-2" data-testid="size-cards">
       {SIZE_PRESETS.map((p) => {
@@ -124,7 +124,7 @@ function SizeCards({ item, onChange }: { item: TaskItem; onChange: (k: SizeKey, 
 }
 
 /** 编辑当前选中的镜头（镜头素材不在素材库中显示，在任务中直接新建和修改） */
-function CameraEditor({ t }: { t: Template }) {
+export function CameraEditor({ t }: { t: Template }) {
   const { draft, patch } = useDraft<Template>(t, t.id, async (v) => {
     await call(api['templates.save']({ id: v.id, _revision: v._revision, name: v.name, positive: v.positive } as never))
     await reloadLib()

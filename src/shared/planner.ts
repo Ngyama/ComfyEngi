@@ -3,8 +3,11 @@
 // 主角色（character_id）与可选的第二角色（second_character_id）来自同一个角色库；第二角色按动作启用。
 // 多表情时按选择顺序依次生成，每个表情张数相同；不能整除时报错，由用户修改张数。
 
+import { drawPool, effectiveRule, fixedConflicts, isSoloCard, poolCandidates, poolsOf, unitRandom } from './cards'
 import { compose, fillPlaceholders, joinParts, unescapeSeparator } from './prompt'
 import type {
+  CardPick,
+  CardPoolKey,
   Character,
   Lora,
   Modules,
@@ -93,6 +96,11 @@ export function newInteractionItem(positionId: number, subpositionId: number | n
   return { ...newItem(null, outfitId), position_id: positionId, subposition_id: subpositionId, second_enabled: secondEnabled }
 }
 
+/** 动作卡条目：使用动作卡保存的默认组合规则（不需要再选择姿态、表情、互动） */
+export function newCardItem(cardId: number, outfitId: number | null = null): TaskItem {
+  return { ...newItem(null, outfitId), card_id: cardId }
+}
+
 export function randomSeed(): number {
   return Math.floor(Math.random() * 2 ** 31)
 }
@@ -119,7 +127,7 @@ export function defaultItemCount(s: Pick<Settings, 'default_item_count'> | null 
 /**
  * 新建任务的数据：套用设置页的默认值。只在新建时调用，已有任务和已入队快照不受影响。
  * 默认全局 Prompt 优先；未设置（或模板已删除）时沿用当前任务，再退回第一个全局 Prompt。
- * 角色、男性基础、工作流沿用当前任务（工作流未单独选择时即使用默认工作流）。
+ * 角色、工作流沿用当前任务（工作流未单独选择时即使用默认工作流）。
  */
 export function newTaskWithDefaults(
   s: Pick<Settings, 'default_global_id' | 'default_output_dir' | 'default_output_prefix'>,
@@ -129,7 +137,9 @@ export function newTaskWithDefaults(
   const cur = opts.inherit
   const def = s.default_global_id != null && opts.globalIds.includes(s.default_global_id) ? s.default_global_id : null
   d.global_id = def ?? cur?.global_id ?? opts.globalIds[0] ?? null
-  d.male_base_id = cur?.male_base_id ?? opts.maleBaseId ?? null
+  // 旧版男性基础描述不再作为新任务的配置项：只在调用方明确传入时设置，不从当前任务沿用（双人画面使用第二角色）
+  d.male_base_id = opts.maleBaseId ?? null
+  d.combo_seed = randomSeed()
   d.character_id = cur?.character_id ?? null
   d.workflow_id = cur?.workflow_id ?? null
   if (cur?.workflow_none) d.workflow_none = true
@@ -224,10 +234,13 @@ function maleModule(
 export interface ExpandResult {
   units: PlanUnit[]
   errors: string[]
+  /** 不阻止入队的提示（例如动作卡素材池中有素材已被删除、固定素材在同一互斥组） */
+  warnings: string[]
 }
 
 export function expandTask(data: TaskData, lib: PlanLibrary, settings: Settings, taskName = ''): ExpandResult {
   const errors: string[] = []
+  const warnings: string[] = []
   const units: PlanUnit[] = []
   const char = (data.character_id != null && lib.characters.get(data.character_id)) || null
   if (!char) errors.push('未选择角色（或该角色已被删除）')
@@ -378,7 +391,132 @@ export function expandTask(data: TaskData, lib: PlanLibrary, settings: Settings,
   }
   const defaultScene = tpl(data.scene_id)
   if (data.scene_id && !defaultScene) errors.push('所选默认场景已被删除')
+  const joinPairs = (parts: [string, string][]): [string, string] => [
+    joinParts(parts.map((x) => x[0]), unescapeSeparator(settings.pos_separator ?? ', '), trimAll),
+    joinParts(parts.map((x) => x[1]), unescapeSeparator(settings.neg_separator ?? ', '), trimAll),
+  ]
+  const comboSeed = toInt(data.combo_seed ?? data.seed_base)
+  const variants = [...lib.templates.values()].filter((t) => t.kind === 'subposition').sort((a, b) => (a.sort ?? 0) - (b.sort ?? 0) || a.id - b.id)
+  const onceWarn = (msg: string) => {
+    if (!warnings.includes(msg)) warnings.push(msg)
+  }
+
+  /**
+   * 动作卡：基础 Prompt + 结构变体 + 各池抽取结果。模块沿用已有的拼接位置：
+   * 局部姿态 → content / content2，表情 → expression / expression2，基础 + 变体 + 双人互动 → interaction，附加池 → extra。
+   * 单人卡不加入第二角色（及其服装、姿态、表情）和双人互动；双人卡在任务选择了第二角色时由第二角色出场
+   */
+  const expandCard = (it: TaskItem, pi: number) => {
+    let where = `第 ${pi + 1} 个动作`
+    const card = tpl(it.card_id)
+    if (!card || card.kind !== 'position') {
+      errors.push(`${where}：动作卡已被删除`)
+      return
+    }
+    const solo = isSoloCard(card)
+    where = `第 ${pi + 1} 个动作「${card.name}」`
+    const outfit = checkOutfit(it.outfit_id, where)
+    const camera = tpl(it.camera_id)
+    if (it.camera_id && !camera) errors.push(`${where}：所选镜头模板已被删除`)
+    const scene = it.scene_id ? tpl(it.scene_id) : defaultScene
+    if (it.scene_id && !scene) errors.push(`${where}：所选场景已被删除`)
+    const second = !solo && !!char2
+    const outfit2 = second ? checkOutfit(it.second_outfit_id, `${where}（第二角色）`, char2) : null
+    const exclude = new Set(it.card_exclude ?? [])
+    // 每个池：规则、固定素材、随机候选（只取仍存在的素材；固定素材被删除时报错，候选被删除时只提示）
+    const pools = poolsOf(solo).map(({ key, label }) => {
+      const rule = effectiveRule(card, it, key)
+      const fixed: Template[] = []
+      for (const id of rule.mode === 'off' ? [] : (rule.fixed ?? [])) {
+        const t = tpl(id)
+        if (!t) errors.push(`${where}：${label}中固定的素材已被删除`)
+        else if (key === 'variant' && t.parent_id !== card.id) errors.push(`${where}：固定的子体位「${t.name}」不属于动作卡「${card.name}」`)
+        else fixed.push(t)
+      }
+      const ids = rule.mode === 'random' ? poolCandidates(card, key, variants) : []
+      const candidates = ids.map((id) => tpl(id)).filter((t): t is Template => !!t)
+      if (candidates.length !== ids.length) onceWarn(`动作卡「${card.name}」的${label}中有素材已被删除，抽取时跳过`)
+      for (const c of fixedConflicts(fixed)) onceWarn(`${where}：${label}中${c}，请确认是否需要调整`)
+      return { key, rule, fixed, candidates: candidates.filter((t) => !exclude.has(t.id)) }
+    })
+    const sized = !!it.sizes
+    const count = sized ? sizeTotal(it.sizes) : toInt(it.count)
+    if (count <= 0) {
+      errors.push(sized ? `${where}：竖图、横图、方图的张数都为 0，请至少为一种尺寸设置张数` : `${where}：生成张数必须大于 0`)
+      return
+    }
+    const slots = sized ? sizeSchedule(it.sizes, 0).map((s) => s.size) : Array.from({ length: count }, () => undefined)
+    slots.forEach((size, k) => {
+      const rnd = unitRandom(comboSeed, pi, k)
+      const got = {} as Record<CardPoolKey, Template[]>
+      const picks: CardPick[] = []
+      for (const p of pools) {
+        const r = drawPool(p.rule, p.fixed, p.candidates, rnd)
+        got[p.key] = [...r.fixed, ...r.random]
+        for (const t of r.fixed) picks.push({ pool: p.key, id: t.id, name: t.name, random: false })
+        for (const t of r.random) picks.push({ pool: p.key, id: t.id, name: t.name, random: true })
+      }
+      const of = (key: CardPoolKey, who: Character | null) => (got[key] ?? []).map((t) => filled(t, who))
+      const m = baseModules(outfit)
+      m.content = joinPairs(of('pose', char))
+      m.expression = joinPairs(of('expr', char))
+      m.male = ['', '']
+      m.camera = filled(camera, char)
+      m.extra = joinPairs([...of('extra', char), [fillPlaceholders(it.extra_positive ?? '', char), fillPlaceholders(it.extra_negative ?? '', char)]])
+      const interaction = joinPairs([filled(card, char), ...of('variant', char), ...of('interaction', char)])
+      if (interaction[0] || interaction[1]) m.interaction = interaction
+      if (scene) m.scene = filled(scene, char)
+      if (!solo) {
+        if (second) {
+          m.character2 = pair(char2)
+          m.outfit2 = pair(outfit2)
+        }
+        m.content2 = joinPairs(of('pose2', char2))
+        m.expression2 = joinPairs(of('expr2', char2))
+      }
+      const names = (key: CardPoolKey) => (got[key] ?? []).map((t) => t.name)
+      const meta: UnitMeta = {
+        task: taskName,
+        character: charName,
+        story: story?.name ?? '',
+        genre: story?.genre ?? '',
+        section: '动作',
+        item: card.name,
+        item_no: pi + 1,
+        outfit: outfit?.name ?? '',
+        expression: names('expr').join(' + '),
+        camera: camera?.name ?? '',
+        male: false,
+        male_templates: [],
+        n: k + 1,
+        of: count,
+        card: card.name,
+        card_type: solo ? 'solo' : 'duo',
+        picks,
+        combo_seed: comboSeed,
+      }
+      if (names('variant').length) meta.variant = meta.subposition = names('variant').join(' + ')
+      if (scene) meta.scene = scene.name
+      if (names('pose').length) meta.states = names('pose')
+      if (second) {
+        meta.character2 = char2!.name
+        if (outfit2) meta.outfit2 = outfit2.name
+      }
+      if (!solo) {
+        if (names('pose2').length) meta.action2 = names('pose2').join(' + ')
+        if (names('expr2').length) meta.expression2 = names('expr2').join(' + ')
+      }
+      if (size) {
+        meta.size = size.label
+        meta.width = size.width
+        meta.height = size.height
+      }
+      add('pose', pi, card.name, k, m, meta, second, size)
+    })
+  }
+
   ;(data.items ?? []).forEach((it, pi) => {
+    if (it.card_id != null) return expandCard(it, pi)
     let where = `第 ${pi + 1} 个动作`
     const stateIds = itemStateIds(it)
     const states = stateIds.map((x) => tpl(x)).filter((t): t is Template => !!t)
@@ -521,5 +659,5 @@ export function expandTask(data: TaskData, lib: PlanLibrary, settings: Settings,
     u.meta.index = i + 1
     u.meta.seed = u.seed
   })
-  return { units, errors }
+  return { units, errors, warnings }
 }

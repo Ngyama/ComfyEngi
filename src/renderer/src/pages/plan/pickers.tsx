@@ -1,6 +1,6 @@
 // 主界面使用的快捷选择器：全局 Prompt、角色（主角色 / 第二角色）、剧情、动作、工作流。
 
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useState, type ReactNode } from 'react'
 import { BookOpen, Check, Dices, Plus, Settings2, Shirt, Sparkles, Users, Workflow as WorkflowIcon } from 'lucide-react'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
@@ -236,35 +236,33 @@ export function StoryPicker({
 }
 
 // ---------------------------------------------------------------- 动作
-/** 新增的动作：单人（主角色的一个或多个状态，合并为一个动作），或双人主体位（可带子体位） */
-export type NewAction = { state_ids: number[] } | { position_id: number; subposition_id: number | null }
+/** 新增的动作：动作卡（每张卡一个动作，使用卡片保存的默认组合规则），或旧方式的状态（多个状态合并为一个动作） */
+export type NewAction = { card_id: number } | { state_ids: number[] }
 
 export function PosePicker({ open, onOpenChange, onAdd, insertAfter }: { open: boolean; onOpenChange: (o: boolean) => void; onAdd: (items: NewAction[]) => void; insertAfter: number | null }) {
   const lib = useLib((s) => s.lib)
   const go = useNav((s) => s.go)
-  const poses = templatesOf(lib, 'state')
-  const positions = templatesOf(lib, 'position')
+  const states = templatesOf(lib, 'state')
+  const cards = templatesOf(lib, 'position')
   const subs = templatesOf(lib, 'subposition')
-  const [mode, setMode] = useState<'single' | 'duo'>('single')
+  const [mode, setMode] = useState<'card' | 'state'>('card')
   const [q, setQ] = useState('')
   const [picked, setPicked] = useState<string[]>([])
   useEffect(() => {
     if (open) {
       setQ('')
       setPicked([])
+      setMode('card')
     }
   }, [open])
-  const list = poses.filter((p) => matchesName(p, q))
-  const posList = positions.filter((p) => matchesName(p, q) || subs.some((s) => s.parent_id === p.id && matchesName(s, q)))
+  const stateList = states.filter((p) => matchesName(p, q))
+  const cardList = cards.filter((p) => matchesName(p, q) || subs.some((s) => s.parent_id === p.id && matchesName(s, q)))
   const toggle = (key: string) => setPicked((p) => (p.includes(key) ? p.filter((x) => x !== key) : [...p, key]))
-  // 点选的多个状态合并为同一个动作（同一张图片中一起使用，不会拆成多个动作）；每个主体位各为一个动作
+  // 每张动作卡一个动作（按点选顺序）；旧方式点选的多个状态合并为同一个动作
   const toActions = (keys: string[]): NewAction[] => {
-    const states = keys.filter((k) => k.startsWith('p:')).map((k) => Number(k.split(':')[1]))
-    const duo = keys.filter((k) => k.startsWith('d:')).map((key): NewAction => {
-      const [, a, b] = key.split(':')
-      return { position_id: Number(a), subposition_id: b ? Number(b) : null }
-    })
-    return [...(states.length ? [{ state_ids: states }] : []), ...duo]
+    const st = keys.filter((k) => k.startsWith('s:')).map((k) => Number(k.split(':')[1]))
+    const cs = keys.filter((k) => k.startsWith('c:')).map((k): NewAction => ({ card_id: Number(k.split(':')[1]) }))
+    return [...cs, ...(st.length ? [{ state_ids: st }] : [])]
   }
   const commit = (keys: string[]) => {
     if (!keys.length) return
@@ -276,6 +274,24 @@ export function PosePicker({ open, onOpenChange, onAdd, insertAfter }: { open: b
     const n = picked.indexOf(k)
     return n >= 0 ? <span className="absolute top-2 right-2 grid size-5 place-items-center rounded-full bg-primary text-[11px] font-semibold text-primary-foreground">{n + 1}</span> : null
   }
+  const tile = (key: string, t: (typeof cards)[number], extra?: ReactNode) => (
+    <button
+      key={key}
+      type="button"
+      data-testid={key.startsWith('c:') ? 'card-tile' : 'state-tile'}
+      onClick={() => toggle(key)}
+      onDoubleClick={() => commit([key])}
+      className={cn('relative rounded-xl bg-card p-3 text-left ring-1 ring-tint/[0.08] transition hover:bg-accent', picked.includes(key) && 'bg-primary/10 ring-primary/50')}
+    >
+      <Badge k={key} />
+      <div className="flex items-center gap-1.5 pr-6">
+        <span className="truncate text-[13px] font-medium">{t.name || '（未命名）'}</span>
+        <PriorityBadge value={t.priority} />
+      </div>
+      {extra}
+      <div className="mt-1 line-clamp-2 font-mono text-[11px] leading-snug text-muted-foreground">{t.positive || '—'}</div>
+    </button>
+  )
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent
@@ -287,15 +303,16 @@ export function PosePicker({ open, onOpenChange, onAdd, insertAfter }: { open: b
         <DialogHeader>
           <DialogTitle>添加动作</DialogTitle>
           <DialogDescription>
-            单人：点选的多个状态合并为一个动作，同一张图片中一起使用（按点选顺序拼接）；双人：每个主体位添加为一个动作。{insertAfter === null ? '添加到序列末尾' : `插入到第 ${insertAfter + 1} 个动作之后`}。双击可直接添加单个。
+            {mode === 'card' ? '每张动作卡添加为一个动作，直接使用卡片保存的默认组合规则（局部姿态、表情、互动按规则自动抽取）。' : '旧方式：点选的多个状态合并为一个动作，同一张图片中一起使用。'}
+            {insertAfter === null ? '添加到序列末尾' : `插入到第 ${insertAfter + 1} 个动作之后`}。双击可直接添加单个。
           </DialogDescription>
         </DialogHeader>
         <div className="flex items-center gap-3">
           <div className="flex rounded-xl bg-tint/[0.04] p-1">
             {(
               [
-                ['single', '单人（状态）'],
-                ['duo', '双人动作'],
+                ['card', '动作卡'],
+                ['state', '状态（旧方式）'],
               ] as const
             ).map(([k, l]) => (
               <button key={k} type="button" onClick={() => setMode(k)} data-active={mode === k || undefined} className="h-7 rounded-lg px-3 text-[12.5px] text-muted-foreground data-[active]:bg-tint/[0.09] data-[active]:text-foreground">
@@ -306,65 +323,32 @@ export function PosePicker({ open, onOpenChange, onAdd, insertAfter }: { open: b
           <SearchBox value={q} onChange={setQ} placeholder="搜索名称…" autoFocus className="flex-1" />
         </div>
         <div className="grid min-h-0 flex-1 auto-rows-min grid-cols-3 gap-2 overflow-y-auto pb-1">
-          {mode === 'single' &&
-            list.map((p) => (
-              <button
-                key={p.id}
-                type="button"
-                onClick={() => toggle(`p:${p.id}`)}
-                onDoubleClick={() => commit([`p:${p.id}`])}
-                className={cn('relative rounded-xl bg-card p-3 text-left ring-1 ring-tint/[0.08] transition hover:bg-accent', picked.includes(`p:${p.id}`) && 'bg-primary/10 ring-primary/50')}
-              >
-                <Badge k={`p:${p.id}`} />
-                <div className="flex items-center gap-1.5 pr-6">
-                  <span className="truncate text-[13px] font-medium">{p.name || '（未命名）'}</span>
-                  <PriorityBadge value={p.priority} />
-                </div>
-                <div className="mt-1 line-clamp-2 font-mono text-[11px] leading-snug text-muted-foreground">{p.positive || '—'}</div>
-              </button>
-            ))}
-          {mode === 'duo' &&
-            posList.map((p) => {
-              const kids = subs.filter((s) => s.parent_id === p.id)
-              return (
-                <div key={p.id} className={cn('relative rounded-xl bg-card p-3 ring-1 ring-tint/[0.08]', picked.includes(`d:${p.id}`) && 'bg-primary/10 ring-primary/50')}>
-                  <Badge k={`d:${p.id}`} />
-                  <button type="button" className="block w-full text-left" onClick={() => toggle(`d:${p.id}`)} onDoubleClick={() => commit([`d:${p.id}`])}>
-                    <div className="flex items-center gap-1.5 pr-6">
-                      <span className="truncate text-[13px] font-medium">{p.name || '（未命名）'}</span>
-                      <PriorityBadge value={p.priority} />
-                    </div>
-                    <div className="mt-1 line-clamp-2 font-mono text-[11px] leading-snug text-muted-foreground">{p.positive || '—'}</div>
-                  </button>
-                  {kids.length > 0 && (
-                    <div className="mt-2 flex flex-wrap gap-1">
-                      {kids.map((c) => {
-                        const key = `d:${p.id}:${c.id}`
-                        const n = picked.indexOf(key)
-                        return (
-                          <Chip key={c.id} active={n >= 0} order={n >= 0 ? n + 1 : undefined} onClick={() => toggle(key)} className="h-6 text-[11px]" title={c.positive}>
-                            {c.name}
-                          </Chip>
-                        )
-                      })}
-                    </div>
-                  )}
-                </div>
+          {mode === 'card' &&
+            cardList.map((c) => {
+              const n = subs.filter((s) => s.parent_id === c.id).length
+              return tile(
+                `c:${c.id}`,
+                c,
+                <div className="mt-0.5 text-[10.5px] text-muted-foreground">
+                  <span className={c.card?.solo ? 'text-emerald-700' : 'text-sky-700'}>{c.card?.solo ? '单人' : '双人'}</span>
+                  {n ? ` · ${n} 个子体位` : ''}
+                </div>,
               )
             })}
-          {((mode === 'single' && !list.length) || (mode === 'duo' && !posList.length)) && (
+          {mode === 'state' && stateList.map((t) => tile(`s:${t.id}`, t))}
+          {((mode === 'card' && !cardList.length) || (mode === 'state' && !stateList.length)) && (
             <div className="col-span-3">
               <EmptyState
                 icon={<Sparkles />}
-                title={q ? '没有匹配的素材' : mode === 'single' ? '还没有状态素材' : '还没有双人主体位'}
-                description={mode === 'single' ? '状态在「素材库 → 状态」中管理。' : '主体位、子体位在「素材库 → 双人动作」中管理；行为（从状态中选择）在动作详情中叠加。'}
+                title={q ? '没有匹配的素材' : mode === 'card' ? '还没有动作卡' : '还没有状态素材'}
+                description={mode === 'card' ? '动作卡在「素材库 → 动作卡」中管理：基础 Prompt、子体位与素材池只需配置一次。' : '状态在「素材库 → 状态」中管理。'}
               />
             </div>
           )}
         </div>
         <DialogFooter className="sm:justify-between">
           <Button variant="ghost" onClick={() => (onOpenChange(false), go('library'))}>
-            管理动作素材
+            管理动作卡
           </Button>
           <Button disabled={!picked.length} onClick={() => commit(picked)}>
             <Plus /> 添加 {nNew || ''} 个动作

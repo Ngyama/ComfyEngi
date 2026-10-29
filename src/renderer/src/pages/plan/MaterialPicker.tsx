@@ -24,6 +24,7 @@ export function MaterialPicker({
   onChange,
   empty,
   testId,
+  bulk = false,
 }: {
   open: boolean
   onOpenChange: (o: boolean) => void
@@ -39,6 +40,8 @@ export function MaterialPicker({
   onChange: (ids: number[]) => void
   empty?: ReactNode
   testId?: string
+  /** 多选时提供批量添加 / 移除当前搜索结果（用于配置动作卡的素材池） */
+  bulk?: boolean
 }) {
   const [q, setQ] = useState('')
   const [draft, setDraft] = useState<number[]>(value)
@@ -101,6 +104,18 @@ export function MaterialPicker({
             <Button variant="ghost" size="sm" onClick={() => setDraft([])} disabled={!draft.length}>
               清空
             </Button>
+            {bulk && (
+              <>
+                <Button variant="ghost" size="sm" data-testid="picker-add-all" disabled={!shown.some((t) => !draft.includes(t.id))} onClick={() => setDraft((d) => [...d, ...shown.map((t) => t.id).filter((id) => !d.includes(id))])}>
+                  添加{q ? '搜索结果' : '全部'}（{shown.length}）
+                </Button>
+                {q && (
+                  <Button variant="ghost" size="sm" disabled={!shown.some((t) => draft.includes(t.id))} onClick={() => setDraft((d) => d.filter((id) => !shown.some((t) => t.id === id)))}>
+                    移除搜索结果
+                  </Button>
+                )}
+              </>
+            )}
             <div className="flex-1" />
             <Button variant="ghost" size="sm" onClick={() => onOpenChange(false)}>
               取消

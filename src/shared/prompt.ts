@@ -2,20 +2,20 @@
 
 import type { Character, Modules, Settings } from './types'
 
-// 默认顺序：全局 → 场景 → 镜头 → 主角色（外貌、服装、动作、表情）→ 双人互动 → 第二角色（外貌、服装、动作、表情）
+// 默认顺序：全局 → 场景 → 镜头 → 主角色（外貌、服装、局部姿态、表情）→ 动作卡（基础、子体位、双人互动）→ 第二角色（外貌、服装、局部姿态、表情）→ 附加
 export const MODULES: [string, string][] = [
   ['global', '全局（画质 / 画风）'],
   ['scene', '场景'],
   ['camera', '镜头'],
   ['character', '主角色'],
   ['outfit', '主角色服装'],
-  ['content', '主角色状态 / 剧情场景'],
+  ['content', '主角色状态 / 局部姿态 / 剧情场景'],
   ['expression', '主角色表情'],
-  ['interaction', '双人动作（主体位 / 子体位 / 行为）'],
+  ['interaction', '动作卡（基础 Prompt / 子体位 / 双人互动）'],
   ['male', '旧版男性描述'],
   ['character2', '第二角色'],
   ['outfit2', '第二角色服装'],
-  ['content2', '第二角色状态'],
+  ['content2', '第二角色状态 / 局部姿态'],
   ['expression2', '第二角色表情'],
   ['extra', '附加'],
 ]

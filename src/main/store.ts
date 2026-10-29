@@ -28,7 +28,7 @@ CREATE TABLE IF NOT EXISTS templates (
     id INTEGER PRIMARY KEY, kind TEXT NOT NULL, name TEXT NOT NULL DEFAULT '',
     positive TEXT NOT NULL DEFAULT '', negative TEXT NOT NULL DEFAULT '', category TEXT NOT NULL DEFAULT '',
     tags TEXT NOT NULL DEFAULT '', note TEXT NOT NULL DEFAULT '', sort INTEGER NOT NULL DEFAULT 0,
-    created_at REAL, updated_at REAL, target TEXT NOT NULL DEFAULT 'any', parent_id INTEGER, priority TEXT NOT NULL DEFAULT 'normal');
+    created_at REAL, updated_at REAL, target TEXT NOT NULL DEFAULT 'any', parent_id INTEGER, priority TEXT NOT NULL DEFAULT 'normal', card TEXT, exclusive TEXT NOT NULL DEFAULT '');
 CREATE INDEX IF NOT EXISTS idx_templates_kind ON templates(kind);
 CREATE TABLE IF NOT EXISTS characters (
     id INTEGER PRIMARY KEY, name TEXT NOT NULL DEFAULT '', tag TEXT NOT NULL DEFAULT '',
@@ -71,7 +71,7 @@ CREATE INDEX IF NOT EXISTS idx_units_status ON run_units(status);
  * 0 = 旧版 Python 程序创建的数据库；1 = Electron 版（表结构相同，仅登记版本）。
  * 将来需要改表结构时在 MIGRATIONS 中追加步骤；每次迁移前都会先自动备份。
  */
-export const SCHEMA_VERSION = 3
+export const SCHEMA_VERSION = 4
 const MIGRATIONS: Record<number, (db: DatabaseSync) => void> = {
   1: () => {
     /* v0 → v1：结构不变 */
@@ -88,10 +88,16 @@ const MIGRATIONS: Record<number, (db: DatabaseSync) => void> = {
     if (!cols.includes('priority')) db.exec("ALTER TABLE templates ADD COLUMN priority TEXT NOT NULL DEFAULT 'normal'")
     db.exec("UPDATE templates SET kind='state' WHERE kind IN ('pose','act')")
   },
+  // v3 → v4：动作卡（主体位的 card 配置：类型、素材池、抽取规则）与素材的互斥组（只新增列，已有数据不变）
+  4: (db) => {
+    const cols = (db.prepare('PRAGMA table_info(templates)').all() as { name: string }[]).map((c) => c.name)
+    if (!cols.includes('card')) db.exec('ALTER TABLE templates ADD COLUMN card TEXT')
+    if (!cols.includes('exclusive')) db.exec("ALTER TABLE templates ADD COLUMN exclusive TEXT NOT NULL DEFAULT ''")
+  },
 }
 
 export const TABLES = {
-  templates: { cols: ['kind', 'name', 'positive', 'negative', 'category', 'tags', 'note', 'sort', 'target', 'parent_id', 'priority'], json: [] as string[] },
+  templates: { cols: ['kind', 'name', 'positive', 'negative', 'category', 'tags', 'note', 'sort', 'target', 'parent_id', 'priority', 'card', 'exclusive'], json: ['card'] },
   characters: { cols: ['name', 'tag', 'positive', 'negative', 'loras', 'note', 'sort'], json: ['loras'] },
   outfits: { cols: ['character_id', 'name', 'positive', 'negative', 'note', 'sort'], json: [] as string[] },
   stories: { cols: ['genre', 'name', 'note', 'scenes', 'sort'], json: ['scenes'] },
@@ -302,11 +308,20 @@ export class Store {
           this.save('outfits', { ...rest, character_id: newId })
         }
       }
+      const remap = new Map<number, number>()
       for (const t of this.subpositionsOf(table, id)) {
-        const { id: _old, _revision: _rev, ...rest } = t
-        void _old
+        const { id: old, _revision: _rev, ...rest } = t
         void _rev
-        this.save('templates', { ...rest, parent_id: newId })
+        remap.set(old, this.save('templates', { ...rest, parent_id: newId }))
+      }
+      // 动作卡中限定或固定的子体位指向副本自己的子体位（其他素材池引用全局素材，保持不变）
+      const card = (rec as Partial<Template>).card
+      if (remap.size && card && (card.pools?.variant || card.rules?.variant?.fixed)) {
+        const m = (ids?: number[]) => ids?.map((x) => remap.get(x) ?? x)
+        const next = structuredClone(card)
+        if (next.pools?.variant) next.pools.variant = m(next.pools.variant)
+        if (next.rules?.variant?.fixed) next.rules.variant.fixed = m(next.rules.variant.fixed)
+        this.save('templates', { id: newId, card: next })
       }
       return newId
     })

@@ -31,19 +31,19 @@ import { api, call } from '@/lib/api'
 import { hueOf } from '@/lib/hooks'
 import { confirm, reloadLib, templatesOf, useLib, useNav, usePlan, useRunner } from '@/lib/stores'
 import { cn } from '@/lib/utils'
-import { defaultItemCount, defaultSizes, expandTask, itemStateIds, newInteractionItem, newItem, newTaskWithDefaults, setItemSizes, sizeCount } from '@shared/planner'
+import { defaultItemCount, defaultSizes, expandTask, itemStateIds, newCardItem, newItem, newTaskWithDefaults, setItemSizes, sizeCount } from '@shared/planner'
 import type { Plan } from '@shared/api'
 import { DEFAULT_SETTINGS, SIZE_PRESETS, type Library, type PlanUnit, type TaskData, type TaskItem } from '@shared/types'
 import { PlanPreviewDialog, TaskSettingsDialog } from './dialogs'
 import { LoraPanel } from './LoraPanel'
 import { CharacterPicker, GlobalPicker, PosePicker, StoryPicker, WorkflowMenu, type NewAction } from './pickers'
+import { CardItemDetail } from './CardDetail'
 import { PoseDetail } from './PoseDetail'
 
 /** 新建任务：套用设置 → 生成默认值；角色和工作流沿用当前任务 */
 function newTaskFor(lib: Library | null, inherit: TaskData | null | undefined): TaskData {
   return newTaskWithDefaults(lib?.settings ?? DEFAULT_SETTINGS, {
     globalIds: templatesOf(lib, 'global').map((t) => t.id),
-    maleBaseId: templatesOf(lib, 'male').find((t) => t.category === '基础')?.id ?? null,
     inherit,
   })
 }
@@ -219,8 +219,21 @@ function PoseCard({
   const sub = T(item.subposition_id ?? null)
   const acts = (item.act_ids ?? []).map((a) => T(a)?.name ?? '（已删除）')
   const scene = T(item.scene_id ?? null)
-  const label = item.position_id ? (position ? (sub ? `${position.name} · ${sub.name}` : position.name) : '（主体位已删除）') : states.length ? states.map((t) => t?.name ?? '（状态已删除）').join(' + ') : '（未选择状态）'
-  const missing = item.position_id ? !position : !states.length || states.some((t) => !t)
+  const card = item.card_id != null ? T(item.card_id) : undefined
+  const isCard = item.card_id != null
+  const tuned = isCard && (!!Object.keys(item.card_rules ?? {}).length || !!(item.card_exclude ?? []).length)
+  const label = isCard
+    ? (card?.name ?? '（动作卡已删除）')
+    : item.position_id
+      ? position
+        ? sub
+          ? `${position.name} · ${sub.name}`
+          : position.name
+        : '（主体位已删除）'
+      : states.length
+        ? states.map((t) => t?.name ?? '（状态已删除）').join(' + ')
+        : '（未选择状态）'
+  const missing = isCard ? !card : item.position_id ? !position : !states.length || states.some((t) => !t)
   const outfit = item.outfit_id ? lib?.outfits.find((o) => o.id === item.outfit_id) : undefined
   const exprs = item.expression_ids.map((e) => T(e)?.name ?? '（已删除）')
   const camera = T(item.camera_id)
@@ -249,7 +262,17 @@ function PoseCard({
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-2">
           <span data-testid="pose-name" className={cn('truncate text-[14px] font-medium', missing && 'text-destructive')}>{label}</span>
-          {item.position_id && states.length > 0 && <span className="shrink-0 truncate text-[11px] text-muted-foreground">+ {states.map((t) => t?.name ?? '（已删除）').join(' + ')}</span>}
+          {isCard && card && (
+            <span className={cn('shrink-0 rounded-md px-1.5 py-0.5 text-[10.5px]', card.card?.solo ? 'bg-emerald-500/10 text-emerald-700' : 'bg-sky-500/10 text-sky-700')} data-testid="card-badge">
+              {card.card?.solo ? '单人' : `双人${second ? ` + ${second}` : ''}`}
+            </span>
+          )}
+          {tuned && (
+            <span className="shrink-0 rounded-md bg-amber-500/12 px-1.5 py-0.5 text-[10.5px] text-amber-700" title="本任务修改了动作卡的默认组合规则">
+              已调整组合
+            </span>
+          )}
+          {!isCard && item.position_id && states.length > 0 && <span className="shrink-0 truncate text-[11px] text-muted-foreground">+ {states.map((t) => t?.name ?? '（已删除）').join(' + ')}</span>}
           {acts.length > 0 && (
             <span className="shrink-0 rounded-md bg-violet-500/10 px-1.5 py-0.5 text-[10.5px] text-violet-600" title="行为">
               {acts.join(' + ')}
@@ -282,9 +305,9 @@ function PoseCard({
             <Shirt className="size-3 shrink-0" />
             <span className="truncate">{outfit?.name ?? '未指定服装'}</span>
           </span>
-          <span className={cn('inline-flex min-w-0 items-center gap-1', !exprs.length && 'opacity-60')}>
+          <span className={cn('inline-flex min-w-0 items-center gap-1', !exprs.length && !isCard && 'opacity-60')}>
             <Smile className="size-3 shrink-0" />
-            <span className="truncate">{exprs.length ? exprs.join('、') : '无表情'}</span>
+            <span className="truncate">{isCard ? '姿态、表情、互动按动作卡规则抽取' : exprs.length ? exprs.join('、') : '无表情'}</span>
           </span>
         </div>
         {error && (
@@ -378,7 +401,7 @@ export default function PlanPage() {
     const at = selected !== null && selected < items.length ? selected + 1 : items.length
     const prev = at > 0 ? items[at - 1] : null
     // 服装默认继承上一个动作
-    // 双人互动在选择了第二角色时默认让第二角色出场；单人动作默认是单人图片
+    // 动作卡：单人卡生成单人图片，双人卡在任务选择了第二角色时由第二角色出场（不需要在动作中启用）
     // 新动作使用尺寸配置：默认张数放在竖图
     const sizes = defaultSizes(defaultItemCount(lib?.settings))
     update((x) =>
@@ -386,7 +409,7 @@ export default function PlanPage() {
         at,
         0,
         ...ids.map((a) => {
-          const it = 'state_ids' in a ? { ...newItem(null, prev?.outfit_id ?? null), state_ids: a.state_ids } : newInteractionItem(a.position_id, a.subposition_id, prev?.outfit_id ?? null, !!x.second_character_id)
+          const it = 'card_id' in a ? newCardItem(a.card_id, prev?.outfit_id ?? null) : { ...newItem(null, prev?.outfit_id ?? null), state_ids: a.state_ids }
           setItemSizes(it, sizes)
           return it
         }),
@@ -677,7 +700,11 @@ export default function PlanPage() {
       {/* 姿态详情：宽屏时并排，窄屏时浮在序列上方 */}
       {detailOpen && (
         <div className="absolute top-3 right-3 bottom-[76px] z-30 w-[520px] max-w-[calc(100%-24px)] overflow-hidden rounded-2xl bg-popover shadow-2xl ring-1 shadow-tint/15 ring-tint/[0.128] 2xl:static 2xl:my-3 2xl:mr-3 2xl:w-[520px] 2xl:shrink-0 2xl:bg-inset/60 2xl:shadow-none">
-          <PoseDetail index={selected!} firstUnit={firstUnitOf(selected!)} onClose={() => select(null)} />
+          {items[selected!].card_id != null ? (
+            <CardItemDetail key={selected} index={selected!} units={units.filter((u) => u.section === 'pose' && u.item_index === selected)} onClose={() => select(null)} />
+          ) : (
+            <PoseDetail index={selected!} firstUnit={firstUnitOf(selected!)} onClose={() => select(null)} />
+          )}
         </div>
       )}
 

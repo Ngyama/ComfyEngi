@@ -5,7 +5,7 @@
  * - state：状态（由旧版「单人动作」pose 与「行为」act 合并而来）；在任务中为主角色、第二角色分别多选，
  *   双人动作中的「行为」也从状态中选择
  * - pose / act：旧类型，打开工作区时迁移为 state（只改 kind，原值记录在 legacy_kind）；未迁移的文件按状态显示
- * - position / subposition：双人动作的主体位 / 子体位（parent_id 指向主体位）
+ * - position / subposition：动作卡（旧版双人主体位）/ 它的子体位（结构变体，parent_id 指向动作卡）。动作卡配置保存在 card 字段
  * - scene：场景（环境、地点、背景）
  * - male / camera：兼容素材（旧版男性描述、镜头），不在素材库中显示；镜头在套图任务中选择和新建
  */
@@ -16,7 +16,7 @@ export const TEMPLATE_KINDS: Record<TemplateKind, string> = {
   scene: '场景',
   state: '状态',
   pose: '状态',
-  position: '主体位',
+  position: '动作卡',
   subposition: '子体位',
   act: '状态',
   expression: '表情',
@@ -69,6 +69,65 @@ export interface Template extends Timestamps {
   priority?: Priority
   /** 迁移为 state 之前的类型（pose / act），只作记录 */
   legacy_kind?: string
+  /** 动作卡配置（只用于主体位 position：主体位即动作卡，子体位即它的结构变体）。没有时为双人动作卡、默认抽取规则、素材池为空 */
+  card?: ActionCard | null
+  /** 互斥组（状态、表情可选）：同一素材池中同组的素材，一张图片最多随机抽取一个 */
+  exclusive?: string
+}
+
+// ---------------------------------------------------------------- 动作卡
+/**
+ * 动作卡的素材池：
+ * - variant：子体位 / 结构变体（候选为属于该动作卡的子体位）
+ * - pose / pose2：主角色 / 第二角色的局部姿态（含手部动作），从「状态」素材中选择
+ * - interaction：双人互动（拥抱、接吻等），从「状态」素材中选择
+ * - expr / expr2：主角色 / 第二角色的表情，从「表情」素材中选择
+ * - extra：附加，从「状态」素材中选择
+ */
+export type CardPoolKey = 'variant' | 'pose' | 'expr' | 'interaction' | 'pose2' | 'expr2' | 'extra'
+/** 素材池（抽取顺序固定，保证同一组合 Seed 结果可复现）；duo 表示只用于双人动作卡 */
+export const CARD_POOLS: { key: CardPoolKey; label: string; source: 'variant' | 'state' | 'expression'; duo?: boolean }[] = [
+  { key: 'variant', label: '子体位 / 结构变体', source: 'variant' },
+  { key: 'pose', label: '主角色局部姿态', source: 'state' },
+  { key: 'expr', label: '主角色表情', source: 'expression' },
+  { key: 'interaction', label: '双人互动', source: 'state', duo: true },
+  { key: 'pose2', label: '第二角色局部姿态', source: 'state', duo: true },
+  { key: 'expr2', label: '第二角色表情', source: 'expression', duo: true },
+  { key: 'extra', label: '附加', source: 'state' },
+]
+/**
+ * 素材池的抽取规则：off 不加入；fixed 只使用固定素材；random 固定素材 + 从候选中随机抽取 min～max 个（固定素材不会被再次抽到）
+ */
+export type PoolMode = 'off' | 'fixed' | 'random'
+export interface PoolRule {
+  mode: PoolMode
+  fixed?: number[]
+  min?: number
+  max?: number
+}
+export interface ActionCard {
+  /** true = 单人动作卡（不使用第二角色与双人互动）；没有时为双人（旧主体位） */
+  solo?: boolean
+  /** 各素材池允许使用的素材 ID（只保存 ID，不复制 Prompt）。variant 没有时为全部子体位 */
+  pools?: Partial<Record<CardPoolKey, number[]>>
+  /** 默认抽取规则（没有的池使用 DEFAULT_POOL_RULES） */
+  rules?: Partial<Record<CardPoolKey, PoolRule>>
+}
+export const DEFAULT_POOL_RULES: Record<CardPoolKey, PoolRule> = {
+  variant: { mode: 'random', min: 1, max: 1 },
+  pose: { mode: 'random', min: 0, max: 1 },
+  expr: { mode: 'random', min: 1, max: 1 },
+  interaction: { mode: 'random', min: 0, max: 1 },
+  pose2: { mode: 'random', min: 0, max: 1 },
+  expr2: { mode: 'random', min: 0, max: 1 },
+  extra: { mode: 'off' },
+}
+/** 一张图片实际使用的素材（随计划冻结在运行记录中，用于查看来源） */
+export interface CardPick {
+  pool: CardPoolKey
+  id: number
+  name: string
+  random: boolean
 }
 
 export interface Lora {
@@ -174,6 +233,15 @@ export interface TaskItem {
   second_outfit_id?: number | null
   second_pose_id?: number | null
   second_expression_id?: number | null
+  /**
+   * 动作卡（主体位 ID）：有此字段的动作按动作卡展开——基础 Prompt + 各素材池按规则抽取，单人卡不加入第二角色。
+   * 没有此字段的旧动作按原有方式展开（结果不变）
+   */
+  card_id?: number | null
+  /** 本任务对动作卡默认规则的覆盖（按池替换，只对当前任务生效；删除即恢复动作卡默认设置） */
+  card_rules?: Partial<Record<CardPoolKey, PoolRule>>
+  /** 本任务中禁止随机抽取的素材 */
+  card_exclude?: number[]
   /** 场景：null 时沿用任务的默认场景 */
   scene_id?: number | null
   /**
@@ -222,6 +290,8 @@ export interface TaskData {
   male_base_id: number | null
   workflow_id: number | null
   seed_base: number
+  /** 动作卡素材抽取的组合 Seed（与 ComfyUI 采样 Seed 无关）；没有时使用 seed_base */
+  combo_seed?: number
   items: TaskItem[]
   /** 任务中清除了工作流选择（workflow_id 为 null 时原本表示「使用默认工作流」，为兼容旧任务另用这个标记） */
   workflow_none?: boolean
@@ -321,6 +391,12 @@ export interface UnitMeta {
   acts?: string[]
   /** 主角色的状态名称（多选时按顺序） */
   states?: string[]
+  /** 动作卡：名称、类型、本张的结构变体与实际使用的素材（固定 / 随机） */
+  card?: string
+  card_type?: 'solo' | 'duo'
+  variant?: string
+  picks?: CardPick[]
+  combo_seed?: number
   /** 入队时冻结的输出目录：完成后最终图片复制到这里（没有时不复制） */
   output_dir?: string
   /** 第二角色出场时：角色名、服装、动作、表情 */

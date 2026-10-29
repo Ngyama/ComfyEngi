@@ -126,8 +126,7 @@ export function planForTask(store: Store, task: Task, settings?: Settings, dateS
   store.files?.scan()
   settings = settings ?? store.settings()
   const data = normalizeTaskData(task.data)
-  const { units, errors } = expandTask(data, loadPlanLibrary(store), settings, task.name ?? '')
-  const warnings: string[] = []
+  const { units, errors, warnings } = expandTask(data, loadPlanLibrary(store), settings, task.name ?? '')
   if (store.files) {
     for (const u of units) for (const l of [...u.loras, ...(u.loras2 ?? []), ...(u.task_loras ?? [])]) if (l.resource_id && !l.disabled) resolveLoraName(store, l, errors)
   }

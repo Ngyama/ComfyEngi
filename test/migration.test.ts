@@ -50,8 +50,8 @@ describe('旧数据库迁移', () => {
     const { store } = openLegacy()
     for (const t of ['templates', 'characters', 'outfits', 'stories', 'workflows', 'tasks'] as const) {
       // v2 起素材多了适用对象与层级两个默认列（不修改原有字段）
-      // v2 新增适用对象与层级；v3 把单人动作 pose / 行为 act 合并为状态 state，并新增优先级（默认普通）
-      const exp = t === 'templates' ? expected.tables[t].map((r: { kind: string }) => ({ ...r, kind: r.kind === 'pose' || r.kind === 'act' ? 'state' : r.kind, target: 'any', parent_id: null, priority: 'normal' })) : expected.tables[t]
+      // v2 新增适用对象与层级；v3 把单人动作 pose / 行为 act 合并为状态 state，并新增优先级（默认普通）；v4 新增动作卡配置与互斥组（默认为空）
+      const exp = t === 'templates' ? expected.tables[t].map((r: { kind: string }) => ({ ...r, kind: r.kind === 'pose' || r.kind === 'act' ? 'state' : r.kind, target: 'any', parent_id: null, priority: 'normal', card: null, exclusive: '' })) : expected.tables[t]
       expect(store.list(t)).toEqual(exp)
     }
     const raw = store.list('templates').find((t) => t.name === '原样文本')!

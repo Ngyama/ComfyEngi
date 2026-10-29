@@ -5,6 +5,7 @@ import { AlertTriangle, FolderOpen, History, ImageIcon, ImageOff, RefreshCw, Sav
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { Chip, CopyButton, EmptyState, FieldLabel, PageHeader, SearchBox } from '@/components/common'
+import { PickSources } from '@/components/card-pools'
 import { api, call } from '@/lib/api'
 import { useRunner } from '@/lib/stores'
 import { cn } from '@/lib/utils'
@@ -171,6 +172,12 @@ function Detail({ u, onClose }: { u: RunUnit; onClose: () => void }) {
               : '（ComfyUI 未返回文件信息）'}
           </div>
         </div>
+        {u.meta?.card && (
+          <div>
+            <FieldLabel hint={`组合 Seed ${u.meta.combo_seed ?? ''}，入队时冻结`}>素材来源</FieldLabel>
+            <PickSources picks={u.meta.picks} card={u.meta.card} />
+          </div>
+        )}
         <div>
           <FieldLabel right={<CopyButton text={u.positive} />}>最终正面 Prompt</FieldLabel>
           <pre className="rounded-xl bg-inset p-3 font-mono text-[11.5px] leading-relaxed whitespace-pre-wrap select-text">{u.positive || '（空）'}</pre>

@@ -1,5 +1,6 @@
-// 素材库：全局 / 场景 / 状态 / 表情 / 双人动作。卡片浏览 + 右侧编辑，修改自动保存。
-// 状态（旧版单人动作与行为合并而来）、表情、场景只编辑名称、正面 Prompt 与显示优先级；状态和表情在套图任务中分配给主角色或第二角色。
+// 素材库：全局 / 场景 / 状态 / 表情 / 动作卡。卡片浏览 + 右侧编辑，修改自动保存。
+// 状态（旧版单人动作与行为合并而来）、表情、场景只编辑名称、正面 Prompt、显示优先级与可选的互斥组；它们是全局共享素材。
+// 动作卡（旧版主体位）= 基础 Prompt + 子体位（结构变体）+ 各素材池允许使用的素材 ID 与默认抽取规则；套图任务中只需选择动作卡。
 // 优先级只影响选择列表中的排列（高 → 普通 → 低，同级保持手动排序），不影响 Prompt。
 // 旧文件中的分类、标签、适用对象、备注等字段不在界面中显示，保存时也不会写入（原值保留）。
 // 旧版男性描述与镜头不在素材库中显示：数据与任务引用保持不变，镜头在套图任务中选择和新建。
@@ -14,27 +15,30 @@ import { api, call } from '@/lib/api'
 import { matchesName, useDraft } from '@/lib/hooks'
 import { confirm, reloadLib, templatesOf, useLib, useNav } from '@/lib/stores'
 import { cn } from '@/lib/utils'
+import { CardPools } from '@/components/card-pools'
+import { MaterialPicker } from './plan/MaterialPicker'
+import { cardRule, isSoloCard, normalizeCard } from '@shared/cards'
 import { PLACEHOLDER_HELP } from '@shared/prompt'
-import { TEMPLATE_KINDS, type Template, type TemplateKind } from '@shared/types'
+import { CARD_POOLS, TEMPLATE_KINDS, type ActionCard, type CardPoolKey, type Library, type PoolRule, type Template, type TemplateKind } from '@shared/types'
 
-type Tab = 'global' | 'scene' | 'state' | 'expression' | 'duo'
+type Tab = 'global' | 'scene' | 'state' | 'expression' | 'cards'
 const TABS: [Tab, string][] = [
   ['global', '全局'],
   ['scene', '场景'],
   ['state', '状态'],
   ['expression', '表情'],
-  ['duo', '双人动作'],
+  ['cards', '动作卡'],
 ]
-const STATE_HINT = '状态素材（旧版「单人动作」与「行为」都在这里）。在套图任务中可为主角色、第二角色各选择多个，同一张图片中一起使用；双人动作的「行为」也从这里选择。'
+const STATE_HINT = '状态素材（局部姿态、手部动作、双人互动等，旧版「单人动作」与「行为」都在这里）。全局共享：动作卡只记录各素材池允许使用哪些状态，不复制 Prompt。'
 const HINTS: Record<TemplateKind, string> = {
   global: '画质、画风等通用 Prompt。每个套图任务选择其中一个。',
   scene: '可复用的环境 Prompt（卧室、教室、街道等）。与剧情库不同：场景只描述环境，在任务中按动作选择。',
   state: STATE_HINT,
   pose: STATE_HINT,
-  position: '双人主体位，例如正常位、骑乘位。每个主体位有一段基础 Prompt，并可以有多个子体位作为补充。',
-  subposition: '子体位是主体位的补充 Prompt（例如抬腿），生成时拼在主体位之后，可以只写差异部分。',
+  position: '动作卡代表一种可以独立生成的画面结构（单人：鸭子坐、站立；双人：正常位、拥抱）。由基础 Prompt、子体位（结构变体）和若干素材池组成，套图任务中只需选择动作卡和张数。',
+  subposition: '子体位是动作卡的结构变体（例如标准、前倾、反向），生成时拼在基础 Prompt 之后，可以只写差异部分。',
   act: STATE_HINT,
-  expression: '表情 Prompt。在套图任务中分配给主角色（可多选，平均分配张数）或第二角色。',
+  expression: '表情 Prompt（全局共享）。动作卡分别配置主角色、第二角色允许使用的表情；可用互斥组避免同一张图片抽到相互矛盾的表情。',
   male: '男性描述（兼容素材）：分类为「基础」的可作为任务的男性基础描述；旧版的男性动作 / 表情模板仍可在任务的男性设置中选择。',
   camera: '镜头（兼容素材）：仍可在任务的动作详情中选择，POV 不会自动启用男性出场。',
 }
@@ -45,13 +49,33 @@ const REF_FIELDS: Record<TemplateKind, string[]> = {
   scene: ['scene_id'],
   state: STATE_REFS,
   pose: STATE_REFS,
-  position: ['position_id'],
+  position: ['position_id', 'card_id'],
   subposition: ['subposition_id'],
   act: STATE_REFS,
   expression: ['expression_ids', 'male_expression_ids', 'second_expression_id'],
   male: ['male_base_id', 'male_ids'],
   camera: ['camera_id'],
 }
+/** 使用某个素材的动作卡（素材池候选或固定素材） */
+function cardsUsing(lib: Library | null, id: number): string[] {
+  return templatesOf(lib, 'position')
+    .filter((c) => CARD_POOLS.some(({ key }) => (c.card?.pools?.[key] ?? []).includes(id) || (c.card?.rules?.[key]?.fixed ?? []).includes(id)))
+    .map((c) => c.name || '（未命名）')
+}
+/** 可设置互斥组的素材 */
+const WITH_EXCLUSIVE: TemplateKind[] = ['state', 'pose', 'act', 'expression']
+
+/** 从状态创建单人动作卡：复制名称、Prompt 与优先级作为基础 Prompt（原状态保留为共享素材，不修改） */
+async function createSoloCards(list: Template[]): Promise<number[]> {
+  const out: number[] = []
+  for (const t of list) {
+    const r = await call(api['templates.save']({ kind: 'position', name: t.name, positive: t.positive, negative: t.negative ?? '', priority: t.priority ?? 'normal', card: { solo: true } } as never))
+    if (r) out.push(r.id)
+  }
+  await reloadLib()
+  return out
+}
+
 /** 只有全局 Prompt 编辑负面 Prompt；其他素材只有名称与正面（旧文件中的负面仍会使用，如实显示并可清空） */
 const WITH_NEGATIVE: TemplateKind[] = ['global']
 
@@ -90,6 +114,7 @@ export function TemplateEditor({ t, onClose, onDeleted }: { t: Template; onClose
     if (showNeg || v.negative !== t.negative) rec.negative = v.negative
     if (kind === 'subposition') rec.parent_id = v.parent_id ?? null
     if (v.priority) rec.priority = v.priority
+    if (WITH_EXCLUSIVE.includes(kind) && (v.exclusive ?? '') !== (t.exclusive ?? '')) rec.exclusive = v.exclusive ?? ''
     await call(api['templates.save'](rec as never))
     await reloadLib()
   })
@@ -121,10 +146,12 @@ export function TemplateEditor({ t, onClose, onDeleted }: { t: Template; onClose
           onClick={async () => {
             const used = [...new Set((await Promise.all(REF_FIELDS[kind].map((f) => api.references(f, t.id)))).flat())]
             const children = kind === 'position' ? templatesOf(lib, 'subposition').filter((x) => x.parent_id === t.id) : []
+            const cards = cardsUsing(lib, t.id)
             const ok = await confirm({
               title: `删除「${draft.name}」？`,
               description:
                 (used.length ? `以下套图任务正在使用它：${used.join('、')}\n删除后这些任务会提示引用失效。\n` : '') +
+                (cards.length ? `以下动作卡的素材池包含它：${cards.join('、')}\n删除后随机抽取时会跳过它（固定使用它的动作会提示错误）。\n` : '') +
                 (children.length ? `它下面的 ${children.length} 个子体位也会一起删除（移入工作区回收站 .comfyengi/trash）。\n` : '') +
                 '已生成的运行记录不受影响。',
               confirmText: '删除',
@@ -150,14 +177,14 @@ export function TemplateEditor({ t, onClose, onDeleted }: { t: Template; onClose
         </div>
         {kind === 'subposition' && (
           <div>
-            <FieldLabel hint="子体位的 Prompt 拼在主体位之后">所属主体位</FieldLabel>
+            <FieldLabel hint="子体位的 Prompt 拼在动作卡基础 Prompt 之后">所属动作卡</FieldLabel>
             <div className="flex flex-wrap gap-1.5">
               {positions.map((p) => (
                 <Chip key={p.id} active={draft.parent_id === p.id} onClick={() => patch({ parent_id: p.id })}>
                   {p.name || '（未命名）'}
                 </Chip>
               ))}
-              {!positions.length && <span className="text-xs text-muted-foreground">还没有主体位</span>}
+              {!positions.length && <span className="text-xs text-muted-foreground">还没有动作卡</span>}
             </div>
           </div>
         )}
@@ -166,6 +193,29 @@ export function TemplateEditor({ t, onClose, onDeleted }: { t: Template; onClose
           <PriorityToggle value={draft.priority} onChange={(v) => patch({ priority: v })} />
         </div>
         <PromptField label="正面 Prompt" value={draft.positive} onChange={(v) => patch({ positive: v })} placeholder={`原样保存，不做任何格式转换。可用占位符 ${PLACEHOLDER_HELP}`} minRows={4} copy />
+        {WITH_EXCLUSIVE.includes(kind) && (
+          <div>
+            <FieldLabel hint="可选。同一素材池中互斥组相同的素材，一张图片最多随机抽取一个（例如「身体前倾」与「身体后仰」都填「上身」）">互斥组</FieldLabel>
+            <TextInput value={draft.exclusive ?? ''} onChange={(v) => patch({ exclusive: v })} placeholder="不填则不受限制" />
+          </div>
+        )}
+        {kind !== 'expression' && WITH_EXCLUSIVE.includes(kind) && (
+          <div className="flex items-center gap-2 rounded-lg bg-tint/[0.03] px-3 py-2 text-[11.5px] text-muted-foreground">
+            <span className="min-w-0 flex-1">旧版单人动作可以转换为单人动作卡：复制名称与 Prompt 作为基础 Prompt，原状态保留为共享素材。</span>
+            <Button
+              size="xs"
+              variant="secondary"
+              data-testid="state-to-card"
+              onClick={async () => {
+                flush()
+                const r = await createSoloCards([{ ...t, ...draft }])
+                if (r.length) toast.success(`已创建单人动作卡「${draft.name}」`, { description: '在「动作卡」中配置素材池与抽取规则' })
+              }}
+            >
+              转为单人动作卡
+            </Button>
+          </div>
+        )}
         {showNeg ? (
           <PromptField label="负面 Prompt" value={draft.negative} onChange={(v) => patch({ negative: v })} placeholder="通用负面 Prompt，可留空。新任务的负面 Prompt 统一来自这里" minRows={2} copy />
         ) : (
@@ -233,10 +283,11 @@ function useTemplateDraft(t: Template) {
   })
 }
 
-// ---------------------------------------------------------------- 双人互动：主体位 + 子体位（类似角色与服装）
+// ---------------------------------------------------------------- 动作卡：基础 Prompt + 子体位（结构变体）+ 素材池（类似角色与服装）
 
-function PositionRow({ p, subs, selected, onClick }: { p: Template; subs: number; selected: boolean; onClick: () => void }) {
+function CardRow({ p, subs, selected, onClick }: { p: Template; subs: number; selected: boolean; onClick: () => void }) {
   const s = useSortableItem(String(p.id))
+  const solo = isSoloCard(p)
   return (
     <div ref={s.setNodeRef} style={s.style} className={cn('flex items-center gap-1.5 rounded-xl py-2 pr-2 pl-1 hover:bg-tint/[0.04]', selected && 'bg-tint/[0.07]', s.isDragging && 'shadow-xl shadow-tint/15')} data-testid="position-row">
       <button type="button" {...s.attributes} {...s.listeners} className="cursor-grab text-muted-foreground/40 hover:text-muted-foreground" aria-label="拖动排序">
@@ -246,6 +297,9 @@ function PositionRow({ p, subs, selected, onClick }: { p: Template; subs: number
         <div className="flex items-center gap-1.5">
           <span className="truncate text-[13px] font-medium">{p.name || '（未命名）'}</span>
           <PriorityBadge value={p.priority} />
+          <span className={cn('ml-auto shrink-0 rounded-md px-1.5 py-0.5 text-[10px]', solo ? 'bg-emerald-500/10 text-emerald-700' : 'bg-sky-500/10 text-sky-700')} data-testid="card-type">
+            {solo ? '单人' : '双人'}
+          </span>
         </div>
         <div className="truncate text-[11px] text-muted-foreground">{subs ? `${subs} 个子体位` : '没有子体位'}</div>
       </button>
@@ -312,25 +366,35 @@ function SubpositionEditor({ t, onDeleted }: { t: Template; onDeleted: () => voi
           <Trash2 />
         </Button>
       </div>
-      <PromptField value={draft.positive} onChange={(v) => patch({ positive: v })} placeholder="补充 Prompt：拼在主体位基础 Prompt 之后（原样保存），可以只写差异部分" minRows={2} />
+      <PromptField value={draft.positive} onChange={(v) => patch({ positive: v })} placeholder="结构变体的补充 Prompt：拼在动作卡基础 Prompt 之后（原样保存），可以只写差异部分" minRows={2} />
       <PriorityToggle value={draft.priority} onChange={(v) => patch({ priority: v })} />
       <LegacyNegative value={draft.negative} onClear={() => patch({ negative: '' })} />
     </div>
   )
 }
 
-function PositionDetail({ p, onDeleted }: { p: Template; onDeleted: () => void }) {
+function CardDetail({ p, onDeleted }: { p: Template; onDeleted: () => void }) {
   const lib = useLib((s) => s.lib)
   const subs = templatesOf(lib, 'subposition').filter((s) => s.parent_id === p.id)
   const [open, setOpen] = useState<number | null>(null)
   const { draft, patch, flush } = useTemplateDraft(p)
   if (!draft) return null
+  const solo = isSoloCard(p)
+  const card: ActionCard = p.card ?? {}
+  const saveCard = async (next: ActionCard) => {
+    flush()
+    await call(api['templates.save']({ id: p.id, card: normalizeCard(next) } as never))
+    await reloadLib()
+  }
+  const rules = Object.fromEntries(CARD_POOLS.map(({ key }) => [key, cardRule(p, key)])) as Record<CardPoolKey, PoolRule>
   return (
     <div className="max-w-3xl space-y-6" data-testid="position-detail">
       <div className="flex items-center gap-3">
         <div className="min-w-0 flex-1">
           <div className="truncate text-[16px] font-semibold">{draft.name || '（未命名）'}</div>
-          <div className="text-xs text-muted-foreground">主体位 · {subs.length} 个子体位</div>
+          <div className="text-xs text-muted-foreground">
+            {solo ? '单人' : '双人'}动作卡 · {subs.length} 个子体位
+          </div>
         </div>
         <Button
           variant="ghost"
@@ -340,7 +404,7 @@ function PositionDetail({ p, onDeleted }: { p: Template; onDeleted: () => void }
             const r = await call(api['templates.duplicate'](p.id))
             if (r) {
               await reloadLib()
-              toast.success('已复制主体位（含子体位）')
+              toast.success('已复制动作卡（含子体位与素材池）')
             }
           }}
         >
@@ -351,10 +415,10 @@ function PositionDetail({ p, onDeleted }: { p: Template; onDeleted: () => void }
           size="sm"
           className="hover:text-destructive"
           onClick={async () => {
-            const used = [...new Set([...(await api.references('position_id', p.id)), ...(await Promise.all(subs.map((s) => api.references('subposition_id', s.id)))).flat()])]
+            const used = [...new Set([...(await api.references('position_id', p.id)), ...(await api.references('card_id', p.id)), ...(await Promise.all(subs.map((s) => api.references('subposition_id', s.id)))).flat()])]
             const ok = await confirm({
-              title: `删除主体位「${draft.name}」${subs.length ? `及其 ${subs.length} 个子体位` : ''}？`,
-              description: (used.length ? `以下套图任务正在使用它们：${used.join('、')}\n删除后这些任务会提示引用失效。\n` : '') + '文件会移入工作区的回收站（.comfyengi/trash），已生成的运行记录不受影响。',
+              title: `删除动作卡「${draft.name}」${subs.length ? `及其 ${subs.length} 个子体位` : ''}？`,
+              description: (used.length ? `以下套图任务正在使用它们：${used.join('、')}\n删除后这些任务会提示引用失效。\n` : '') + '素材池中引用的状态、表情是共享素材，不会被删除。文件会移入工作区的回收站（.comfyengi/trash），已生成的运行记录不受影响。',
               confirmText: '删除',
               destructive: true,
             })
@@ -367,21 +431,52 @@ function PositionDetail({ p, onDeleted }: { p: Template; onDeleted: () => void }
           <Trash2 /> 删除
         </Button>
       </div>
-      <div>
-        <FieldLabel>名称</FieldLabel>
-        <TextInput value={draft.name} onChange={(v) => patch({ name: v })} />
-      </div>
-      <div>
-        <FieldLabel>优先级</FieldLabel>
-        <PriorityToggle value={draft.priority} onChange={(v) => patch({ priority: v })} />
+      <div className="grid grid-cols-[1fr_auto_auto] items-end gap-4">
+        <div>
+          <FieldLabel>名称</FieldLabel>
+          <TextInput value={draft.name} onChange={(v) => patch({ name: v })} />
+        </div>
+        <div>
+          <FieldLabel>类型</FieldLabel>
+          <div className="flex h-9 items-center rounded-lg bg-tint/[0.045] p-0.5" data-testid="card-solo-toggle">
+            {(
+              [
+                [true, '单人'],
+                [false, '双人'],
+              ] as const
+            ).map(([v, l]) => (
+              <button
+                key={l}
+                type="button"
+                data-active={solo === v || undefined}
+                data-testid={v ? 'card-solo' : 'card-duo'}
+                className="h-7 rounded-md px-3 text-[12px] text-muted-foreground data-[active]:bg-tint/[0.1] data-[active]:text-foreground"
+                onClick={() => solo !== v && void saveCard({ ...card, solo: v || undefined })}
+              >
+                {l}
+              </button>
+            ))}
+          </div>
+        </div>
+        <div>
+          <FieldLabel>优先级</FieldLabel>
+          <PriorityToggle value={draft.priority} onChange={(v) => patch({ priority: v })} />
+        </div>
       </div>
       <div className="space-y-2">
-        <PromptField label="基础 Prompt" value={draft.positive} onChange={(v) => patch({ positive: v })} placeholder={`主体位的基础 Prompt（原样保存）。可用占位符 ${PLACEHOLDER_HELP}`} minRows={3} copy />
+        <PromptField
+          label="基础 Prompt"
+          value={draft.positive}
+          onChange={(v) => patch({ positive: v })}
+          placeholder={`动作卡中稳定且必需的标签，可以有多个（原样保存）。只选择这张卡、不加入其他素材时也应是一份有意义的 Prompt。可用占位符 ${PLACEHOLDER_HELP}`}
+          minRows={3}
+          copy
+        />
         <LegacyNegative value={draft.negative} onClear={() => patch({ negative: '' })} />
       </div>
       <section>
         <FieldLabel
-          hint="补充在基础 Prompt 之后；生成时可以只选主体位。拖动调整顺序，点击展开编辑"
+          hint="同一动作的结构变体（例如标准、前倾、反向），拼在基础 Prompt 之后。不要为不同表情、局部姿态或手部动作重复创建子体位"
           right={
             <Button
               size="xs"
@@ -398,7 +493,7 @@ function PositionDetail({ p, onDeleted }: { p: Template; onDeleted: () => void }
             </Button>
           }
         >
-          {`子体位${subs.length ? ` · ${subs.length}` : ''}`}
+          {`子体位 / 结构变体${subs.length ? ` · ${subs.length}` : ''}`}
         </FieldLabel>
         <div className="space-y-1.5">
           <SortableArea
@@ -413,24 +508,35 @@ function PositionDetail({ p, onDeleted }: { p: Template; onDeleted: () => void }
               <SubpositionRow key={t.id} t={t} open={open === t.id} onToggle={() => setOpen(open === t.id ? null : t.id)} onDeleted={() => setOpen(null)} />
             ))}
           </SortableArea>
-          {!subs.length && <div className="rounded-xl border border-dashed border-tint/[0.16] px-4 py-5 text-center text-xs text-muted-foreground">还没有子体位。子体位是这个主体位的补充 Prompt（例如抬腿），只属于这个主体位。</div>}
+          {!subs.length && <div className="rounded-xl border border-dashed border-tint/[0.16] px-4 py-5 text-center text-xs text-muted-foreground">还没有子体位。子体位是这张动作卡的结构变体，只属于这张卡。</div>}
         </div>
+      </section>
+      <section>
+        <FieldLabel hint="素材本身在「状态」「表情」中统一管理；这里只记录这张卡允许使用哪些素材，以及默认怎样抽取。套图任务中可以临时覆盖，不会改动这里">素材池与默认抽取规则</FieldLabel>
+        <CardPools
+          card={p}
+          rules={rules}
+          onRule={(key, rule) => void saveCard({ ...card, rules: { ...card.rules, [key]: rule } })}
+          onCandidates={(key, ids) => void saveCard({ ...card, pools: { ...card.pools, [key]: ids } })}
+        />
+        {solo && <div className="mt-2 text-[11px] text-muted-foreground">单人动作卡不使用第二角色与双人互动：套图任务选择了第二角色时，这张卡仍生成单人图片。</div>}
       </section>
     </div>
   )
 }
 
-/** 双人动作：左侧主体位列表，右侧主体位详情（基础 Prompt 与子体位）。任务中叠加的行为从「状态」中选择 */
-function DuoPanel({ sel, onSelect, q }: { sel: number | null; onSelect: (id: number | null) => void; q: string }) {
+/** 动作卡：左侧动作卡列表（单人 / 双人），右侧动作卡详情 */
+function CardPanel({ sel, onSelect, q }: { sel: number | null; onSelect: (id: number | null) => void; q: string }) {
   const lib = useLib((s) => s.lib)
   const positions = templatesOf(lib, 'position')
   const subs = templatesOf(lib, 'subposition')
   const [pid, setPid] = useState<number | null>(null)
+  const [fromStates, setFromStates] = useState(false)
   const orphans = subs.filter((s) => !positions.some((p) => p.id === s.parent_id))
   const shown = positions.filter((p) => matchesName(p, q) || subs.some((s) => s.parent_id === p.id && matchesName(s, q)))
   const cur = positions.find((p) => p.id === pid) ?? shown[0] ?? null
-  const create = async () => {
-    const r = await call(api['templates.save']({ kind: 'position', name: '新主体位' }))
+  const create = async (solo: boolean) => {
+    const r = await call(api['templates.save']({ kind: 'position', name: solo ? '新单人动作卡' : '新双人动作卡', ...(solo ? { card: { solo: true } } : {}) } as never))
     if (!r) return
     await reloadLib()
     onSelect(null)
@@ -439,15 +545,18 @@ function DuoPanel({ sel, onSelect, q }: { sel: number | null; onSelect: (id: num
   return (
     <div className="flex gap-6">
       <section className="w-[240px] shrink-0">
-        <FieldLabel
-          right={
-            <Button size="xs" variant="ghost" onClick={() => void create()}>
-              <Plus /> 新建主体位
-            </Button>
-          }
-        >
-          主体位
-        </FieldLabel>
+        <FieldLabel>动作卡</FieldLabel>
+        <div className="mb-2 flex flex-wrap gap-1">
+          <Button size="xs" variant="secondary" onClick={() => void create(true)} data-testid="new-solo-card">
+            <Plus /> 单人
+          </Button>
+          <Button size="xs" variant="secondary" onClick={() => void create(false)} data-testid="new-duo-card">
+            <Plus /> 双人
+          </Button>
+          <Button size="xs" variant="ghost" onClick={() => setFromStates(true)} disabled={!templatesOf(lib, 'state').length} data-testid="cards-from-states">
+            从状态创建
+          </Button>
+        </div>
         <div className="space-y-0.5">
           <SortableArea
             items={shown}
@@ -459,7 +568,7 @@ function DuoPanel({ sel, onSelect, q }: { sel: number | null; onSelect: (id: num
             }}
           >
             {shown.map((p) => (
-              <PositionRow
+              <CardRow
                 key={p.id}
                 p={p}
                 subs={subs.filter((s) => s.parent_id === p.id).length}
@@ -471,10 +580,10 @@ function DuoPanel({ sel, onSelect, q }: { sel: number | null; onSelect: (id: num
               />
             ))}
           </SortableArea>
-          {!positions.length && <div className="rounded-xl border border-dashed border-tint/[0.16] p-4 text-center text-xs text-muted-foreground">还没有主体位</div>}
+          {!positions.length && <div className="rounded-xl border border-dashed border-tint/[0.16] p-4 text-center text-xs text-muted-foreground">还没有动作卡</div>}
           {orphans.length > 0 && (
             <div className="pt-3">
-              <div className="px-2 pb-1 text-[11px] text-warning">未归属的子体位（旧版本中主体位已被删除），点击后重新指定所属主体位</div>
+              <div className="px-2 pb-1 text-[11px] text-warning">未归属的子体位（旧版本中所属的卡已被删除），点击后重新指定所属动作卡</div>
               {orphans.map((c) => (
                 <button key={c.id} type="button" onClick={() => onSelect(c.id)} className={cn('block w-full truncate rounded-lg px-3 py-1.5 text-left text-[13px] hover:bg-tint/[0.04]', sel === c.id && 'bg-tint/[0.08]')}>
                   {c.name}
@@ -485,12 +594,27 @@ function DuoPanel({ sel, onSelect, q }: { sel: number | null; onSelect: (id: num
         </div>
       </section>
       <div className="min-w-0 flex-1">
-        {cur ? (
-          <PositionDetail key={cur.id} p={cur} onDeleted={() => setPid(null)} />
-        ) : (
-          <EmptyState icon={<Shapes />} title={q ? '没有匹配的主体位' : '还没有主体位'} description={HINTS.position} />
-        )}
+        {cur ? <CardDetail key={cur.id} p={cur} onDeleted={() => setPid(null)} /> : <EmptyState icon={<Shapes />} title={q ? '没有匹配的动作卡' : '还没有动作卡'} description={HINTS.position} />}
       </div>
+      <MaterialPicker
+        open={fromStates}
+        onOpenChange={setFromStates}
+        title="从状态创建单人动作卡"
+        description="每个选中的状态创建一张单人动作卡：名称、Prompt 复制为基础 Prompt，原状态保留为共享素材（不修改、不删除）。"
+        items={templatesOf(lib, 'state')}
+        value={[]}
+        multi
+        bulk
+        onChange={async (ids) => {
+          const picked = ids.map((id) => lib?.templates.find((t) => t.id === id)).filter((t): t is Template => !!t)
+          const made = await createSoloCards(picked)
+          if (made.length) {
+            toast.success(`已创建 ${made.length} 张单人动作卡`)
+            setPid(made[0])
+          }
+        }}
+        testId="material-picker"
+      />
     </div>
   )
 }
@@ -500,7 +624,7 @@ export default function LibraryPage() {
   const [tab, setTab] = useState<Tab>('state')
   const [q, setQ] = useState('')
   const [sel, setSel] = useState<number | null>(null)
-  const kind: TemplateKind | null = tab === 'duo' ? null : tab
+  const kind: TemplateKind | null = tab === 'cards' ? null : tab
   const cur = sel ? lib?.templates.find((t) => t.id === sel) : undefined
   const count = (k: TemplateKind) => templatesOf(lib, k).length
   const tabCount: Record<Tab, number> = {
@@ -508,7 +632,7 @@ export default function LibraryPage() {
     scene: count('scene'),
     state: count('state'),
     expression: count('expression'),
-    duo: count('position') + count('subposition'),
+    cards: count('position'),
   }
   const add = async () => {
     if (!kind) return
@@ -523,7 +647,7 @@ export default function LibraryPage() {
       <div className="flex min-w-0 flex-1 flex-col">
         <PageHeader
           title="素材库"
-          description={kind ? HINTS[kind] : '双人动作 = 主体位基础 Prompt + 可选的子体位补充 Prompt + 可叠加的行为（在任务中从「状态」素材选择）。'}
+          description={kind ? HINTS[kind] : HINTS.position}
           actions={
             <>
               <Button variant="ghost" size="sm" onClick={() => useNav.getState().go('mining')} data-testid="open-mining">
@@ -559,7 +683,7 @@ export default function LibraryPage() {
           <SearchBox value={q} onChange={setQ} placeholder="搜索名称…" className="ml-auto w-64" />
         </div>
         <div className="min-h-0 flex-1 overflow-y-auto px-6 pt-0.5 pb-6">
-          {kind ? <Grid key={kind} kind={kind} sel={sel} onSelect={setSel} q={q} /> : <DuoPanel sel={sel} onSelect={setSel} q={q} />}
+          {kind ? <Grid key={kind} kind={kind} sel={sel} onSelect={setSel} q={q} /> : <CardPanel sel={sel} onSelect={setSel} q={q} />}
         </div>
       </div>
       {cur && (

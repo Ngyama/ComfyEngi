@@ -7,6 +7,7 @@ import { api, call } from '@/lib/api'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Chip, CopyButton, FieldLabel, TextInput } from '@/components/common'
+import { PickSources } from '@/components/card-pools'
 import { templatesOf, useLib, usePlan } from '@/lib/stores'
 import { cn } from '@/lib/utils'
 import { SOURCE_LABELS } from '@shared/mapping'
@@ -96,6 +97,23 @@ export function TaskSettingsDialog({ open, onOpenChange }: { open: boolean; onOp
             </div>
             <TextInput value={out.prefix ?? ''} onChange={(v) => setOut({ prefix: v })} placeholder="留空则使用工作流映射中的模板，例如 %date:yyyy-MM-dd%/image" mono data-testid="task-prefix" />
             {prefixPreview && <div className="mt-1 font-mono text-[11px] text-muted-foreground" data-testid="prefix-preview">示例：{prefixPreview}_00001_.png</div>}
+          </section>
+          <section data-testid="combo-seed">
+            <FieldLabel hint="动作卡的素材抽取由它决定：同一个组合 Seed 与相同的素材总是抽到同样的组合；与 ComfyUI 的采样 Seed 无关。入队后抽取结果随计划冻结">组合 Seed</FieldLabel>
+            <div className="flex gap-2">
+              <TextInput
+                value={String(d.combo_seed ?? d.seed_base)}
+                mono
+                onChange={(v) => {
+                  const n = parseInt(v.replace(/[^\d]/g, '') || '0', 10)
+                  update((x) => (x.combo_seed = Math.min(n, 2 ** 31 - 1)))
+                }}
+                className="w-48"
+              />
+              <Button variant="secondary" onClick={() => update((x) => (x.combo_seed = randomSeed()))} data-testid="combo-reroll">
+                <Dices /> 重新抽取组合
+              </Button>
+            </div>
           </section>
           <section>
             <FieldLabel hint="第 N 张的 Seed = 起始 Seed + N − 1，预览中即为实际值">起始 Seed</FieldLabel>
@@ -201,7 +219,7 @@ export function PlanPreviewDialog({ open, onOpenChange, plan, onEnqueue, taskId 
                         className={cn('flex w-full items-center gap-3 rounded-md py-1 pr-2 pl-8 text-left text-xs hover:bg-tint/[0.04]', sel === x.index && 'bg-primary/15 text-primary')}
                       >
                         <span className="w-9 shrink-0 tabular-nums opacity-70">#{x.index + 1}</span>
-                        <span className="truncate">{x.meta.expression || x.meta.outfit || x.item_label}</span>
+                        <span className="truncate">{x.meta.card ? (x.meta.picks ?? []).filter((p) => p.random).map((p) => p.name).join(' · ') || '（只用基础 Prompt）' : x.meta.expression || x.meta.outfit || x.item_label}</span>
                         <span className="ml-auto font-mono text-[11px] opacity-60">{x.seed}</span>
                       </button>
                     ))}
@@ -220,6 +238,7 @@ export function PlanPreviewDialog({ open, onOpenChange, plan, onEnqueue, taskId 
                   {u.meta.expression && <span>表情 {u.meta.expression}</span>}
                   {u.meta.camera && <span>镜头 {u.meta.camera}</span>}
                   {u.meta.character2 && <span>第二角色 {u.meta.character2}</span>}
+                  {u.meta.card && <span>组合 Seed {u.meta.combo_seed}</span>}
                   {u.meta.male && <span>男性出场</span>}
                   <span className="font-mono">Seed {u.seed}</span>
                   {taskId != null && u.inputs && (
@@ -228,6 +247,12 @@ export function PlanPreviewDialog({ open, onOpenChange, plan, onEnqueue, taskId 
                     </Button>
                   )}
                 </div>
+                {u.meta.card && (
+                  <div>
+                    <FieldLabel hint="本张实际使用的素材（随机 / 固定），入队后与 Prompt 一起冻结">素材来源</FieldLabel>
+                    <PickSources picks={u.meta.picks} card={u.meta.card} />
+                  </div>
+                )}
                 <div>
                   <FieldLabel right={<CopyButton text={u.positive} label="复制正面" />}>最终正面 Prompt</FieldLabel>
                   <pre className="rounded-xl bg-inset p-3 font-mono text-[12px] leading-relaxed whitespace-pre-wrap select-text">{u.positive || '（空）'}</pre>

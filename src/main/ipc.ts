@@ -7,6 +7,7 @@ import { dirname, extname, join } from 'node:path'
 import { BrowserWindow, clipboard, dialog, ipcMain, nativeImage, shell, app } from 'electron'
 import { API_METHODS, INVOKE_CHANNEL, RUNNER_EVENT_CHANNEL, type Api, type ApiMethod } from '@shared/api'
 import { checkAgainstObjectInfo, ComfyError, loadApiWorkflow, mappingValues, validateMapping } from '@shared/mapping'
+import { normalizeCard } from '@shared/cards'
 import { normalizeTaskData } from '@shared/planner'
 import { DEFAULT_SETTINGS, TEMPLATE_KINDS, type Library, type OutputFile, type RunUnit, type Settings } from '@shared/types'
 import { ComfyClient } from './comfy-client'
@@ -39,7 +40,7 @@ const plain = (v: unknown, name = '参数'): Record<string, unknown> => {
   return v as Record<string, unknown>
 }
 
-const TEXT_COLS = new Set(['kind', 'name', 'positive', 'negative', 'category', 'tags', 'note', 'tag', 'genre'])
+const TEXT_COLS = new Set(['kind', 'name', 'positive', 'negative', 'category', 'tags', 'note', 'tag', 'genre', 'exclusive'])
 const INT_COLS = new Set(['sort', 'character_id'])
 
 /** 只保留表中允许的列，并检查字段类型 */
@@ -57,7 +58,8 @@ function record(table: TableName, v: unknown): Record<string, unknown> {
     } else if (c === 'priority') {
       if (val !== 'high' && val !== 'normal' && val !== 'low') throw new BadArg('无效的优先级')
       out[c] = val
-    } else if (c === 'parent_id') out[c] = val === null ? null : int(val, 'parent_id')
+    } else if (c === 'card') out[c] = val === null ? null : normalizeCard(plain(val, '动作卡'))
+    else if (c === 'parent_id') out[c] = val === null ? null : int(val, 'parent_id')
     else if (TEXT_COLS.has(c)) out[c] = str(val, c)
     else if (INT_COLS.has(c)) out[c] = int(val, c)
     else if (c === 'loras') {

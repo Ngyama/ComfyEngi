@@ -122,7 +122,8 @@ function StatusCard({ runs, onStart }: { runs: Run[]; onStart: () => void }) {
                 </span>
                 {cur.meta?.expression && (
                   <span className="text-muted-foreground">
-                    表情 {cur.meta.expression}（{cur.meta.expression_n}/{cur.meta.expression_of}）
+                    表情 {cur.meta.expression}
+                    {cur.meta.expression_n ? `（${cur.meta.expression_n}/${cur.meta.expression_of}）` : ''}
                   </span>
                 )}
                 <span className="font-mono text-[11px] text-muted-foreground">seed {cur.seed}</span>
