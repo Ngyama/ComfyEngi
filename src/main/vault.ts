@@ -60,6 +60,10 @@ export function openVault(root:string) {
   const library = new FileLibrary(root)
   // 旧版「数字 ID-UUID.md」文件名迁移为可读名称（只改文件名，失败时保留原名，记录在 .comfyengi/rename-log.jsonl）
   library.migrateNames()
+  // 「单人动作」与「行为」合并为「状态」：原文件先备份到 data/backups/state-merge-时间/
+  if ([...library.entries.values()].some((e) => e.row.type === 'templates' && (e.row.kind === 'pose' || e.row.kind === 'act'))) {
+    library.migrateStateKinds(join(root, 'data', 'backups', `state-merge-${new Date().toISOString().replace(/[:.]/g, '-')}`))
+  }
   const store = new Store(join(root,'data','comfyengi.db'),{backupDir:join(root,'data','backups')})
   store.files=library; return store
 }

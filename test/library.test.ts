@@ -39,7 +39,7 @@ describe('素材分类与数据库迁移', () => {
     const t = s.list('templates')
     expect(t.length).toBeGreaterThan(0)
     expect(t.every((x) => x.target === 'any' && x.parent_id === null)).toBe(true)
-    expect(t.filter((x) => x.kind === 'pose').length).toBeGreaterThan(0) // 旧姿态原样保留为单人动作
+    expect(t.filter((x) => x.kind === 'state').length).toBeGreaterThan(0) // 旧姿态原样保留为单人动作
     expect(t.some((x) => x.kind === 'male') && t.some((x) => x.kind === 'camera')).toBe(true)
     s.close()
     // 再次打开不会重复迁移或出错
@@ -138,7 +138,7 @@ describe('Prompt 组合', () => {
     const L = () => loadPlanLibrary(s)
     const solo = expandTask(f.lib.task([{ ...f.lib.item('睡觉', null, [], 1), act_ids: [f.hug] }]), L(), s.settings())
     expect(solo.units[0].modules.interaction[0]).toBe('hug, {embrace|cuddle}')
-    expect(expandTask(f.lib.task([{ ...newItem(null), count: 1 }]), L(), s.settings()).errors[0]).toContain('未选择动作')
+    expect(expandTask(f.lib.task([{ ...newItem(null), count: 1 }]), L(), s.settings()).errors[0]).toContain('未选择状态')
     s.remove('templates', f.missionary)
     const r = expandTask(f.lib.task([{ ...newInteractionItem(f.missionary), count: 1 }]), L(), s.settings())
     expect(r.errors[0]).toContain('主体位已被删除')

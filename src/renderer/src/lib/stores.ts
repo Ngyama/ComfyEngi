@@ -2,7 +2,7 @@
 
 import { create } from 'zustand'
 import { normalizeTaskData, PlanLibrary } from '@shared/planner'
-import type { Library, RunnerStatus, Task, TaskData, Template, TemplateKind } from '@shared/types'
+import { byPriority, isStateKind, type Library, type RunnerStatus, type Task, type TaskData, type Template, type TemplateKind } from '@shared/types'
 import { toast } from 'sonner'
 import { api } from './api'
 
@@ -38,8 +38,12 @@ export const useLib = create<LibState>((set) => ({
 
 export const reloadLib = () => useLib.getState().reload()
 
+/**
+ * 某类素材，按显示优先级排列（高 → 普通 → 低；同级保持原有手动排序）。
+ * state 同时包含尚未迁移的旧类型 pose / act（单人动作、行为已合并为状态）
+ */
 export function templatesOf(lib: Library | null, kind: TemplateKind): Template[] {
-  return (lib?.templates ?? []).filter((t) => t.kind === kind)
+  return byPriority((lib?.templates ?? []).filter((t) => (kind === 'state' ? isStateKind(t.kind) : t.kind === kind)))
 }
 
 // ---------------------------------------------------------------- 当前套图任务（跨页面保留编辑状态）

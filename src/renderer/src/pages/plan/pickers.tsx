@@ -6,7 +6,7 @@ import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
-import { Avatar, Chip, EmptyState, FieldLabel, SearchBox, StatusDot } from '@/components/common'
+import { Avatar, Chip, EmptyState, FieldLabel, PriorityBadge, SearchBox, StatusDot } from '@/components/common'
 import { api, call } from '@/lib/api'
 import { hueOf, matchesName } from '@/lib/hooks'
 import { reloadLib, templatesOf, useLib, useNav } from '@/lib/stores'
@@ -236,13 +236,13 @@ export function StoryPicker({
 }
 
 // ---------------------------------------------------------------- 动作
-/** 新增的动作：单人动作，或双人主体位（可带子体位） */
-export type NewAction = { pose_id: number } | { position_id: number; subposition_id: number | null }
+/** 新增的动作：单人（主角色的一个或多个状态，合并为一个动作），或双人主体位（可带子体位） */
+export type NewAction = { state_ids: number[] } | { position_id: number; subposition_id: number | null }
 
 export function PosePicker({ open, onOpenChange, onAdd, insertAfter }: { open: boolean; onOpenChange: (o: boolean) => void; onAdd: (items: NewAction[]) => void; insertAfter: number | null }) {
   const lib = useLib((s) => s.lib)
   const go = useNav((s) => s.go)
-  const poses = templatesOf(lib, 'pose')
+  const poses = templatesOf(lib, 'state')
   const positions = templatesOf(lib, 'position')
   const subs = templatesOf(lib, 'subposition')
   const [mode, setMode] = useState<'single' | 'duo'>('single')
@@ -257,15 +257,21 @@ export function PosePicker({ open, onOpenChange, onAdd, insertAfter }: { open: b
   const list = poses.filter((p) => matchesName(p, q))
   const posList = positions.filter((p) => matchesName(p, q) || subs.some((s) => s.parent_id === p.id && matchesName(s, q)))
   const toggle = (key: string) => setPicked((p) => (p.includes(key) ? p.filter((x) => x !== key) : [...p, key]))
-  const toAction = (key: string): NewAction => {
-    const [k, a, b] = key.split(':')
-    return k === 'p' ? { pose_id: Number(a) } : { position_id: Number(a), subposition_id: b ? Number(b) : null }
+  // 点选的多个状态合并为同一个动作（同一张图片中一起使用，不会拆成多个动作）；每个主体位各为一个动作
+  const toActions = (keys: string[]): NewAction[] => {
+    const states = keys.filter((k) => k.startsWith('p:')).map((k) => Number(k.split(':')[1]))
+    const duo = keys.filter((k) => k.startsWith('d:')).map((key): NewAction => {
+      const [, a, b] = key.split(':')
+      return { position_id: Number(a), subposition_id: b ? Number(b) : null }
+    })
+    return [...(states.length ? [{ state_ids: states }] : []), ...duo]
   }
   const commit = (keys: string[]) => {
     if (!keys.length) return
-    onAdd(keys.map(toAction))
+    onAdd(toActions(keys))
     onOpenChange(false)
   }
+  const nNew = toActions(picked).length
   const Badge = ({ k }: { k: string }) => {
     const n = picked.indexOf(k)
     return n >= 0 ? <span className="absolute top-2 right-2 grid size-5 place-items-center rounded-full bg-primary text-[11px] font-semibold text-primary-foreground">{n + 1}</span> : null
@@ -281,15 +287,15 @@ export function PosePicker({ open, onOpenChange, onAdd, insertAfter }: { open: b
         <DialogHeader>
           <DialogTitle>添加动作</DialogTitle>
           <DialogDescription>
-            点选一个或多个（按点选顺序添加），{insertAfter === null ? '添加到序列末尾' : `插入到第 ${insertAfter + 1} 个动作之后`}。双击可直接添加单个。
+            单人：点选的多个状态合并为一个动作，同一张图片中一起使用（按点选顺序拼接）；双人：每个主体位添加为一个动作。{insertAfter === null ? '添加到序列末尾' : `插入到第 ${insertAfter + 1} 个动作之后`}。双击可直接添加单个。
           </DialogDescription>
         </DialogHeader>
         <div className="flex items-center gap-3">
           <div className="flex rounded-xl bg-tint/[0.04] p-1">
             {(
               [
-                ['single', '单人动作'],
-                ['duo', '双人互动'],
+                ['single', '单人（状态）'],
+                ['duo', '双人动作'],
               ] as const
             ).map(([k, l]) => (
               <button key={k} type="button" onClick={() => setMode(k)} data-active={mode === k || undefined} className="h-7 rounded-lg px-3 text-[12.5px] text-muted-foreground data-[active]:bg-tint/[0.09] data-[active]:text-foreground">
@@ -310,7 +316,10 @@ export function PosePicker({ open, onOpenChange, onAdd, insertAfter }: { open: b
                 className={cn('relative rounded-xl bg-card p-3 text-left ring-1 ring-tint/[0.08] transition hover:bg-accent', picked.includes(`p:${p.id}`) && 'bg-primary/10 ring-primary/50')}
               >
                 <Badge k={`p:${p.id}`} />
-                <div className="truncate pr-6 text-[13px] font-medium">{p.name || '（未命名）'}</div>
+                <div className="flex items-center gap-1.5 pr-6">
+                  <span className="truncate text-[13px] font-medium">{p.name || '（未命名）'}</span>
+                  <PriorityBadge value={p.priority} />
+                </div>
                 <div className="mt-1 line-clamp-2 font-mono text-[11px] leading-snug text-muted-foreground">{p.positive || '—'}</div>
               </button>
             ))}
@@ -321,7 +330,10 @@ export function PosePicker({ open, onOpenChange, onAdd, insertAfter }: { open: b
                 <div key={p.id} className={cn('relative rounded-xl bg-card p-3 ring-1 ring-tint/[0.08]', picked.includes(`d:${p.id}`) && 'bg-primary/10 ring-primary/50')}>
                   <Badge k={`d:${p.id}`} />
                   <button type="button" className="block w-full text-left" onClick={() => toggle(`d:${p.id}`)} onDoubleClick={() => commit([`d:${p.id}`])}>
-                    <div className="truncate pr-6 text-[13px] font-medium">{p.name || '（未命名）'}</div>
+                    <div className="flex items-center gap-1.5 pr-6">
+                      <span className="truncate text-[13px] font-medium">{p.name || '（未命名）'}</span>
+                      <PriorityBadge value={p.priority} />
+                    </div>
                     <div className="mt-1 line-clamp-2 font-mono text-[11px] leading-snug text-muted-foreground">{p.positive || '—'}</div>
                   </button>
                   {kids.length > 0 && (
@@ -344,8 +356,8 @@ export function PosePicker({ open, onOpenChange, onAdd, insertAfter }: { open: b
             <div className="col-span-3">
               <EmptyState
                 icon={<Sparkles />}
-                title={q ? '没有匹配的动作' : mode === 'single' ? '还没有单人动作' : '还没有双人主体位'}
-                description={mode === 'single' ? '单人动作在「素材库 → 动作 → 单人动作」中管理。' : '主体位、子体位与行为在「素材库 → 动作 → 双人互动」中管理；行为在动作详情中叠加。'}
+                title={q ? '没有匹配的素材' : mode === 'single' ? '还没有状态素材' : '还没有双人主体位'}
+                description={mode === 'single' ? '状态在「素材库 → 状态」中管理。' : '主体位、子体位在「素材库 → 双人动作」中管理；行为（从状态中选择）在动作详情中叠加。'}
               />
             </div>
           )}
@@ -355,7 +367,7 @@ export function PosePicker({ open, onOpenChange, onAdd, insertAfter }: { open: b
             管理动作素材
           </Button>
           <Button disabled={!picked.length} onClick={() => commit(picked)}>
-            <Plus /> 添加 {picked.length || ''} 个动作
+            <Plus /> 添加 {nNew || ''} 个动作
           </Button>
         </DialogFooter>
       </DialogContent>

@@ -54,6 +54,9 @@ function record(table: TableName, v: unknown): Record<string, unknown> {
     if (c === 'target') {
       if (val !== 'any' && val !== 'female' && val !== 'male') throw new BadArg('无效的适用对象')
       out[c] = val
+    } else if (c === 'priority') {
+      if (val !== 'high' && val !== 'normal' && val !== 'low') throw new BadArg('无效的优先级')
+      out[c] = val
     } else if (c === 'parent_id') out[c] = val === null ? null : int(val, 'parent_id')
     else if (TEXT_COLS.has(c)) out[c] = str(val, c)
     else if (INT_COLS.has(c)) out[c] = int(val, c)
@@ -78,6 +81,8 @@ function record(table: TableName, v: unknown): Record<string, unknown> {
     }
   }
   if ('kind' in out && !(out.kind as string in TEMPLATE_KINDS)) throw new BadArg(`未知的模板类型 ${out.kind}`)
+  // 「单人动作」「行为」已合并为「状态」：旧类型名一律按状态保存
+  if (out.kind === 'pose' || out.kind === 'act') out.kind = 'state'
   return out
 }
 

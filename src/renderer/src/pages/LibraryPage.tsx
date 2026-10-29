@@ -1,5 +1,6 @@
-// 素材库：全局 / 场景 / 动作（单人动作、双人互动）/ 表情。卡片浏览 + 右侧编辑，修改自动保存。
-// 单人动作、表情、场景只编辑名称与正面 Prompt；动作和表情在套图任务中分配给主角色或第二角色。
+// 素材库：全局 / 场景 / 状态 / 表情 / 双人动作。卡片浏览 + 右侧编辑，修改自动保存。
+// 状态（旧版单人动作与行为合并而来）、表情、场景只编辑名称、正面 Prompt 与显示优先级；状态和表情在套图任务中分配给主角色或第二角色。
+// 优先级只影响选择列表中的排列（高 → 普通 → 低，同级保持手动排序），不影响 Prompt。
 // 旧文件中的分类、标签、适用对象、备注等字段不在界面中显示，保存时也不会写入（原值保留）。
 // 旧版男性描述与镜头不在素材库中显示：数据与任务引用保持不变，镜头在套图任务中选择和新建。
 
@@ -7,7 +8,7 @@ import { useState } from 'react'
 import { ChevronDown, ChevronRight, Copy, GripVertical, Pickaxe, Plus, Shapes, Trash2, X } from 'lucide-react'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
-import { Chip, EmptyState, FieldLabel, PageHeader, PromptField, SearchBox, TextInput } from '@/components/common'
+import { Chip, EmptyState, FieldLabel, PageHeader, PriorityBadge, PriorityToggle, PromptField, SearchBox, TextInput } from '@/components/common'
 import { SortableArea, useSortableItem } from '@/components/sortable'
 import { api, call } from '@/lib/api'
 import { matchesName, useDraft } from '@/lib/hooks'
@@ -16,39 +17,37 @@ import { cn } from '@/lib/utils'
 import { PLACEHOLDER_HELP } from '@shared/prompt'
 import { TEMPLATE_KINDS, type Template, type TemplateKind } from '@shared/types'
 
-type Tab = 'global' | 'scene' | 'action' | 'expression'
-type Sub = 'pose' | 'duo' | 'act'
+type Tab = 'global' | 'scene' | 'state' | 'expression' | 'duo'
 const TABS: [Tab, string][] = [
   ['global', '全局'],
   ['scene', '场景'],
-  ['action', '动作'],
+  ['state', '状态'],
   ['expression', '表情'],
+  ['duo', '双人动作'],
 ]
-const SUBS: Partial<Record<Tab, [Sub, string][]>> = {
-  action: [
-    ['pose', '单人动作'],
-    ['duo', '双人互动'],
-    ['act', '行为'],
-  ],
-}
+const STATE_HINT = '状态素材（旧版「单人动作」与「行为」都在这里）。在套图任务中可为主角色、第二角色各选择多个，同一张图片中一起使用；双人动作的「行为」也从这里选择。'
 const HINTS: Record<TemplateKind, string> = {
   global: '画质、画风等通用 Prompt。每个套图任务选择其中一个。',
   scene: '可复用的环境 Prompt（卧室、教室、街道等）。与剧情库不同：场景只描述环境，在任务中按动作选择。',
-  pose: '单人动作（旧版「姿态」模板都在这里）。在套图任务中可以分配给主角色或第二角色。',
+  state: STATE_HINT,
+  pose: STATE_HINT,
   position: '双人主体位，例如正常位、骑乘位。每个主体位有一段基础 Prompt，并可以有多个子体位作为补充。',
   subposition: '子体位是主体位的补充 Prompt（例如抬腿），生成时拼在主体位之后，可以只写差异部分。',
-  act: '双人互动的行为（拥抱、接吻等）：独立的可复用素材，不属于某个主体位，在任务中可与任意主体位叠加多个。',
+  act: STATE_HINT,
   expression: '表情 Prompt。在套图任务中分配给主角色（可多选，平均分配张数）或第二角色。',
   male: '男性描述（兼容素材）：分类为「基础」的可作为任务的男性基础描述；旧版的男性动作 / 表情模板仍可在任务的男性设置中选择。',
   camera: '镜头（兼容素材）：仍可在任务的动作详情中选择，POV 不会自动启用男性出场。',
 }
+/** 状态可能被引用的位置：主角色 / 第二角色的状态、双人动作的行为，以及旧任务中的单选动作字段 */
+const STATE_REFS = ['state_ids', 'second_state_ids', 'act_ids', 'pose_id', 'second_pose_id', 'male_pose_ids']
 const REF_FIELDS: Record<TemplateKind, string[]> = {
   global: ['global_id'],
   scene: ['scene_id'],
-  pose: ['pose_id', 'male_pose_ids', 'second_pose_id'],
+  state: STATE_REFS,
+  pose: STATE_REFS,
   position: ['position_id'],
   subposition: ['subposition_id'],
-  act: ['act_ids'],
+  act: STATE_REFS,
   expression: ['expression_ids', 'male_expression_ids', 'second_expression_id'],
   male: ['male_base_id', 'male_ids'],
   camera: ['camera_id'],
@@ -73,6 +72,7 @@ function TemplateCard({ t, selected, onClick, sortable }: { t: Template; selecte
     >
       <div className="flex items-center gap-1.5">
         <span className="truncate text-[13px] font-medium">{t.name || '（未命名）'}</span>
+        <PriorityBadge value={t.priority} />
       </div>
       <div className="mt-1.5 line-clamp-3 font-mono text-[11px] leading-snug text-muted-foreground">{t.positive || <span className="italic opacity-60">（空）</span>}</div>
     </div>
@@ -89,6 +89,7 @@ export function TemplateEditor({ t, onClose, onDeleted }: { t: Template; onClose
     const rec: Record<string, unknown> = { id: v.id, _revision: v._revision, name: v.name, positive: v.positive }
     if (showNeg || v.negative !== t.negative) rec.negative = v.negative
     if (kind === 'subposition') rec.parent_id = v.parent_id ?? null
+    if (v.priority) rec.priority = v.priority
     await call(api['templates.save'](rec as never))
     await reloadLib()
   })
@@ -160,6 +161,10 @@ export function TemplateEditor({ t, onClose, onDeleted }: { t: Template; onClose
             </div>
           </div>
         )}
+        <div>
+          <FieldLabel>优先级</FieldLabel>
+          <PriorityToggle value={draft.priority} onChange={(v) => patch({ priority: v })} />
+        </div>
         <PromptField label="正面 Prompt" value={draft.positive} onChange={(v) => patch({ positive: v })} placeholder={`原样保存，不做任何格式转换。可用占位符 ${PLACEHOLDER_HELP}`} minRows={4} copy />
         {showNeg ? (
           <PromptField label="负面 Prompt" value={draft.negative} onChange={(v) => patch({ negative: v })} placeholder="通用负面 Prompt，可留空。新任务的负面 Prompt 统一来自这里" minRows={2} copy />
@@ -222,6 +227,7 @@ function useTemplateDraft(t: Template) {
   return useDraft<Template>(t, t.id, async (v) => {
     const rec: Record<string, unknown> = { id: v.id, _revision: v._revision, name: v.name, positive: v.positive }
     if (v.negative !== t.negative) rec.negative = v.negative
+    if (v.priority) rec.priority = v.priority
     await call(api['templates.save'](rec as never))
     await reloadLib()
   })
@@ -237,7 +243,10 @@ function PositionRow({ p, subs, selected, onClick }: { p: Template; subs: number
         <GripVertical className="size-3.5" />
       </button>
       <button type="button" onClick={onClick} className="min-w-0 flex-1 text-left">
-        <div className="truncate text-[13px] font-medium">{p.name || '（未命名）'}</div>
+        <div className="flex items-center gap-1.5">
+          <span className="truncate text-[13px] font-medium">{p.name || '（未命名）'}</span>
+          <PriorityBadge value={p.priority} />
+        </div>
         <div className="truncate text-[11px] text-muted-foreground">{subs ? `${subs} 个子体位` : '没有子体位'}</div>
       </button>
     </div>
@@ -255,6 +264,7 @@ function SubpositionRow({ t, open, onToggle, onDeleted }: { t: Template; open: b
         <button type="button" onClick={onToggle} className="flex min-w-0 flex-1 items-center gap-2 text-left">
           {open ? <ChevronDown className="size-4 shrink-0 text-muted-foreground" /> : <ChevronRight className="size-4 shrink-0 text-muted-foreground" />}
           <span className="shrink-0 text-[13px] font-medium">{t.name || '（未命名）'}</span>
+          <PriorityBadge value={t.priority} />
           {!open && <span className="min-w-0 truncate font-mono text-[11px] text-muted-foreground">{t.positive || '（空）'}</span>}
         </button>
       </div>
@@ -303,6 +313,7 @@ function SubpositionEditor({ t, onDeleted }: { t: Template; onDeleted: () => voi
         </Button>
       </div>
       <PromptField value={draft.positive} onChange={(v) => patch({ positive: v })} placeholder="补充 Prompt：拼在主体位基础 Prompt 之后（原样保存），可以只写差异部分" minRows={2} />
+      <PriorityToggle value={draft.priority} onChange={(v) => patch({ priority: v })} />
       <LegacyNegative value={draft.negative} onClear={() => patch({ negative: '' })} />
     </div>
   )
@@ -360,6 +371,10 @@ function PositionDetail({ p, onDeleted }: { p: Template; onDeleted: () => void }
         <FieldLabel>名称</FieldLabel>
         <TextInput value={draft.name} onChange={(v) => patch({ name: v })} />
       </div>
+      <div>
+        <FieldLabel>优先级</FieldLabel>
+        <PriorityToggle value={draft.priority} onChange={(v) => patch({ priority: v })} />
+      </div>
       <div className="space-y-2">
         <PromptField label="基础 Prompt" value={draft.positive} onChange={(v) => patch({ positive: v })} placeholder={`主体位的基础 Prompt（原样保存）。可用占位符 ${PLACEHOLDER_HELP}`} minRows={3} copy />
         <LegacyNegative value={draft.negative} onClear={() => patch({ negative: '' })} />
@@ -405,7 +420,7 @@ function PositionDetail({ p, onDeleted }: { p: Template; onDeleted: () => void }
   )
 }
 
-/** 双人互动：左侧主体位列表，右侧主体位详情（基础 Prompt 与子体位）。行为在「行为」中独立管理 */
+/** 双人动作：左侧主体位列表，右侧主体位详情（基础 Prompt 与子体位）。任务中叠加的行为从「状态」中选择 */
 function DuoPanel({ sel, onSelect, q }: { sel: number | null; onSelect: (id: number | null) => void; q: string }) {
   const lib = useLib((s) => s.lib)
   const positions = templatesOf(lib, 'position')
@@ -482,19 +497,18 @@ function DuoPanel({ sel, onSelect, q }: { sel: number | null; onSelect: (id: num
 
 export default function LibraryPage() {
   const lib = useLib((s) => s.lib)
-  const [tab, setTab] = useState<Tab>('action')
-  const [sub, setSub] = useState<Record<string, Sub>>({ action: 'pose' })
+  const [tab, setTab] = useState<Tab>('state')
   const [q, setQ] = useState('')
   const [sel, setSel] = useState<number | null>(null)
-  const curSub = SUBS[tab] ? sub[tab] : null
-  const kind: TemplateKind | null = tab === 'action' ? (curSub === 'duo' ? null : curSub === 'act' ? 'act' : 'pose') : tab
+  const kind: TemplateKind | null = tab === 'duo' ? null : tab
   const cur = sel ? lib?.templates.find((t) => t.id === sel) : undefined
   const count = (k: TemplateKind) => templatesOf(lib, k).length
   const tabCount: Record<Tab, number> = {
     global: count('global'),
     scene: count('scene'),
-    action: count('pose') + count('position') + count('subposition') + count('act'),
+    state: count('state'),
     expression: count('expression'),
+    duo: count('position') + count('subposition'),
   }
   const add = async () => {
     if (!kind) return
@@ -509,7 +523,7 @@ export default function LibraryPage() {
       <div className="flex min-w-0 flex-1 flex-col">
         <PageHeader
           title="素材库"
-          description={kind ? HINTS[kind] : '双人互动 = 主体位基础 Prompt + 可选的子体位补充 Prompt + 可叠加的行为（在「行为」中独立管理）。'}
+          description={kind ? HINTS[kind] : '双人动作 = 主体位基础 Prompt + 可选的子体位补充 Prompt + 可叠加的行为（在任务中从「状态」素材选择）。'}
           actions={
             <>
               <Button variant="ghost" size="sm" onClick={() => useNav.getState().go('mining')} data-testid="open-mining">
@@ -534,6 +548,7 @@ export default function LibraryPage() {
                   setSel(null)
                 }}
                 data-active={tab === k || undefined}
+                data-testid={`lib-tab-${k}`}
                 className="h-7 rounded-lg px-3 text-[12.5px] text-muted-foreground transition hover:text-foreground data-[active]:bg-tint/[0.09] data-[active]:text-foreground"
               >
                 {label}
@@ -541,22 +556,6 @@ export default function LibraryPage() {
               </button>
             ))}
           </div>
-          {SUBS[tab] && (
-            <div className="flex gap-1">
-              {SUBS[tab]!.map(([k, label]) => (
-                <Chip
-                  key={k}
-                  active={curSub === k}
-                  onClick={() => {
-                    setSub((s) => ({ ...s, [tab]: k }))
-                    setSel(null)
-                  }}
-                >
-                  {label}
-                </Chip>
-              ))}
-            </div>
-          )}
           <SearchBox value={q} onChange={setQ} placeholder="搜索名称…" className="ml-auto w-64" />
         </div>
         <div className="min-h-0 flex-1 overflow-y-auto px-6 pt-0.5 pb-6">

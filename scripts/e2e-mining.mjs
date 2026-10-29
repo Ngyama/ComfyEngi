@@ -166,15 +166,15 @@ try {
   await c0.locator('textarea').fill('cowgirl position, straddling, (sitting on lap:1.1)')
   await c0.locator('button[role=checkbox]').first().click()
   await cards.nth(1).locator('button[role=checkbox]').first().click()
-  await win.locator('[data-testid=save-kind]').selectOption('pose')
+  await win.locator('[data-testid=save-kind]').selectOption('state')
   await shot('m08-before-save')
   await win.locator('[data-testid=mining-save]').click()
   await win.waitForTimeout(1500)
-  const poses = existsSync(join(vault, 'prompts', 'poses')) ? readdirSync(join(vault, 'prompts', 'poses')) : []
+  const poses = existsSync(join(vault, 'prompts', 'states')) ? readdirSync(join(vault, 'prompts', 'states')) : []
   check('保存为 Markdown 素材文件', poses.includes('骑乘组合.md') && poses.includes('提取组合 002.md'), poses.join(','))
   const saved = (await lib()).templates.filter((t) => t.name === '骑乘组合' || t.name === '提取组合 002')
-  check('素材字段正确（类别、Prompt 原文、空负面）', saved.length === 2 && saved.every((t) => t.kind === 'pose' && t.negative === '') && saved.some((t) => t.positive === 'cowgirl position, straddling, (sitting on lap:1.1)'), JSON.stringify(saved.map((t) => [t.kind, t.positive])))
-  check('保存后标记为已保存', (await c0.innerText()).includes('已保存为单人动作'))
+  check('素材字段正确（类别、Prompt 原文、空负面）', saved.length === 2 && saved.every((t) => t.kind === 'state' && t.negative === '') && saved.some((t) => t.positive === 'cowgirl position, straddling, (sitting on lap:1.1)'), JSON.stringify(saved.map((t) => [t.kind, t.positive])))
+  check('保存后标记为已保存', (await c0.innerText()).includes('已保存为状态'))
   await shot('m09-saved')
 
   // 与已有素材重复：提示并跳过

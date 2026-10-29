@@ -68,7 +68,7 @@ export const useMining = create<MiningState>((set) => ({
   analyzing: false,
   drafts: [],
   nextNo: 1,
-  saveKind: 'pose',
+  saveKind: 'state',
   parentId: null,
   dict: null,
   lastSave: null,

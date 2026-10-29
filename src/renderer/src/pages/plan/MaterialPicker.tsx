@@ -5,7 +5,7 @@ import { useEffect, useMemo, useState, type ReactNode } from 'react'
 import { Check, X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog'
-import { SearchBox } from '@/components/common'
+import { PriorityBadge, SearchBox } from '@/components/common'
 import { filterMaterials, selectedOptions, toggleSelection, type MaterialOption } from '@/lib/material-select'
 import { cn } from '@/lib/utils'
 
@@ -92,7 +92,7 @@ export function MaterialPicker({
           )}
           {shown.map((t) => {
             const n = draft.indexOf(t.id)
-            return <Row key={t.id} active={multi ? n >= 0 : value[0] === t.id} order={numbered && multi && n >= 0 && draft.length > 1 ? n + 1 : undefined} onClick={() => pick(t.id)} name={t.name || '（未命名）'} preview={oneLine(t.positive)} />
+            return <Row key={t.id} active={multi ? n >= 0 : value[0] === t.id} order={numbered && multi && n >= 0 && draft.length > 1 ? n + 1 : undefined} onClick={() => pick(t.id)} name={t.name || '（未命名）'} preview={oneLine(t.positive)} priority={t.priority} />
           })}
           {!shown.length && <div className="py-10 text-center text-xs text-muted-foreground">{items.length ? '没有匹配的素材' : (empty ?? '还没有素材')}</div>}
         </div>
@@ -115,7 +115,7 @@ export function MaterialPicker({
   )
 }
 
-function Row({ active, order, onClick, name, preview, muted }: { active: boolean; order?: number; onClick: () => void; name: string; preview?: string; muted?: boolean }) {
+function Row({ active, order, onClick, name, preview, muted, priority }: { active: boolean; order?: number; onClick: () => void; name: string; preview?: string; muted?: boolean; priority?: MaterialOption['priority'] }) {
   return (
     <button
       type="button"
@@ -127,7 +127,10 @@ function Row({ active, order, onClick, name, preview, muted }: { active: boolean
         {active && (order ? <span className="text-[10px] font-semibold tabular-nums">{order}</span> : <Check className="size-3" />)}
       </span>
       <span className="min-w-0 flex-1">
-        <span className={cn('block truncate text-[13px]', muted && 'text-muted-foreground')}>{name}</span>
+        <span className="flex items-center gap-1.5">
+          <span className={cn('block truncate text-[13px]', muted && 'text-muted-foreground')}>{name}</span>
+          <PriorityBadge value={priority} />
+        </span>
         {preview && <span className="block truncate font-mono text-[11px] text-muted-foreground">{preview}</span>}
       </span>
     </button>

@@ -60,9 +60,12 @@ export function sizeSchedule(sizes: SizeCounts | undefined, nExpr: number): { si
   return out
 }
 
-export function newItem(poseId: number | null = null, outfitId: number | null = null): TaskItem {
+/** 新动作：stateId 为主角色的第一个状态（可不选） */
+export function newItem(stateId: number | null = null, outfitId: number | null = null): TaskItem {
   return {
-    pose_id: poseId,
+    state_ids: stateId ? [stateId] : [],
+    second_state_ids: [],
+    pose_id: null,
     outfit_id: outfitId,
     expression_ids: [],
     count: 10,
@@ -136,11 +139,27 @@ export function newTaskWithDefaults(
   return d
 }
 
-/** 旧数据中可能缺少字段：补齐默认值（不修改原对象） */
+const ids = (v: unknown): number[] => (Array.isArray(v) ? v.filter((x): x is number => typeof x === 'number') : [])
+
+/**
+ * 主角色的状态：新数据的 state_ids；旧任务只有单选的 pose_id 时转换为一个元素的数组。
+ * （界面修改状态时同时清空 pose_id，所以两者不会同时有值）
+ */
+export function itemStateIds(it: Partial<TaskItem>): number[] {
+  const v = ids(it.state_ids)
+  return v.length ? v : it.pose_id ? [it.pose_id] : []
+}
+/** 第二角色的状态（旧任务的 second_pose_id 同样转换） */
+export function itemStateIds2(it: Partial<TaskItem>): number[] {
+  const v = ids(it.second_state_ids)
+  return v.length ? v : it.second_pose_id ? [it.second_pose_id] : []
+}
+
+/** 旧数据中可能缺少字段：补齐默认值（不修改原对象）。旧版单选动作迁移为状态多选（一个元素），原字段置空 */
 export function normalizeTaskData(d: Partial<TaskData> | null | undefined): TaskData {
   const base = newTaskData()
   const out = { ...base, ...(d ?? {}) } as TaskData
-  out.items = (d?.items ?? []).map((it) => ({ ...newItem(), ...it }))
+  out.items = (d?.items ?? []).map((it) => ({ ...newItem(), ...it, state_ids: itemStateIds(it), second_state_ids: itemStateIds2(it), pose_id: null, second_pose_id: null }))
   return out
 }
 
@@ -345,18 +364,29 @@ export function expandTask(data: TaskData, lib: PlanLibrary, settings: Settings,
   }
 
   // ---- 动作序列 ----
-  // 每个条目：单人动作（pose_id），或双人主体位 + 子体位（可另加女性动作）；行为可叠加
+  // 每个条目：主角色的状态（可多选），或双人主体位 + 子体位（可另加状态）；行为可叠加
   const tpl = (id: number | null | undefined) => (id != null && lib.templates.get(id)) || null
+  const trimAll = settings.trim_modules ?? true
+  /** 同一角色的多个状态合并为一个模块：按选择顺序、用模块内连接符拼接，内容不做任何修改；只有一个时与旧版单选完全相同 */
+  const stateModule = (list: Template[], who: Character | null): [string, string] => {
+    if (list.length === 1) return filled(list[0], who)
+    const parts = list.map((t) => filled(t, who))
+    return [
+      joinParts(parts.map((x) => x[0]), unescapeSeparator(settings.pos_separator ?? ', '), trimAll),
+      joinParts(parts.map((x) => x[1]), unescapeSeparator(settings.neg_separator ?? ', '), trimAll),
+    ]
+  }
   const defaultScene = tpl(data.scene_id)
   if (data.scene_id && !defaultScene) errors.push('所选默认场景已被删除')
   ;(data.items ?? []).forEach((it, pi) => {
     let where = `第 ${pi + 1} 个动作`
-    const pose = tpl(it.pose_id)
+    const stateIds = itemStateIds(it)
+    const states = stateIds.map((x) => tpl(x)).filter((t): t is Template => !!t)
     const position = tpl(it.position_id)
-    if (it.pose_id && !pose) errors.push(`${where}：动作模板已被删除`)
+    if (states.length !== stateIds.length) errors.push(`${where}：有状态素材已被删除`)
     if (it.position_id && !position) errors.push(`${where}：主体位已被删除`)
-    if (!pose && !position) {
-      if (!it.pose_id && !it.position_id) errors.push(`${where}：未选择动作`)
+    if (!states.length && !position) {
+      if (!stateIds.length && !it.position_id) errors.push(`${where}：未选择状态或双人动作`)
       return
     }
     let sub = tpl(it.subposition_id)
@@ -368,7 +398,7 @@ export function expandTask(data: TaskData, lib: PlanLibrary, settings: Settings,
     }
     const acts = (it.act_ids ?? []).map((x) => tpl(x)).filter((t): t is Template => !!t)
     if (acts.length !== (it.act_ids ?? []).length) errors.push(`${where}：有行为素材已被删除`)
-    const label = position ? (sub ? `${position.name} · ${sub.name}` : position.name) : pose!.name
+    const label = position ? (sub ? `${position.name} · ${sub.name}` : position.name) : states.map((t) => t.name).join(' + ')
     where = `第 ${pi + 1} 个动作「${label}」`
     const outfit = checkOutfit(it.outfit_id, where)
     const exprs: Template[] = []
@@ -387,8 +417,9 @@ export function expandTask(data: TaskData, lib: PlanLibrary, settings: Settings,
     if (secondOn && !data.second_character_id) errors.push(`${where}：已启用第二角色，但任务还没有选择第二角色`)
     const second = secondOn && !!char2
     const outfit2 = second ? checkOutfit(it.second_outfit_id, `${where}（第二角色）`, char2) : null
-    const pose2 = second ? tpl(it.second_pose_id) : null
-    if (second && it.second_pose_id && !pose2) errors.push(`${where}：第二角色的动作模板已被删除`)
+    const stateIds2 = second ? itemStateIds2(it) : []
+    const states2 = stateIds2.map((x) => tpl(x)).filter((t): t is Template => !!t)
+    if (states2.length !== stateIds2.length) errors.push(`${where}：第二角色有状态素材已被删除`)
     const expr2 = second ? tpl(it.second_expression_id) : null
     if (second && it.second_expression_id && !expr2) errors.push(`${where}：第二角色的表情模板已被删除`)
     const maleTs = (it.male_ids ?? []).map((x) => tpl(x)).filter((t): t is Template => !!t)
@@ -429,7 +460,7 @@ export function expandTask(data: TaskData, lib: PlanLibrary, settings: Settings,
     for (const { e, j, size } of slots) {
       const n = per
       const m = baseModules(outfit)
-      m.content = filled(pose, char)
+      m.content = stateModule(states, char)
       m.expression = filled(e, char)
       // 男性模块：基础描述 + 男性动作 + 男性表情 + 旧版男性模板 + 附加文本；未启用男性时一律为空
       m.male = maleOn ? maleModule(maleBase, [...malePoses, ...maleExprs, ...maleTs], it.male_extra ?? '', settings, char) : ['', '']
@@ -441,7 +472,7 @@ export function expandTask(data: TaskData, lib: PlanLibrary, settings: Settings,
       if (second) {
         m.character2 = pair(char2)
         m.outfit2 = pair(outfit2)
-        m.content2 = filled(pose2, char2)
+        m.content2 = stateModule(states2, char2)
         m.expression2 = filled(expr2, char2)
       }
       const meta: UnitMeta = {
@@ -466,10 +497,11 @@ export function expandTask(data: TaskData, lib: PlanLibrary, settings: Settings,
       if (position) meta.position = position.name
       if (sub) meta.subposition = sub.name
       if (acts.length) meta.acts = acts.map((a) => a.name)
+      if (states.length > 1 || (position && states.length)) meta.states = states.map((t) => t.name)
       if (second) {
         meta.character2 = char2!.name
         if (outfit2) meta.outfit2 = outfit2.name
-        if (pose2) meta.action2 = pose2.name
+        if (states2.length) meta.action2 = states2.map((t) => t.name).join(' + ')
         if (expr2) meta.expression2 = expr2.name
       }
       if (size) {

@@ -326,7 +326,7 @@ try {
   check('角色列表头像使用 LoRA 封面', (await win.locator('main button', { hasText: '角色B' }).first().locator('img').count()) === 1)
   const planB = await win.evaluate(async (cid) => {
     const lib = await window.api['library.load']()
-    const pose = lib.templates.find((x) => x.kind === 'pose')
+    const pose = lib.templates.find((x) => x.kind === 'state' || x.kind === 'pose')
     const data = { character_id: cid, story_id: null, story_outfit_id: null, global_id: null, male_base_id: null, workflow_id: null, seed_base: 1, items: [{ pose_id: pose.id, outfit_id: null, expression_ids: [], count: 1, camera_id: null, male_enabled: false, male_ids: [], male_extra: '', extra_positive: '', extra_negative: '' }] }
     const t = await window.api['tasks.create']('触发词测试', data)
     return window.api['plan.forTask'](t.id)

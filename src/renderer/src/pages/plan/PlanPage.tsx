@@ -31,7 +31,7 @@ import { api, call } from '@/lib/api'
 import { hueOf } from '@/lib/hooks'
 import { confirm, reloadLib, templatesOf, useLib, useNav, usePlan, useRunner } from '@/lib/stores'
 import { cn } from '@/lib/utils'
-import { defaultItemCount, defaultSizes, expandTask, newInteractionItem, newItem, newTaskWithDefaults, setItemSizes, sizeCount } from '@shared/planner'
+import { defaultItemCount, defaultSizes, expandTask, itemStateIds, newInteractionItem, newItem, newTaskWithDefaults, setItemSizes, sizeCount } from '@shared/planner'
 import type { Plan } from '@shared/api'
 import { DEFAULT_SETTINGS, SIZE_PRESETS, type Library, type PlanUnit, type TaskData, type TaskItem } from '@shared/types'
 import { PlanPreviewDialog, TaskSettingsDialog } from './dialogs'
@@ -214,13 +214,13 @@ function PoseCard({
   const lib = useLib((s) => s.lib)
   const s = useSortableItem(id)
   const T = (tid: number | null) => (tid ? lib?.templates.find((t) => t.id === tid) : undefined)
-  const pose = T(item.pose_id)
+  const states = itemStateIds(item).map((x) => T(x))
   const position = T(item.position_id ?? null)
   const sub = T(item.subposition_id ?? null)
   const acts = (item.act_ids ?? []).map((a) => T(a)?.name ?? '（已删除）')
   const scene = T(item.scene_id ?? null)
-  const label = item.position_id ? (position ? (sub ? `${position.name} · ${sub.name}` : position.name) : '（主体位已删除）') : item.pose_id ? (pose?.name ?? '（动作已删除）') : '（未选择动作）'
-  const missing = item.position_id ? !position : !pose
+  const label = item.position_id ? (position ? (sub ? `${position.name} · ${sub.name}` : position.name) : '（主体位已删除）') : states.length ? states.map((t) => t?.name ?? '（状态已删除）').join(' + ') : '（未选择状态）'
+  const missing = item.position_id ? !position : !states.length || states.some((t) => !t)
   const outfit = item.outfit_id ? lib?.outfits.find((o) => o.id === item.outfit_id) : undefined
   const exprs = item.expression_ids.map((e) => T(e)?.name ?? '（已删除）')
   const camera = T(item.camera_id)
@@ -249,7 +249,7 @@ function PoseCard({
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-2">
           <span data-testid="pose-name" className={cn('truncate text-[14px] font-medium', missing && 'text-destructive')}>{label}</span>
-          {item.position_id && pose && <span className="shrink-0 truncate text-[11px] text-muted-foreground">+ {pose.name}</span>}
+          {item.position_id && states.length > 0 && <span className="shrink-0 truncate text-[11px] text-muted-foreground">+ {states.map((t) => t?.name ?? '（已删除）').join(' + ')}</span>}
           {acts.length > 0 && (
             <span className="shrink-0 rounded-md bg-violet-500/10 px-1.5 py-0.5 text-[10.5px] text-violet-600" title="行为">
               {acts.join(' + ')}
@@ -386,7 +386,7 @@ export default function PlanPage() {
         at,
         0,
         ...ids.map((a) => {
-          const it = 'pose_id' in a ? newItem(a.pose_id, prev?.outfit_id ?? null) : newInteractionItem(a.position_id, a.subposition_id, prev?.outfit_id ?? null, !!x.second_character_id)
+          const it = 'state_ids' in a ? { ...newItem(null, prev?.outfit_id ?? null), state_ids: a.state_ids } : newInteractionItem(a.position_id, a.subposition_id, prev?.outfit_id ?? null, !!x.second_character_id)
           setItemSizes(it, sizes)
           return it
         }),

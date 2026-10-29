@@ -4,6 +4,8 @@ export interface MaterialOption {
   id: number
   name: string
   positive?: string
+  /** 显示优先级（只用于标记；排列由调用方按优先级排好） */
+  priority?: import('@shared/types').Priority
 }
 
 /** 按名称搜索（空格分隔的多个词都要命中，不区分大小写） */

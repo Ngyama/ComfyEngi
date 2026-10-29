@@ -130,7 +130,9 @@ describe('旧版 ID-UUID 文件名迁移', () => {
     const { root, keys, contents, ids } = legacyVault()
     const s = openVault(root)
     expect(keys.map((k) => nameOf(s, k))).toEqual(['Miyo.md', 'Miyo - 校服.md', '鸭子坐.md', '鸭子坐 (2).md', 'CON_.md'])
-    for (const k of keys) expect(readFileSync(pathOf(s, k), 'utf8')).toBe(contents.get(k))
+    // 单人动作同时合并为状态：只把 kind 改为 state 并记录 legacy_kind，其余内容逐字节不变
+    const migrated = (k: string) => (k === `templates:${ids.p1}` || k === `templates:${ids.p2}` ? contents.get(k)!.replace('kind: "pose"', 'kind: "state"').replace('\n---\n', '\nlegacy_kind: "pose"\n---\n') : contents.get(k))
+    for (const k of keys) expect(readFileSync(pathOf(s, k), 'utf8')).toBe(migrated(k))
     expect(mdFiles(root).some((f) => /\d+-[0-9a-f-]{36}\.md$/.test(f))).toBe(false)
     expect(s.get('outfits', ids.outfit)?.character_id).toBe(ids.miyo)
     expect(s.get('templates', ids.p2)?.positive).toBe('wariza 2')

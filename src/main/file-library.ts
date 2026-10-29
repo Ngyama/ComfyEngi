@@ -122,6 +122,38 @@ export class FileLibrary {
     for (const key of keys) if (this.syncName(key)) n++
     return n
   }
+  /**
+   * 「单人动作」pose 与「行为」act 合并为「状态」：只把 frontmatter 的 kind 改为 state 并记录 legacy_kind，
+   * 文件位置、稳定 ID、名称、Prompt 等其他字段不变。改写前把原文件复制到 backupDir（保持相对路径）。
+   * 外部修改过（与扫描结果不一致）的文件跳过并提示，下次打开时再迁移；未迁移的文件界面中仍按状态显示。返回迁移数量
+   */
+  migrateStateKinds(backupDir: string): number {
+    const todo = [...this.entries.entries()].filter(([, e]) => e.row.type === 'templates' && (e.row.kind === 'pose' || e.row.kind === 'act'))
+    let n = 0
+    for (const [key, e] of todo) {
+      try {
+        const text = readFileSync(e.path, 'utf8')
+        if (hash(text) !== e.revision) throw new Error('文件已被外部修改')
+        const copy = join(backupDir, relative(this.root, e.path))
+        mkdirSync(dirname(copy), { recursive: true })
+        writeFileSync(copy, text, { flag: 'wx' })
+        const row = { ...e.row, kind: 'state', legacy_kind: e.row.kind }
+        const next = encode(row)
+        atomic(e.path, next)
+        this.entries.set(key, { path: e.path, row, revision: hash(next) })
+        n++
+      } catch (err) {
+        this.notices.push(`未能把 ${e.path} 迁移为「状态」，已保持原样：${(err as Error).message}`)
+      }
+    }
+    if (n) {
+      try {
+        mkdirSync(join(this.root, '.comfyengi'), { recursive: true })
+        appendFileSync(join(this.root, '.comfyengi', 'migration-log.jsonl'), JSON.stringify({ time: new Date().toISOString(), migration: 'state-kinds', count: n, backup: backupDir }) + '\n')
+      } catch { /* 日志写入失败不影响迁移 */ }
+    }
+    return n
+  }
   // ---------------- 角色文件夹：与 prompts/characters 下的真实目录一致，只用于组织（不写入角色文件）
 
   private get charRoot() { return join(this.root, 'prompts', 'characters') }
@@ -248,7 +280,7 @@ export class FileLibrary {
     delete row._revision
     delete row._folder
     if (table === 'outfits' && !this.entries.has(`characters:${row.character_id}`)) throw new Error('服装角色不存在')
-    const dir = table === 'templates' ? `prompts/${({pose:'poses',expression:'expressions',camera:'cameras',male:'male',global:'global',scene:'scenes',position:'positions',subposition:'positions',act:'acts'} as Row)[row.kind] || 'global'}` : table === 'workflows' ? 'workflows' : `prompts/${table}`
+    const dir = table === 'templates' ? `prompts/${({state:'states',pose:'poses',expression:'expressions',camera:'cameras',male:'male',global:'global',scene:'scenes',position:'positions',subposition:'positions',act:'acts'} as Row)[row.kind] || 'global'}` : table === 'workflows' ? 'workflows' : `prompts/${table}`
     mkdirSync(join(this.root,dir),{recursive:true})
     const newDir = table === 'characters' && opts.folder ? this.folderPath(opts.folder) : join(this.root,dir)
     const path = old?.path || (table === 'workflows' ? join(this.root,dir,`${id}-${randomUUID()}.json`) : this.freePath(newDir, this.baseName(row)))

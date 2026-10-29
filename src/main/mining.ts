@@ -255,9 +255,11 @@ export function saveMined(store: Store, items: MiningSaveItem[]): MiningSaveOutc
     if (sig && !existing.has(sig)) existing.set(sig, `${t.name || '（未命名）'}（${TEMPLATE_KINDS[t.kind as keyof typeof TEMPLATE_KINDS] ?? t.kind}）`)
   }
   const out: MiningSaveOutcome[] = []
-  for (const it of items) {
+  for (let it of items) {
     const name = String(it.name ?? '').trim() || '提取组合'
     try {
+      // 「单人动作」「行为」已合并为「状态」：旧类型名按状态保存
+      if (it.kind === 'pose' || it.kind === 'act') it = { ...it, kind: 'state' }
       if (!MINING_SAVE_KINDS.includes(it.kind)) throw new Error(`不支持保存为 ${it.kind}`)
       const positive = String(it.positive ?? '').trim()
       const sig = promptSignature(positive)

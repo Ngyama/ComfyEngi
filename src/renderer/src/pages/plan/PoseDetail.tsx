@@ -1,5 +1,5 @@
 // 动作详细设置：浮动在主界面右侧，点击其他卡片即可切换，修改即时生效并自动保存。
-// 分三部分：画面内容（单人动作 / 双人主体位、子体位、行为、场景、镜头）、角色配置（主角色与第二角色的服装、动作、表情）、
+// 分三部分：画面内容（单人 / 双人主体位、子体位、行为、场景、镜头）、角色配置（主角色与第二角色各自的服装、状态（可多选）、表情）、
 // 生成设置（各尺寸张数、附加 Prompt、最终 Prompt 预览）。素材较多时不在面板中平铺，点击字段后在选择器中搜索选择。
 
 import { useMemo, useState, type ReactNode } from 'react'
@@ -12,7 +12,7 @@ import { useDraft } from '@/lib/hooks'
 import type { MaterialOption } from '@/lib/material-select'
 import { reloadLib, templatesOf, useLib, usePlan } from '@/lib/stores'
 import { cn } from '@/lib/utils'
-import { setItemSizes, sizeCount, sizeTotal, stepSize } from '@shared/planner'
+import { itemStateIds, itemStateIds2, setItemSizes, sizeCount, sizeTotal, stepSize } from '@shared/planner'
 import { PLACEHOLDER_HELP } from '@shared/prompt'
 import { SIZE_PRESETS, type PlanUnit, type SizeKey, type TaskItem, type Template } from '@shared/types'
 import { MaterialPicker } from './MaterialPicker'
@@ -146,10 +146,11 @@ export function PoseDetail({ index, firstUnit, onClose }: { index: number; first
   const { task, update } = usePlan()
   const item = task?.data.items[index]
   const [picker, setPicker] = useState<PickerKey | null>(null)
-  const poses = templatesOf(lib, 'pose')
+  // 状态（旧版单人动作与行为合并）：主角色、第二角色的状态与双人动作的行为都从这里选择
+  const states = templatesOf(lib, 'state')
   const positions = templatesOf(lib, 'position')
   const subs = templatesOf(lib, 'subposition')
-  const acts = templatesOf(lib, 'act')
+  const acts = states
   const scenes = templatesOf(lib, 'scene')
   const exprs = templatesOf(lib, 'expression')
   const cameras = templatesOf(lib, 'camera')
@@ -174,7 +175,9 @@ export function PoseDetail({ index, firstUnit, onClose }: { index: number; first
   const duo = !!item.position_id
   const position = T(item.position_id)
   const sub = T(item.subposition_id)
-  const title = duo ? (position ? (sub ? `${position.name} · ${sub.name}` : position.name) : '选择主体位') : (T(item.pose_id)?.name ?? '选择动作')
+  const stateIds = itemStateIds(item)
+  const stateIds2 = itemStateIds2(item)
+  const title = duo ? (position ? (sub ? `${position.name} · ${sub.name}` : position.name) : '选择主体位') : stateIds.length ? stateIds.map((id) => T(id)?.name || '（已删除）').join(' + ') : '选择状态'
   const nExpr = item.expression_ids.length
   const sized = !!item.sizes
   const total = sized ? sizeTotal(item.sizes) : item.count
@@ -207,22 +210,24 @@ export function PoseDetail({ index, firstUnit, onClose }: { index: number; first
   const single = (v: number | null | undefined) => (v ? [v] : [])
   const pickers: Record<PickerKey, { title: string; items: MaterialOption[]; value: number[]; multi?: boolean; numbered?: boolean; noneLabel?: string; onChange: (ids: number[]) => void; description?: string; empty?: string }> = {
     pose: {
-      title: duo ? `主角色动作（${mainName}，可选）` : `单人动作（${mainName}）`,
-      items: poses,
-      value: single(item.pose_id),
-      noneLabel: duo ? '不指定' : undefined,
-      onChange: (ids) => set({ pose_id: ids[0] ?? null }),
-      empty: '动作库为空，可在「素材库 → 动作」中添加',
+      title: `主角色状态（${mainName}${duo ? '，可选' : ''}）`,
+      items: states,
+      value: stateIds,
+      multi: true,
+      numbered: true,
+      onChange: (ids) => set({ state_ids: ids, pose_id: null }),
+      description: '可多选：所选状态的 Prompt 按点选顺序一起加入本动作的每一张图片，不会增加张数。',
+      empty: '状态库为空，可在「素材库 → 状态」中添加',
     },
     position: { title: '主体位', items: positions, value: single(item.position_id), onChange: (ids) => ids[0] && pickPosition(ids[0]), description: '选择主体位后，可以再选择属于它的子体位。', empty: '还没有主体位，可在「素材库 → 动作 → 双人互动」中添加' },
     sub: { title: `子体位（${position?.name ?? ''}）`, items: childSubs, value: single(item.subposition_id), noneLabel: '不指定（只用主体位）', onChange: (ids) => set({ subposition_id: ids[0] ?? null }), description: '只列出属于当前主体位的子体位，补充在主体位之后。' },
-    acts: { title: '行为（可叠加）', items: acts, value: actIds, multi: true, onChange: (ids) => set({ act_ids: ids }), description: '可多选，按点选顺序拼接；行为不绑定主体位。', empty: '还没有行为素材' },
+    acts: { title: '行为（可叠加）', items: acts, value: actIds, multi: true, onChange: (ids) => set({ act_ids: ids }), description: '从状态素材中选择，可多选，按点选顺序拼接在主体位、子体位之后；行为不绑定主体位。', empty: '还没有状态素材' },
     scene: { title: '场景', items: scenes, value: single(item.scene_id), noneLabel: defaultScene ? `任务默认：${defaultScene.name}` : '不指定', onChange: (ids) => set({ scene_id: ids[0] ?? null }), empty: '场景库为空，可在「素材库 → 场景」中添加' },
     camera: { title: '镜头', items: cameras, value: single(item.camera_id), noneLabel: '不指定', onChange: (ids) => set({ camera_id: ids[0] ?? null }) },
     outfit: { title: `主角色服装（${mainName}）`, items: outfitOpts(outfits), value: single(item.outfit_id), noneLabel: '不指定', onChange: (ids) => set({ outfit_id: ids[0] ?? null }), empty: charId ? '该角色还没有服装' : '先选择主角色' },
     exprs: { title: `主角色表情（${mainName}）`, items: exprs, value: item.expression_ids, multi: true, numbered: true, onChange: (ids) => set({ expression_ids: ids }), description: '可多选，总张数平均分配给各表情；序号为生成顺序。', empty: '表情库为空，可在素材库中添加' },
     outfit2: { title: `第二角色服装（${char2?.name ?? ''}）`, items: outfitOpts(outfits2), value: single(item.second_outfit_id), noneLabel: '不指定', onChange: (ids) => set({ second_outfit_id: ids[0] ?? null }) },
-    pose2: { title: '第二角色动作', items: poses, value: single(item.second_pose_id), noneLabel: '不指定', onChange: (ids) => set({ second_pose_id: ids[0] ?? null }) },
+    pose2: { title: `第二角色状态（${char2?.name ?? ''}）`, items: states, value: stateIds2, multi: true, numbered: true, onChange: (ids) => set({ second_state_ids: ids, second_pose_id: null }), description: '可多选，与主角色的状态互不影响；按点选顺序拼接。', empty: '状态库为空，可在「素材库 → 状态」中添加' },
     expr2: { title: '第二角色表情', items: exprs, value: single(item.second_expression_id), noneLabel: '不指定', onChange: (ids) => set({ second_expression_id: ids[0] ?? null }) },
   }
   const cur = picker ? pickers[picker] : null
@@ -231,8 +236,8 @@ export function PoseDetail({ index, firstUnit, onClose }: { index: number; first
     <div className="flex rounded-lg bg-tint/[0.045] p-0.5">
       {(
         [
-          [false, '单人动作'],
-          [true, '双人互动'],
+          [false, '单人'],
+          [true, '双人动作'],
         ] as const
       ).map(([isDuo, label]) => (
         <button
@@ -240,11 +245,11 @@ export function PoseDetail({ index, firstUnit, onClose }: { index: number; first
           type="button"
           data-active={duo === isDuo || undefined}
           disabled={isDuo && !positions.length}
-          title={isDuo && !positions.length ? '先在「素材库 → 动作 → 双人互动」中添加主体位' : undefined}
+          title={isDuo && !positions.length ? '先在「素材库 → 双人动作」中添加主体位' : undefined}
           className="h-6 rounded-md px-2 text-[11.5px] text-muted-foreground disabled:opacity-40 data-[active]:bg-tint/[0.1] data-[active]:text-foreground"
           onClick={() => {
             if (duo === isDuo) return
-            // 切到双人：保留单人动作作为主角色动作；切回单人：清除主体位、子体位与行为
+            // 切到双人：保留主角色的状态；切回单人：清除主体位、子体位与行为
             if (isDuo) set({ position_id: positions[0].id, subposition_id: null, ...(char2 ? { second_enabled: true } : {}) })
             else set({ position_id: null, subposition_id: null, act_ids: [] })
           }}
@@ -271,7 +276,10 @@ export function PoseDetail({ index, firstUnit, onClose }: { index: number; first
       <div className="min-h-0 flex-1 space-y-3 overflow-y-auto px-4 pb-6">
         <Section title="画面内容" right={modeToggle} testId="detail-scene">
           {!duo ? (
-            <PickField label="动作" names={nameOf(item.pose_id, poses)} placeholder="选择单人动作" onOpen={() => setPicker('pose')} testId="main-pose" />
+            <>
+              <div className="text-[11.5px] text-muted-foreground">单人画面：在下方「角色配置」中为主角色选择状态（可多选）。</div>
+              {actIds.length > 0 && <PickField label="行为" names={multiNames(actIds)} placeholder="" onOpen={() => setPicker('acts')} onClear={() => set({ act_ids: [] })} hint="旧任务中的行为，仍会拼接到 Prompt" testId="pick-acts" />}
+            </>
           ) : (
             <>
               <PickField label="主体位" names={nameOf(item.position_id, positions)} placeholder="选择主体位" onOpen={() => setPicker('position')} testId="pick-position" />
@@ -284,7 +292,7 @@ export function PoseDetail({ index, firstUnit, onClose }: { index: number; first
                 onClear={() => set({ subposition_id: null })}
                 testId="pick-sub"
               />
-              <PickField label="行为" names={multiNames(actIds)} placeholder={acts.length ? '可叠加，点击选择' : '还没有行为素材'} disabled={!acts.length && !actIds.length} onOpen={() => setPicker('acts')} onClear={() => set({ act_ids: [] })} testId="pick-acts" />
+              <PickField label="行为" names={multiNames(actIds)} placeholder={acts.length ? '可叠加，从状态中选择' : '还没有状态素材'} disabled={!acts.length && !actIds.length} onOpen={() => setPicker('acts')} onClear={() => set({ act_ids: [] })} testId="pick-acts" />
             </>
           )}
           <PickField label="场景" icon={<MapPin />} names={nameOf(item.scene_id, scenes)} placeholder={defaultScene ? `任务默认：${defaultScene.name}` : '不指定'} onOpen={() => setPicker('scene')} onClear={() => set({ scene_id: null })} testId="pick-scene" />
@@ -308,21 +316,21 @@ export function PoseDetail({ index, firstUnit, onClose }: { index: number; first
         </Section>
 
         <Section title="角色配置" testId="detail-roles">
-          <div className="text-[11.5px] text-muted-foreground">主角色：{charId ? mainName : '先在页面顶部选择主角色'}</div>
+          <div className="text-[11.5px] font-medium text-muted-foreground" data-testid="role-main">主角色：{charId ? mainName : '先在页面顶部选择主角色'}</div>
           <PickField label="服装" icon={<Shirt />} names={nameOf(item.outfit_id, outfits)} placeholder="不指定" onOpen={() => setPicker('outfit')} onClear={() => set({ outfit_id: null })} testId="pick-outfit" />
-          {duo && <PickField label="动作" names={nameOf(item.pose_id, poses)} placeholder="不指定（可选）" onOpen={() => setPicker('pose')} onClear={() => set({ pose_id: null })} testId="main-pose" />}
+          <PickField label="状态" names={multiNames(stateIds)} placeholder={duo ? '不指定（可选，可多选）' : '选择状态（可多选）'} onOpen={() => setPicker('pose')} onClear={() => set({ state_ids: [], pose_id: null })} testId="main-pose" />
           <PickField label="表情" icon={<Smile />} names={multiNames(item.expression_ids)} placeholder="未选择（使用空表情）" onOpen={() => setPicker('exprs')} onClear={() => set({ expression_ids: [] })} testId="pick-exprs" />
           {duo && !secondOn && <div className="text-[11px] text-warning">双人互动通常需要启用「第二角色」</div>}
           <div className="flex items-center gap-2 border-t border-tint/[0.06] pt-2.5">
             <Users className="size-3.5 text-muted-foreground" />
-            <span className="text-[12.5px]">第二角色</span>
+            <span className="text-[12.5px] font-medium" data-testid="role-second">第二角色</span>
             <span className="truncate text-[11.5px] text-muted-foreground">{!char2 ? (char2Id ? '第二角色已被删除' : '任务未选择第二角色') : secondOn ? `${char2.name} 出场` : '单人画面'}</span>
             <Switch className="ml-auto" checked={secondOn} disabled={!char2 && !secondOn} onCheckedChange={(v) => set({ second_enabled: v })} aria-label="第二角色出场" data-testid="second-switch" />
           </div>
           {secondOn && char2 && (
             <>
               <PickField label="服装" icon={<Shirt />} names={nameOf(item.second_outfit_id, outfits2)} placeholder="不指定" onOpen={() => setPicker('outfit2')} onClear={() => set({ second_outfit_id: null })} testId="second-outfit" />
-              <PickField label="动作" names={nameOf(item.second_pose_id, poses)} placeholder="不指定" onOpen={() => setPicker('pose2')} onClear={() => set({ second_pose_id: null })} testId="second-pose" />
+              <PickField label="状态" names={multiNames(stateIds2)} placeholder="不指定（可多选）" onOpen={() => setPicker('pose2')} onClear={() => set({ second_state_ids: [], second_pose_id: null })} testId="second-pose" />
               <PickField label="表情" icon={<Smile />} names={nameOf(item.second_expression_id, exprs)} placeholder="不指定" onOpen={() => setPicker('expr2')} onClear={() => set({ second_expression_id: null })} testId="second-expression" />
             </>
           )}

@@ -5,6 +5,7 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { useConfirm } from '@/lib/stores'
 import { cn } from '@/lib/utils'
+import { PRIORITIES, type Priority } from '@shared/types'
 
 export function PageHeader({ title, description, actions, className }: { title: ReactNode; description?: ReactNode; actions?: ReactNode; className?: string }) {
   return (
@@ -247,3 +248,37 @@ export function StatusDot({ tone }: { tone: 'ok' | 'warn' | 'error' | 'idle' | '
   return <span className={cn('inline-block size-2 shrink-0 rounded-full', c)} />
 }
 
+
+/** 素材的显示优先级（高 / 普通 / 低）：只影响选择列表中的排列，不影响生成的 Prompt */
+export function PriorityToggle({ value, onChange }: { value: Priority | undefined; onChange: (v: Priority) => void }) {
+  const cur = value ?? 'normal'
+  return (
+    <div className="flex items-center gap-2" data-testid="priority-toggle" data-value={cur}>
+      <div className="flex rounded-lg bg-tint/[0.045] p-0.5">
+        {PRIORITIES.map(([k, label]) => (
+          <button
+            key={k}
+            type="button"
+            data-active={cur === k || undefined}
+            data-testid={`priority-${k}`}
+            onClick={() => cur !== k && onChange(k)}
+            className="h-6 rounded-md px-2.5 text-[11.5px] text-muted-foreground data-[active]:bg-tint/[0.1] data-[active]:text-foreground"
+          >
+            {label}
+          </button>
+        ))}
+      </div>
+      <span className="text-[11px] text-muted-foreground">只影响选择列表中的排列顺序</span>
+    </div>
+  )
+}
+
+/** 卡片 / 列表中的优先级标记：普通不显示 */
+export function PriorityBadge({ value }: { value: Priority | undefined }) {
+  if (value !== 'high' && value !== 'low') return null
+  return (
+    <span data-testid="priority-badge" data-value={value} className={cn('shrink-0 rounded px-1 text-[10px] leading-4', value === 'high' ? 'bg-primary/12 text-primary' : 'bg-tint/[0.06] text-muted-foreground')}>
+      {value === 'high' ? '高' : '低'}
+    </span>
+  )
+}

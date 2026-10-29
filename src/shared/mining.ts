@@ -66,7 +66,7 @@ export interface DictionaryInfo {
 }
 
 /** 可以保存提取结果的素材类型 */
-export const MINING_SAVE_KINDS: TemplateKind[] = ['pose', 'position', 'subposition', 'act', 'expression', 'scene', 'camera', 'global']
+export const MINING_SAVE_KINDS: TemplateKind[] = ['state', 'position', 'subposition', 'expression', 'scene', 'camera', 'global']
 
 export interface MiningSaveItem {
   name: string

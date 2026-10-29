@@ -2,23 +2,43 @@
 
 /**
  * 素材类型（kind）。旧类型全部保留：
- * - pose：单人动作（旧「姿态」模板原样归入这里）；在任务中分配给主角色或第二角色
- * - position / subposition / act：双人互动的主体位 / 子体位（parent_id 指向主体位）/ 可复用的行为
+ * - state：状态（由旧版「单人动作」pose 与「行为」act 合并而来）；在任务中为主角色、第二角色分别多选，
+ *   双人动作中的「行为」也从状态中选择
+ * - pose / act：旧类型，打开工作区时迁移为 state（只改 kind，原值记录在 legacy_kind）；未迁移的文件按状态显示
+ * - position / subposition：双人动作的主体位 / 子体位（parent_id 指向主体位）
  * - scene：场景（环境、地点、背景）
  * - male / camera：兼容素材（旧版男性描述、镜头），不在素材库中显示；镜头在套图任务中选择和新建
  */
-export type TemplateKind = 'global' | 'scene' | 'pose' | 'position' | 'subposition' | 'act' | 'expression' | 'male' | 'camera'
+export type TemplateKind = 'global' | 'scene' | 'state' | 'pose' | 'position' | 'subposition' | 'act' | 'expression' | 'male' | 'camera'
 
 export const TEMPLATE_KINDS: Record<TemplateKind, string> = {
   global: '全局 Prompt',
   scene: '场景',
-  pose: '单人动作',
+  state: '状态',
+  pose: '状态',
   position: '主体位',
   subposition: '子体位',
-  act: '行为',
+  act: '状态',
   expression: '表情',
   male: '男性描述',
   camera: '镜头',
+}
+
+/** 合并为「状态」的旧类型 */
+export const LEGACY_STATE_KINDS: TemplateKind[] = ['pose', 'act']
+export const isStateKind = (k: string | undefined): boolean => k === 'state' || k === 'pose' || k === 'act'
+
+/** 素材的显示优先级：只影响选择列表中的排列（高 → 普通 → 低，同级保持原有排序），不影响 Prompt。没有此字段时为普通 */
+export type Priority = 'high' | 'normal' | 'low'
+export const PRIORITIES: [Priority, string][] = [
+  ['high', '高'],
+  ['normal', '普通'],
+  ['low', '低'],
+]
+export const priorityRank = (p: unknown): number => (p === 'high' ? 0 : p === 'low' ? 2 : 1)
+/** 按优先级稳定排序（同优先级保持传入顺序，即原有的手动排序） */
+export function byPriority<T extends { priority?: Priority | null }>(list: T[]): T[] {
+  return list.map((t, i) => [t, i] as const).sort((a, b) => priorityRank(a[0].priority) - priorityRank(b[0].priority) || a[1] - b[1]).map(([t]) => t)
 }
 
 /** 旧版的适用对象字段：不再在界面中设置或筛选，只为保留旧文件中的值 */
@@ -45,6 +65,10 @@ export interface Template extends Timestamps {
   target?: Target
   /** 子体位所属的主体位 ID */
   parent_id?: number | null
+  /** 显示优先级（没有时为普通） */
+  priority?: Priority
+  /** 迁移为 state 之前的类型（pose / act），只作记录 */
+  legacy_kind?: string
 }
 
 export interface Lora {
@@ -123,6 +147,11 @@ export interface Workflow extends Timestamps {
 }
 
 export interface TaskItem {
+  /** 主角色的状态（可多选，按选择顺序拼接到同一张图）。旧任务的 pose_id 读取时转换为一个元素的数组 */
+  state_ids?: number[]
+  /** 第二角色的状态（可多选）。旧任务的 second_pose_id 读取时转换 */
+  second_state_ids?: number[]
+  /** 旧版：单人动作（读取时迁移到 state_ids 后置空） */
   pose_id: number | null
   outfit_id: number | null
   expression_ids: number[]
@@ -133,14 +162,14 @@ export interface TaskItem {
   male_extra: string
   extra_positive: string
   extra_negative: string
-  /** 双人互动：主体位、子体位（作为主体位的补充 Prompt）、可叠加的行为 */
+  /** 双人动作：主体位、子体位（作为主体位的补充 Prompt）、可叠加的行为（从状态素材中选择） */
   position_id?: number | null
   subposition_id?: number | null
   act_ids?: number[]
   /** 旧版：男性出场时的男性动作与表情（只在 male_enabled 时拼入旧版男性模块） */
   male_pose_ids?: number[]
   male_expression_ids?: number[]
-  /** 第二角色是否在本动作中出场（任务需选择 second_character_id）；以及第二角色的服装、动作、表情 */
+  /** 第二角色是否在本动作中出场（任务需选择 second_character_id）；以及第二角色的服装、旧版动作（迁移到 second_state_ids）、表情 */
   second_enabled?: boolean
   second_outfit_id?: number | null
   second_pose_id?: number | null
@@ -290,6 +319,8 @@ export interface UnitMeta {
   position?: string
   subposition?: string
   acts?: string[]
+  /** 主角色的状态名称（多选时按顺序） */
+  states?: string[]
   /** 入队时冻结的输出目录：完成后最终图片复制到这里（没有时不复制） */
   output_dir?: string
   /** 第二角色出场时：角色名、服装、动作、表情 */

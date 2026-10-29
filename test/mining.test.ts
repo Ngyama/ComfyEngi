@@ -368,11 +368,12 @@ describe('扫描、取消与保存到 Vault', () => {
     ])
     expect(out.map((o) => o.status)).toEqual(['saved', 'duplicate', 'duplicate', 'saved', 'error', 'error'])
     expect(out[1].message).toMatch(/微笑（表情）/)
-    expect(out[2].message).toMatch(/提取组合 001（单人动作）/)
-    const files = readdirSync(join(root, 'prompts', 'poses'))
+    expect(out[2].message).toMatch(/提取组合 001（状态）/)
+    // 旧类型名 pose / act 按「状态」保存
+    const files = readdirSync(join(root, 'prompts', 'states'))
     expect(files).toContain('提取组合 001.md')
-    const row = decode(readFileSync(join(root, 'prompts', 'poses', '提取组合 001.md'), 'utf8'))
-    expect(row).toMatchObject({ type: 'templates', kind: 'pose', name: '提取组合 001', positive: '(cowgirl position:1.2), straddling, sitting on lap', negative: '' })
+    const row = decode(readFileSync(join(root, 'prompts', 'states', '提取组合 001.md'), 'utf8'))
+    expect(row).toMatchObject({ type: 'templates', kind: 'state', name: '提取组合 001', positive: '(cowgirl position:1.2), straddling, sitting on lap', negative: '' })
     expect(Number.isSafeInteger(row.id)).toBe(true)
     const sub = store.list('templates').find((t) => t.name === '子体位')!
     expect(sub).toMatchObject({ kind: 'subposition', parent_id: pos })
