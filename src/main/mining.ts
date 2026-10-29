@@ -5,7 +5,7 @@ import { existsSync, mkdirSync, readFileSync, statSync } from 'node:fs'
 import { readdir, stat } from 'node:fs/promises'
 import { basename, dirname, extname, join } from 'node:path'
 import { MINING_LIMITS, MINING_SAVE_KINDS, type DictionaryInfo, type MiningSaveItem, type MiningSaveOutcome, type RawMeta, type ScannedImage, type ScanFound, type ScanResult } from '@shared/mining'
-import { extractPrompt, parseJsonLoose } from '@shared/prompt-source'
+import { extractPrompt, parseJsonLoose, type SavedSourceRule, type SourceRule } from '@shared/prompt-source'
 import { parseDictionary, promptSignature } from '@shared/tags'
 import { TEMPLATE_KINDS } from '@shared/types'
 import { atomic } from './file-library'
@@ -192,6 +192,54 @@ export function importDictionary(source: string, file: string): DictionaryInfo {
   const data = { version: 1, source: basename(source), imported_at: new Date().toISOString(), tags: parsed.tags, aliases: parsed.aliases }
   atomic(file, JSON.stringify(data))
   return { tags: data.tags.length, aliases: data.aliases.length, source: data.source, imported_at: data.imported_at }
+}
+
+// ---------------- 来源规则（保存在工作区 data/prompt-source-rules.json，随 Vault 迁移）
+
+export const sourceRulesPath = (dataDir: string) => join(dataDir, 'data', 'prompt-source-rules.json')
+const MAX_RULES = 200
+
+const str = (v: unknown, max = 500) => (typeof v === 'string' ? v.slice(0, max) : undefined)
+
+/** 校验并规范化一条规则（丢弃未知字段） */
+export function cleanSourceRule(raw: unknown): SavedSourceRule | null {
+  const o = raw as Record<string, unknown>
+  const r = o?.rule as Record<string, unknown>
+  if (!o || typeof o !== 'object' || !r || typeof r !== 'object') return null
+  if (r.kind !== 'node' && r.kind !== 'field') return null
+  const key = str(r.key)
+  if (!key) return null
+  const rule: SourceRule = { kind: r.kind, key, label: str(r.label) ?? key }
+  for (const k of ['classType', 'field', 'nodeId', 'title', 'fp'] as const) if (str(r[k])) rule[k] = str(r[k])
+  if (r.kind === 'node' && (!rule.classType || !rule.field)) return null
+  if (r.role === 'positive' || r.role === 'negative' || r.role === 'unused' || r.role === 'unknown') rule.role = r.role
+  if (r.strictId === true && rule.nodeId) rule.strictId = true
+  return { id: str(o.id, 80) || `r${Date.now()}`, name: (str(o.name, 120) ?? '').trim() || rule.label, enabled: o.enabled !== false, rule, created_at: str(o.created_at, 40) ?? new Date().toISOString() }
+}
+
+export function loadSourceRules(file: string): SavedSourceRule[] {
+  if (!existsSync(file)) return []
+  try {
+    const d = JSON.parse(readFileSync(file, 'utf8'))
+    return (Array.isArray(d?.rules) ? d.rules : []).map(cleanSourceRule).filter(Boolean).slice(0, MAX_RULES) as SavedSourceRule[]
+  } catch {
+    return []
+  }
+}
+
+/** 整体替换保存（原子写入）；返回规范化后的列表 */
+export function saveSourceRules(file: string, rules: unknown[]): SavedSourceRule[] {
+  if (rules.length > MAX_RULES) throw new Error(`最多保存 ${MAX_RULES} 条来源规则`)
+  const clean = rules.map(cleanSourceRule)
+  if (clean.some((r) => !r)) throw new Error('来源规则格式不正确')
+  const ids = new Set<string>()
+  for (const r of clean as SavedSourceRule[]) {
+    if (ids.has(r.id)) throw new Error('来源规则 ID 重复')
+    ids.add(r.id)
+  }
+  mkdirSync(dirname(file), { recursive: true })
+  atomic(file, JSON.stringify({ version: 1, rules: clean }, null, 2))
+  return clean as SavedSourceRule[]
 }
 
 // ---------------- 保存为素材

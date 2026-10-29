@@ -111,7 +111,10 @@ ComfyUI 只能保存到它自己的 output 目录，因此分两步：
 2. 正向 Prompt 的识别（详见下方「支持的元数据格式」）：ComfyUI 的 `prompt` 元数据是整个 API 工作流，程序从采样器的 positive 输入沿连线向上追踪到文本编码节点，再解析文本。不会把所有 CLIPTextEncode 的文本拼在一起，未连接到采样器的文本节点不读取；多个采样阶段的 Prompt 不拼接。同一文本节点同时连到正负两侧、无法确定主采样器、或经过 Prompt 风格节点（模板内容未保存）时标记为「需要确认」，默认不参与分析，左侧会提示并可「全部纳入」或逐张检查。
 3. 检查与补救：点击图片打开详情，有三页——
    - 正向 Prompt：提取结果、负向 Prompt、提取说明或失败原因；可「手动修改」或（失败时）「手动输入 Prompt」，「恢复自动提取」撤销。
-   - Prompt 来源：元数据中所有可能是 Prompt 的文本（工作流中每个文本节点 / 编码节点、parameters 的正向部分、NovelAI 的 prompt、其他文本字段），标出它连到正向、负向还是未连接采样器。选择一项即作为这张图片的正向 Prompt。之后可「应用到 N 张」使用相同工作流的其他图片：工作流节点按「节点类型 + 输入名 + 周围连接结构」生成的指纹匹配，不依赖节点编号（同一工作流重新编号后仍能匹配，结构不同的工作流不会匹配）；只有同一结构中存在多个完全相同的节点时，才在结构完全一致的前提下用节点编号区分。直接保存在字段中的文本（如 parameters、Comment）按字段名应用。手动修改过文本的图片不会被批量覆盖。
+   - Prompt 来源：元数据中所有可能是 Prompt 的文本（工作流中每个文本节点 / 编码节点、parameters 的正向部分、NovelAI 的 prompt、其他文本字段），标出它连到正向、负向还是未连接采样器；通配符模板、仍含通配符语法的文本会单独提示。选择一项即作为这张图片的正向 Prompt，然后可以：
+     - 「应用到 N 张」：在其他图片中查找同类型节点（class_type）的同一字段，不要求其他节点和连线一致（采样器、LoRA 节点不同也能匹配），每张图片读取自己节点中的文本。同一图片中有多个同类型节点时，依次用连接方向、节点标题、局部连接结构、节点编号区分，仍无法区分时视为歧义、不随机选择；连到负向的节点不会被当作正向。可勾选「只匹配节点 #N」严格按节点编号匹配（同时校验类型与字段）。应用前显示扫描总数、可应用数，以及已是此来源、自动提取已成功（默认保留，可勾选一起替换）、缺少节点、歧义、连到负向、节点编号类型不同、已手动修改（跳过）、没有元数据等数量。应用后这些图片直接参与分析并自动重新分析。直接保存在字段中的文本（如 parameters、Comment）按字段名应用。
+     - 「保存为来源规则」：保存在工作区 `data/prompt-source-rules.json`（随 Vault 迁移，重启后仍有效）。以后扫描图片时，自动提取失败、需要确认或只是已知节点识别的图片，按规则读取唯一匹配的节点字段；自动提取可靠时不覆盖，规则结果不同则标记「差异」并可一键改用。页面右上角「来源规则」可查看命中数、重命名、停用、调整顺序（靠前优先）、切换严格节点编号、删除。
+     优先级：手动指定 > 已验证的自动解析 > 保存的来源规则 > 已知节点的专用识别 > 其他候选（等待确认）。手动修改过文本的图片不会被批量或规则覆盖。
    - 原始元数据：图片实际包含的全部文本字段（字段名、存放位置如 tEXt / iTXt / EXIF UserComment、字符数），可展开查看，JSON 自动格式化；单个字段只显示前 40 万字符，「复制原文」复制完整内容。提取失败时也能查看。
 4. 分析：读取完成后自动分析（手动指定的图片也参与），可调整参数后「重新分析」。参数：最小共同出现（默认 3 张）、全局公共阈值（默认 90%）、最少标签数（默认 2）、关联强度（默认 2×）、最多显示（默认 60）。
 5. 结果分三页：
@@ -123,7 +126,7 @@ ComfyUI 只能保存到它自己的 output 目录，因此分两步：
 支持的元数据格式（按文件内容识别，扩展名与内容不符时按实际格式读取并提示）：
 
 - PNG 文本块 tEXt / zTXt / iTXt（中文按 UTF-8）；JPEG 的 EXIF、注释与 XMP；WebP 的 EXIF / XMP。文件在中途截断时，之前已读到的元数据仍然有效。
-- ComfyUI `prompt`（API 工作流，优先）：原生 KSampler / KSamplerAdvanced / SamplerCustom、SamplerCustomAdvanced + CFGGuider / BasicGuider；CLIPTextEncode、SDXL（text_g / text_l）、Flux（clip_l / t5xxl，负向为 ConditioningZeroOut 时不误判）以及名称含 TextEncode 的自定义编码节点；ConditioningCombine / Concat / SetArea、FluxGuidance、ControlNet（按输出槽区分正负）；字符串常量、Text Multiline、文本拼接（StringConcatenate、WAS Text Concatenate、Join Strings 等，忽略 clean_whitespace 之类的选项）；Efficiency Nodes（Efficient Loader + KSampler (Efficient)）、Easy-Use / ttN 管道采样、rgthree Power Prompt、Impact Pack 通配符编码（采用保存的展开后文本）。Hires 第二阶段、FaceDetailer 等使用不同 Prompt 时采用第一阶段。Python 写出的 `NaN` / `Infinity` 也能读取。
+- ComfyUI `prompt`（API 工作流，优先）：原生 KSampler / KSamplerAdvanced / SamplerCustom、SamplerCustomAdvanced + CFGGuider / BasicGuider；CLIPTextEncode、SDXL（text_g / text_l）、Flux（clip_l / t5xxl，负向为 ConditioningZeroOut 时不误判）以及名称含 TextEncode 的自定义编码节点；ConditioningCombine / Concat / SetArea、FluxGuidance、ControlNet（按输出槽区分正负）；字符串常量、Text Multiline、文本拼接（StringConcatenate、WAS Text Concatenate、Join Strings 等，忽略 clean_whitespace 之类的选项）；Efficiency Nodes（Efficient Loader + KSampler (Efficient)）、Easy-Use / ttN 管道采样、rgthree Power Prompt、Impact Pack 的 ImpactWildcardProcessor / ImpactWildcardEncode（采用保存的展开后文本 populated_text，按 Impact 的规则去掉 # 注释行；仍含 `__x__` / `{a|b}` 语法时运行时会再次随机展开，标记为需要确认；wildcard_text 只是模板）。LoraManager：Lora Loader 的 text 是 LoRA 语法、TriggerWord Toggle 的触发词在运行时生成，拼接时省略触发词并说明，Prompt (LoraManager) 读取 text。追踪在不认识的节点处中断时，如果正向链路（按连线可达性判断）上的通配符节点保存了展开后文本，自动采用并说明；无法确认连接方向时标记为需要确认。Hires 第二阶段、FaceDetailer 等使用不同 Prompt 时采用第一阶段。Python 写出的 `NaN` / `Infinity` 也能读取。
 - ComfyUI `workflow`（界面格式，没有可用的 `prompt` 时）：原生节点、字符串常量节点、被绕过的节点（直通）、KJNodes Set / Get 节点；子图无法展开。ComfyUI 保存的 WebP（EXIF 中的 `prompt:` / `workflow:`）同样读取。
 - WebUI / Forge / reForge 的 `parameters`（PNG 文本块，或 JPEG / WebP 的 EXIF UserComment）：`Negative prompt:` 之前的全部行为正向，多行、BREAK、LoRA、权重原样保留。工作流有歧义而自定义保存节点另外写了 `parameters` 时，采用 `parameters`。
 - NovelAI（Comment 的 prompt / uc，或 Description；V4 的角色提示词单独列在来源中）、InvokeAI（invokeai_metadata、sd-metadata、Dream）、SwarmUI 与 Fooocus（JSON 格式的 parameters）、Easy Diffusion（纯文本 prompt 字段）。

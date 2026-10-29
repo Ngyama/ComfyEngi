@@ -241,7 +241,7 @@ describe('手动指定来源与批量应用', () => {
     expect(pick.rule.kind).toBe('node')
   })
 
-  it('同结构图片按节点类型与连接结构匹配（节点编号不同也能匹配），不同结构不匹配', () => {
+  it('按节点类型 + 字段匹配：节点编号不同、工作流结构不同也能匹配', () => {
     const a = comfy(apiCustomComposer('silver hair, 1girl, maid'))
     const rule = a.candidates.find((c) => c.label.includes('prompt_text'))!.rule
     const b = comfy(apiCustomComposer('black hair, 1girl, nurse', 100)) // 节点全部重新编号
@@ -252,7 +252,7 @@ describe('手动指定来源与批量应用', () => {
     expect(b.structure).toBe(a.structure)
     expect(matchRule(rule, b)?.text).toBe('black hair, 1girl, nurse')
     expect(c.structure).not.toBe(a.structure)
-    expect(matchRule(rule, c)).toBeNull()
+    expect(matchRule(rule, c)?.text).toBe('blonde, 1girl')
     // 原生工作流中，选择负向节点的规则不会匹配到正向节点
     const neg = a.candidates.find((x) => x.text === NEG)!.rule
     expect(matchRule(neg, b)?.text).toBe(NEG)

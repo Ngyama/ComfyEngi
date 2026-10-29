@@ -3,23 +3,33 @@
 // 到文本编码节点，再解析文本输入（字面值或上游文本节点）。负向同样追踪，用来检查同一文本是否同时连到正负两侧。
 // 不把所有 CLIPTextEncode 的文本拼在一起：未连接到采样器的文本节点不会被读取。
 // 无法可靠区分时标记为「需要确认」，不会静默混入负面 Prompt；PNG 中没有保存最终文本时报告原因，不猜测。
-// 同时列出所有可选的文本来源（候选），自动识别失败时可以手动指定，并把选择按工作流结构应用到同批图片。
+// 同时列出所有可选的文本来源（候选），自动识别失败时可以手动指定，并按「节点类型 + 字段」把选择应用到同批图片。
 
 export type PromptSource = 'comfy-api' | 'comfy-workflow' | 'a1111' | 'novelai' | 'invokeai' | 'fooocus' | 'swarmui' | 'easydiffusion' | 'manual'
 
 /**
- * 手动指定来源的规则（用于应用到其他图片）：
- * - field：读取同名元数据字段（与工作流结构无关）；
- * - node：同一工作流结构中的同一节点。节点按「类型 + 周围连接结构」的指纹匹配，不依赖节点 ID；
- *   只有同一结构中存在多个指纹相同的节点时，才在结构完全相同的前提下再用节点 ID 区分。
+ * 来源规则（手动选择后应用到其他图片，也可以保存为持久规则）：
+ * - field：读取同名元数据字段（parameters、Comment 等，与工作流无关）；
+ * - node：同类型节点（class_type）的同名字段，不要求其他节点和连线一致。
+ *   同一图片中有多个同类型节点时，依次用连接方向（正向 / 负向）、节点标题、局部连接结构、节点 ID 区分，仍无法区分时视为歧义；
+ *   strictId 时只匹配指定 ID 的节点，并同时校验类型与字段。
  */
 export interface SourceRule {
   kind: 'field' | 'node'
-  /** field：候选键；node：节点指纹 + 字段 */
+  /** field：候选键；node：class_type + 字段 */
   key: string
-  structure?: string
-  nodeId?: string
   label: string
+  classType?: string
+  field?: string
+  nodeId?: string
+  title?: string
+  /** 局部连接结构指纹（只用于区分同一图片中的多个同类型节点） */
+  fp?: string
+  /** 选择时该节点在工作流中的连接方向 */
+  role?: CandidateRole
+  strictId?: boolean
+  /** 兼容旧版本的结构签名（已不再要求一致） */
+  structure?: string
 }
 
 export type CandidateRole = 'positive' | 'negative' | 'unused' | 'unknown'
@@ -33,6 +43,8 @@ export interface PromptCandidate {
   /** 在工作流中的连接位置：连到正向 / 负向 / 未连接到采样器 / 无法判断 */
   role: CandidateRole
   rule: SourceRule
+  /** 提醒：通配符模板、仍含通配符语法等（这类文本不是可靠的最终 Prompt） */
+  warn?: string
 }
 
 export interface ExtractedPrompt {
@@ -44,11 +56,15 @@ export interface ExtractedPrompt {
   error?: string
   /** 可手动选择的文本来源 */
   candidates: PromptCandidate[]
-  /** 工作流结构签名（ComfyUI 图），用于把手动选择应用到同结构图片 */
+  /** 工作流结构签名（ComfyUI 图，仅供参考） */
   structure?: string
+  /** 工作流中每个节点的类型（用于严格按节点 ID 匹配时校验类型） */
+  nodeTypes?: Record<string, string>
+  /** 没有完整追踪到采样器，而是由已知节点（通配符节点保存的展开后文本）识别；优先级低于用户保存的来源规则 */
+  fallback?: boolean
 }
 
-type Node = { class_type: string; inputs: Record<string, unknown>; bypass?: boolean }
+type Node = { class_type: string; inputs: Record<string, unknown>; bypass?: boolean; _meta?: { title?: unknown } }
 type Graph = Record<string, Node>
 type Link = [string, number]
 type Role = 'positive' | 'negative'
@@ -66,6 +82,30 @@ const MAX_DEPTH = 64
 export const CANDIDATE_LIMITS = { maxCandidates: 60, maxText: 64 * 1024 }
 
 class Unsupported extends Error {}
+/** 运行时生成的 LoRA 触发词：拼接时可以省略，不影响其余已保存的文本 */
+class TriggerWords extends Unsupported {}
+
+/** LoRA 加载 / 触发词节点（LoraManager 等）：text 字段是 LoRA 语法，输出的触发词在运行时生成 */
+const TRIGGER = /TriggerWord|Trigger ?Words?|Lora ?Loader|LoRA Text Loader|Lora ?Stack/i
+/** 通配符语法：__name__、{a|b}；Impact 运行时会对 populated_text 再展开一次 */
+const WILDCARD_SYNTAX = /__[\w.\-+/*\\]+?__|\{[^{}]*\|[^{}]*\}/
+/** 与 Impact Pack 相同的注释处理：以 # 开头的行被去掉，下一行接到上一行末尾 */
+export function impactCommentOut(text: string): string {
+  const out: string[] = []
+  let flag = false
+  for (const line of text.split('\n')) {
+    if (line.trimStart().startsWith('#')) {
+      flag = true
+      continue
+    }
+    if (!out.length) out.push(line)
+    else if (flag) {
+      out[out.length - 1] += ` ${line}`
+      flag = false
+    } else out.push(line)
+  }
+  return out.join('\n')
+}
 
 /** 运行时生成文本、PNG 中不保存结果的节点（动态 Prompt、随机通配符、LLM、图像反推） */
 const DYNAMIC = /^DP[A-Z]|Dynamic ?Prompt|Random ?Prompt|Wildcard|Magic ?Prompt|Ollama|LLM|GPT|Gemini|Florence|Tagger|WD14|Interrogat|Caption/i
@@ -76,6 +116,7 @@ const isWildcard = (n: Node) => 'wildcard_text' in n.inputs && 'populated_text' 
 
 /** 把文本转换为 conditioning 的节点（原生编码节点，以及有文本字段、没有 conditioning 输入的自定义节点） */
 function isEncoder(n: Node): boolean {
+  if (TRIGGER.test(n.class_type)) return false
   if (encoderClass(n.class_type)) return textFieldsOf(n).length > 0 || isWildcard(n)
   if (('positive' in n.inputs && 'negative' in n.inputs) || hasCondLinks(n)) return false
   return textFieldsOf(n).length > 0 && Object.keys(n.inputs).some((k) => /clip/i.test(k) && isLink(n.inputs[k]))
@@ -83,6 +124,7 @@ function isEncoder(n: Node): boolean {
 
 /** 输出字符串的节点（字符串常量、拼接、风格、通配符） */
 function isTextSource(n: Node): boolean {
+  if (TRIGGER.test(n.class_type)) return true
   if (isEncoder(n) || hasCondLinks(n) || ('positive' in n.inputs && 'negative' in n.inputs)) return false
   return isWildcard(n) || 'text_positive' in n.inputs || /concat|join|append/i.test(n.class_type) || STRING_FIELDS.some((f) => typeof n.inputs[f] === 'string' || isLink(n.inputs[f]))
 }
@@ -115,6 +157,7 @@ class Tracer {
     const inputs = n.inputs
     const ct = n.class_type
     if (n.bypass) return this.passthrough(id, n, (x) => this.text(x, depth + 1))
+    if (TRIGGER.test(ct)) throw new TriggerWords(`文本来自 LoRA 触发词节点 #${id}（${ct}）：触发词在运行时生成，PNG 中没有保存`)
     // Prompt 风格节点：输出 0 为正向、1 为负向；风格模板内容不保存在元数据中
     if ('text_positive' in inputs && 'text_negative' in inputs) {
       this.doubts.add(`正向 Prompt 经过 Prompt 风格节点 #${id}（${ct}），最终文本可能还包含风格模板的内容`)
@@ -126,7 +169,16 @@ class Tracer {
     if (/concat|join|combine|append/i.test(ct)) {
       const delim = DELIM_FIELDS.map((f) => inputs[f]).find((x) => typeof x === 'string') as string | undefined
       const parts: string[] = []
-      for (const [k, x] of Object.entries(inputs)) if (isConcatPart(k, x)) parts.push(this.text(x, depth + 1))
+      for (const [k, x] of Object.entries(inputs)) {
+        if (!isConcatPart(k, x)) continue
+        try {
+          parts.push(this.text(x, depth + 1))
+        } catch (e) {
+          // LoRA 触发词在运行时生成：省略这一段，其余已保存的文本照常拼接
+          if (!(e instanceof TriggerWords)) throw e
+          this.notes.add(`${e.message.replace(/：.*$/, '')}的触发词未包含在结果中（运行时生成，PNG 中没有保存）`)
+        }
+      }
       this.notes.add(`Prompt 由文本拼接节点 #${id}（${ct}）合成`)
       return parts.filter((p) => p.trim()).join(delim ?? ', ')
     }
@@ -139,8 +191,10 @@ class Tracer {
   wildcard(id: string, n: Node): string {
     const t = n.inputs.populated_text
     if (typeof t === 'string' && t.trim()) {
-      this.notes.add(`采用通配符节点 #${id}（${n.class_type}）保存的展开后文本`)
-      return t
+      this.notes.add(`采用通配符节点 #${id}（${n.class_type}）保存的展开后文本（populated_text）`)
+      const w = wildcardWarn(t)
+      if (w) this.doubts.add(`通配符节点 #${id} 的 ${w}`)
+      return impactCommentOut(t)
     }
     if (isLink(t)) return this.text(t)
     throw new Unsupported(`通配符节点 #${id}（${n.class_type}）没有保存展开后的文本（PNG 中只有通配符模板），无法准确恢复正向 Prompt`)
@@ -168,6 +222,7 @@ class Tracer {
     if (n.bypass && !('positive' in inputs && 'negative' in inputs)) return this.passthrough(id, n, (x) => this.cond(linkOf(x)!, role, out, seen, depth + 1))
     if (isEncoder(n)) {
       const texts: string[] = []
+      if (Object.entries(inputs).some(([k, v]) => /^trigger_?words/i.test(k) && isLink(v))) this.notes.add(`编码节点 #${id}（${n.class_type}）在运行时加入的触发词未包含在结果中`)
       for (const f of textFieldsOf(n)) {
         const t = f === 'populated_text' || isWildcard(n) ? this.wildcard(id, n) : this.text(inputs[f])
         if (!texts.includes(t)) texts.push(t)
@@ -290,14 +345,79 @@ export function promptFromApiGraph(graph: unknown, source: PromptSource = 'comfy
     if (!(e instanceof Unsupported)) throw e
     error = e.message
   }
+  // 连线可达性（不需要理解节点含义）：追踪中途失败时，仍能判断上游节点连到正向还是负向
+  const posUp = new Set<string>()
+  const negUp = new Set<string>()
+  for (const id of [...samplers, ...pipes]) {
+    if (pipes.includes(id)) continue
+    upstream(g, linkOf(g[id].inputs.positive)?.[0], posUp)
+    upstream(g, linkOf(g[id].inputs.negative)?.[0], negUp)
+  }
+  for (const id of positiveOnly) upstream(g, linkOf(g[id].inputs.conditioning)?.[0], posUp)
+  for (const id of posUp) if (!negUp.has(id) && !negSet.has(id)) posSet.add(id)
+  for (const id of negUp) if (!posUp.has(id) && !posSet.has(id)) negSet.add(id)
   const candidates = graphCandidates(g, shape, posSet, negSet)
-  if (error) return { ...fail(error), candidates, structure: shape.structure }
+  if (error) {
+    const fb = knownNodeFallback(g, posSet, negSet, error, source)
+    return { ...(fb ?? fail(error)), candidates, structure: shape.structure, nodeTypes: nodeTypesOf(g) }
+  }
   const r = choose(results, [...t.notes], source)
   if (r.status === 'ok' && t.doubts.size) {
     r.status = 'check'
     r.notes.push(...t.doubts)
   }
-  return { ...r, candidates, structure: shape.structure }
+  return { ...r, candidates, structure: shape.structure, nodeTypes: nodeTypesOf(g) }
+}
+
+/** 从某个节点沿输入连线向上能到达的所有节点 */
+function upstream(g: Graph, start: string | undefined, out: Set<string>) {
+  const stack = start ? [start] : []
+  while (stack.length) {
+    const id = stack.pop()!
+    if (out.has(id) || !g[id]) continue
+    out.add(id)
+    for (const v of Object.values(g[id].inputs)) if (isLink(v)) stack.push(String(v[0]))
+  }
+}
+
+const nodeTypesOf = (g: Graph) => Object.fromEntries(Object.entries(g).map(([id, n]) => [id, n.class_type]))
+
+/** populated_text 不是可靠最终文本的原因 */
+function wildcardWarn(t: string): string | null {
+  return WILDCARD_SYNTAX.test(impactCommentOut(t)) ? 'populated_text 中仍有通配符语法，运行时会再次随机展开，最终文本可能不同' : null
+}
+
+/**
+ * 已知节点的专用识别：采样器追踪失败（例如中途经过 LoRA 触发词节点）时，
+ * 如果正向链路上有通配符节点（ImpactWildcardProcessor / ImpactWildcardEncode）保存了展开后的文本，采用它。
+ * 只连到负向的不采用；无法确认连接方向时标记为需要确认。
+ */
+function knownNodeFallback(g: Graph, posSet: Set<string>, negSet: Set<string>, error: string, source: PromptSource): ExtractedPrompt | null {
+  const saved = Object.keys(g)
+    .sort(byId)
+    .filter((id) => isWildcard(g[id]) && typeof g[id].inputs.populated_text === 'string' && (g[id].inputs.populated_text as string).trim())
+    .filter((id) => !negSet.has(id) || posSet.has(id))
+  if (!saved.length) return null
+  const onPos = saved.filter((id) => posSet.has(id) && !negSet.has(id))
+  const pick = onPos.length ? onPos : saved
+  const texts = [...new Set(pick.map((id) => impactCommentOut(g[id].inputs.populated_text as string)))]
+  const id = pick[0]
+  const notes = [`采样器追踪未完成（${error}）`, `已采用通配符节点 #${id}（${g[id].class_type}）保存的展开后文本（populated_text）`]
+  let status: ExtractedPrompt['status'] = 'ok'
+  if (!onPos.length) {
+    status = 'check'
+    notes.push('无法确认该节点连接到正向 Prompt')
+  }
+  if (texts.length > 1) {
+    status = 'check'
+    notes.push(`有 ${pick.length} 个通配符节点保存了不同的文本，已暂用 #${id}`)
+  }
+  const w = wildcardWarn(g[id].inputs.populated_text as string)
+  if (w) {
+    status = 'check'
+    notes.push(w)
+  }
+  return { status, positive: texts[0], negative: '', source, notes, candidates: [], fallback: true }
 }
 
 const joinTexts = (parts: { text: string }[]) => parts.map((p) => p.text).filter((t) => t.trim()).join(',\n')
@@ -393,12 +513,13 @@ function graphCandidates(g: Graph, shape: Shape, posSet: Set<string>, negSet: Se
     if ((pos || neg) && /positive/i.test(field)) return 'positive'
     return pos && neg ? 'unknown' : pos ? 'positive' : neg ? 'negative' : 'unused'
   }
-  const add = (id: string, field: string, label: string, text: string) => {
+  const add = (id: string, field: string, label: string, text: string, warn?: string) => {
     if (!text.trim() || text.length > CANDIDATE_LIMITS.maxText) return
-    const fp = shape.fp.get(id)!
-    const rule: SourceRule = { kind: 'node', key: `${fp}|${field}`, structure: shape.structure, label }
-    if ((shape.fpCount.get(fp) ?? 0) > 1) rule.nodeId = id
-    out.push({ key: `n:${id}:${field}`, label, text, role: roleOf(id, field), rule })
+    const n = g[id]
+    const role = roleOf(id, field)
+    const title = typeof n._meta?.title === 'string' && n._meta.title !== n.class_type ? n._meta.title : undefined
+    const rule: SourceRule = { kind: 'node', key: `${n.class_type}|${field}`, classType: n.class_type, field, nodeId: id, title, fp: shape.fp.get(id), role, label: `${n.class_type} · ${field === '@encoded' ? '编码的文本' : field}` }
+    out.push({ key: `n:${id}:${field}`, label, text, role, rule, ...(warn ? { warn } : {}) })
   }
   for (const id of Object.keys(g).sort(byId)) {
     const n = g[id]
@@ -414,9 +535,11 @@ function graphCandidates(g: Graph, shape: Shape, posSet: Set<string>, negSet: Se
         // 文本无法解析：仍列出字面值字段
       }
     }
+    if (TRIGGER.test(n.class_type)) continue // LoRA 语法与触发词设置不是 Prompt
     for (const [k, v] of Object.entries(n.inputs)) {
       if (typeof v !== 'string' || !isTextKey(k)) continue
-      add(id, k, `#${id} ${n.class_type} · ${k}`, v)
+      const warn = isWildcard(n) ? (k === 'wildcard_text' ? '通配符模板（未展开，不是最终 Prompt）' : k === 'populated_text' ? (wildcardWarn(v) ?? undefined) : undefined) : undefined
+      add(id, k, `#${id} ${n.class_type} · ${k}`, v, warn)
     }
   }
   const order: Record<CandidateRole, number> = { positive: 0, unknown: 1, unused: 2, negative: 3 }
@@ -447,7 +570,7 @@ export function promptFromUiWorkflow(wf: unknown): ExtractedPrompt {
   const getters: [string, string][] = []
   const usesSubgraph: string[] = []
   for (const raw of w.nodes as unknown[]) {
-    const n = raw as { id?: unknown; type?: unknown; inputs?: unknown; widgets_values?: unknown; mode?: unknown }
+    const n = raw as { id?: unknown; type?: unknown; inputs?: unknown; widgets_values?: unknown; mode?: unknown; title?: unknown }
     if (!n || typeof n.type !== 'string' || n.id == null) continue
     if (n.mode === 2) continue // 已静音的节点
     if (subgraphs.has(n.type)) usesSubgraph.push(String(n.id))
@@ -466,7 +589,7 @@ export function promptFromUiWorkflow(wf: unknown): ExtractedPrompt {
       })
     } else if (/Primitive|String|Text|Prompt/i.test(n.type) && !/^(Note|MarkdownNote)$/i.test(n.type) && strings.length && !Object.keys(inputs).length) inputs.value = strings[0]
     if (/^KSampler/i.test(n.type) && !('latent_image' in inputs)) inputs.latent_image = null
-    g[String(n.id)] = { class_type: n.type, inputs, bypass: n.mode === 4 || undefined }
+    g[String(n.id)] = { class_type: n.type, inputs, bypass: n.mode === 4 || undefined, ...(typeof n.title === 'string' ? { _meta: { title: n.title } } : {}) }
   }
   for (const [id, name] of getters) {
     const src = setters.get(name)
@@ -586,7 +709,7 @@ export function extractPrompt(chunks: Record<string, string>): ExtractedPrompt {
   const finish = (r: ExtractedPrompt): ExtractedPrompt => {
     const graphCands = graphResult?.candidates ?? []
     const keys = new Set(graphCands.map((x) => x.key))
-    return { ...r, candidates: [...graphCands, ...fieldsCands.filter((x) => !keys.has(x.key))].slice(0, CANDIDATE_LIMITS.maxCandidates), structure: graphResult?.structure }
+    return { ...r, candidates: [...graphCands, ...fieldsCands.filter((x) => !keys.has(x.key))].slice(0, CANDIDATE_LIMITS.maxCandidates), structure: graphResult?.structure, nodeTypes: graphResult?.nodeTypes }
   }
   const parseJson = (k: string) => {
     try {
@@ -665,13 +788,74 @@ export function extractPrompt(chunks: Record<string, string>): ExtractedPrompt {
 
 // ---------------- 手动指定来源
 
+/** 规则在某张图片中的匹配结果 */
+export type RuleMatch =
+  | { reason: 'ok'; c: PromptCandidate }
+  /** 没有这个字段 / 同类型节点（或节点中该字段为空） */
+  | { reason: 'missing' }
+  /** 有多个同类型节点，无法区分 */
+  | { reason: 'ambiguous'; count: number }
+  /** 同类型节点连到负向（不会把负向当作正向） */
+  | { reason: 'negative' }
+  /** 严格匹配节点 ID：该 ID 的节点类型不同 */
+  | { reason: 'id-mismatch'; classType: string }
+
 /**
- * 在另一张图片中按规则找到对应的候选：
- * 字段规则按字段名匹配；节点规则要求工作流结构相同，并按节点指纹匹配（指纹不唯一时再要求节点 ID 相同）。
+ * 在另一张图片中按规则找到对应的候选。
+ * 节点规则不要求整个工作流结构一致：按 class_type + 字段查找；多个同类型节点时依次用连接方向、标题、局部结构、节点 ID 区分。
  */
-export function matchRule(rule: SourceRule, im: Pick<ExtractedPrompt, 'candidates' | 'structure'>): PromptCandidate | null {
-  if (rule.kind === 'field') return im.candidates.find((c) => c.rule.kind === 'field' && c.rule.key === rule.key) ?? null
-  if (!rule.structure || im.structure !== rule.structure) return null
-  const hits = im.candidates.filter((c) => c.rule.kind === 'node' && c.rule.key === rule.key && (!rule.nodeId || c.rule.nodeId === rule.nodeId))
-  return hits.length === 1 ? hits[0] : null
+export function matchRuleDetail(rule: SourceRule, im: Pick<ExtractedPrompt, 'candidates'> & { nodeTypes?: Record<string, string> }): RuleMatch {
+  if (rule.kind === 'field') {
+    const c = im.candidates.find((x) => x.rule.kind === 'field' && x.rule.key === rule.key)
+    return c ? { reason: 'ok', c } : { reason: 'missing' }
+  }
+  const classType = rule.classType ?? rule.key.split('|')[0]
+  const field = rule.field ?? rule.key.split('|').slice(1).join('|')
+  let pool = im.candidates.filter((c) => c.rule.kind === 'node' && c.rule.classType === classType && c.rule.field === field)
+  if (rule.strictId) {
+    const hit = pool.filter((c) => c.rule.nodeId === rule.nodeId)
+    if (hit.length === 1) return guardRole(rule, hit[0])
+    const other = rule.nodeId ? im.nodeTypes?.[rule.nodeId] : undefined
+    return other && other !== classType ? { reason: 'id-mismatch', classType: other } : { reason: 'missing' }
+  }
+  if (!pool.length) return { reason: 'missing' }
+  if (pool.length === 1) return guardRole(rule, pool[0])
+  // 多个同类型节点：只用能区分的条件缩小范围
+  const narrow = (f: (c: PromptCandidate) => boolean) => {
+    const next = pool.filter(f)
+    if (next.length) pool = next
+    return pool.length === 1
+  }
+  if (rule.role !== 'negative') {
+    // 规则用于读取正向 Prompt：连到负向的节点不参与
+    if (pool.every((c) => c.role === 'negative')) return { reason: 'negative' }
+    if (narrow((c) => c.role !== 'negative')) return guardRole(rule, pool[0])
+  }
+  if (rule.role === 'positive' || rule.role === 'negative') {
+    if (narrow((c) => c.role === rule.role)) return guardRole(rule, pool[0])
+  }
+  if (rule.title && narrow((c) => c.rule.title === rule.title)) return guardRole(rule, pool[0])
+  if (rule.fp && narrow((c) => c.rule.fp === rule.fp)) return guardRole(rule, pool[0])
+  if (rule.nodeId && narrow((c) => c.rule.nodeId === rule.nodeId)) return guardRole(rule, pool[0])
+  return { reason: 'ambiguous', count: pool.length }
+}
+
+function guardRole(rule: SourceRule, c: PromptCandidate): RuleMatch {
+  // 规则用于读取正向 Prompt：除非用户选择的本来就是负向节点，否则不会把连到负向的节点当作正向
+  if (rule.role !== 'negative' && c.role === 'negative') return { reason: 'negative' }
+  return { reason: 'ok', c }
+}
+
+export function matchRule(rule: SourceRule, im: Pick<ExtractedPrompt, 'candidates'> & { nodeTypes?: Record<string, string> }): PromptCandidate | null {
+  const m = matchRuleDetail(rule, im)
+  return m.reason === 'ok' ? m.c : null
+}
+
+/** 用户保存的来源规则（保存在 Vault 的 data/prompt-source-rules.json） */
+export interface SavedSourceRule {
+  id: string
+  name: string
+  enabled: boolean
+  rule: SourceRule
+  created_at: string
 }

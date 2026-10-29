@@ -14,7 +14,7 @@ import { checkForUpdate } from './update'
 import { INSTALL_DIR_ERROR, insideInstallDir } from './install-dir'
 import { RELEASES_PAGE } from '@shared/update'
 import { enqueueTask, finalWorkflow, planForTask } from './plan'
-import { dictionaryInfo, dictionaryPath, importDictionary, MiningScanner, rawField, rawMeta, saveMined } from './mining'
+import { dictionaryInfo, dictionaryPath, importDictionary, loadSourceRules, MiningScanner, rawField, rawMeta, saveMined, saveSourceRules, sourceRulesPath } from './mining'
 import { analyzeInWorker } from './mining-run'
 import { MINING_LIMITS, MINING_SAVE_KINDS } from '@shared/mining'
 import type { Runner } from './runner'
@@ -488,6 +488,11 @@ export function registerIpc(ctx: IpcContext) {
       return analyzeInWorker(list, nums, existsSync(dictFile()) ? dictFile() : null)
     },
     'mining.dictInfo': () => dictionaryInfo(dictFile()),
+    'mining.rules': () => loadSourceRules(sourceRulesPath(ctx.dataDir)),
+    'mining.saveRules': (rules) => {
+      if (!Array.isArray(rules)) throw new BadArg('rules 必须是数组')
+      return saveSourceRules(sourceRulesPath(ctx.dataDir), rules)
+    },
     'mining.dictImport': async () => {
       const r = await dialog.showOpenDialog(ctx.window()!, { title: '导入本地标签词典（CSV / TXT / JSON）', filters: [{ name: '标签词典', extensions: ['csv', 'txt', 'json'] }], properties: ['openFile'] })
       if (r.canceled || !r.filePaths[0]) return null

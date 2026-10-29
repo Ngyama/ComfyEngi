@@ -2,7 +2,7 @@
 // 全部在本地完成（不联网、不需要 ComfyUI），不修改原图片；分析结果只是建议，点「保存所选」后才写入素材库。
 
 import { useEffect, useMemo, useState, type ReactNode } from 'react'
-import { BookA, ChevronDown, ChevronRight, Copy, FileImage, FolderOpen, ImageOff, Loader2, Pickaxe, Plus, RotateCcw, Save, Trash2, X } from 'lucide-react'
+import { BookA, ChevronDown, ChevronRight, ChevronUp, Copy, ListChecks, FileImage, FolderOpen, ImageOff, Loader2, Pickaxe, Plus, RotateCcw, Save, Trash2, X } from 'lucide-react'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
@@ -12,7 +12,7 @@ import { api, call } from '@/lib/api'
 import { confirm, templatesOf, useLib } from '@/lib/stores'
 import { cn } from '@/lib/utils'
 import { MINING_SAVE_KINDS, type Candidate, type MiningParams, type RawMeta, type ScannedImage, type TagRef } from '@shared/mining'
-import type { CandidateRole } from '@shared/prompt-source'
+import type { CandidateRole, SourceRule } from '@shared/prompt-source'
 import { parseToken, promptSignature, removeTag, splitTopLevel } from '@shared/tags'
 import { TEMPLATE_KINDS, type Template } from '@shared/types'
 import {
@@ -25,12 +25,16 @@ import {
   candidateOf,
   clearAll,
   clearManual,
+  deleteRule,
   effective,
   includeAllCheck,
   includedImages,
   isIncluded,
+  loadRules,
+  moveRule,
   pickCandidate,
-  ruleTargets,
+  reportFor,
+  saveRule,
   setManualText,
   loadDict,
   patchDraft,
@@ -38,6 +42,7 @@ import {
   saveSelected,
   setParams,
   toggleInclude,
+  updateRule,
   useMining,
   type Draft,
 } from './state'
@@ -89,12 +94,12 @@ function Thumb({ path, width = 240, className }: { path: string; width?: number;
 type ImgFilter = 'all' | 'ok' | 'check' | 'error' | 'meta' | 'used' | `reason:${string}`
 
 function ImagePanel({ onOpen }: { onOpen: (id: string) => void }) {
-  const { images, include, manual, scanning, progress, scanErrors, found } = useMining()
+  const { images, include, manual, hits, scanning, progress, scanErrors, found } = useMining()
   const [filter, setFilter] = useState<ImgFilter>('all')
   const [q, setQ] = useState('')
   const [showReasons, setShowReasons] = useState(false)
-  const st = (im: ScannedImage) => effective(im, manual).status
-  const on = (im: ScannedImage) => isIncluded(im, { include, manual })
+  const st = (im: ScannedImage) => effective(im, { manual, hits }).status
+  const on = (im: ScannedImage) => isIncluded(im, { include, manual, hits })
   const match = (im: ScannedImage, f: ImgFilter) =>
     f === 'all' ? true : f === 'meta' ? im.fields.length > 0 : f === 'used' ? on(im) : f.startsWith('reason:') ? st(im) === 'error' && reasonKey(im.error ?? '') === f.slice(7) : st(im) === f
   const count = (f: ImgFilter) => images.filter((i) => match(i, f)).length
@@ -102,19 +107,20 @@ function ImagePanel({ onOpen }: { onOpen: (id: string) => void }) {
   const reasons = useMemo(() => {
     const m = new Map<string, { text: string; n: number }>()
     for (const im of images) {
-      if (effective(im, manual).status !== 'error') continue
+      if (effective(im, { manual, hits }).status !== 'error') continue
       const k = reasonKey(im.error ?? '')
       m.set(k, { text: m.get(k)?.text ?? im.error ?? '', n: (m.get(k)?.n ?? 0) + 1 })
     }
     return [...m.entries()].sort((a, b) => b[1].n - a[1].n)
-  }, [images, manual])
+  }, [images, manual, hits])
   const shown = images.filter((i) => match(i, filter) && (!q || i.name.toLowerCase().includes(q.toLowerCase())))
   const unsupported = found ? Object.values(found.unsupported).reduce((a, b) => a + b, 0) : 0
   const manualN = images.filter((i) => manual[i.id]?.positive.trim()).length
+  const ruleN = images.filter((i) => !manual[i.id]?.positive.trim() && hits[i.id]?.used).length
   const tiles: [ImgFilter, string, string?][] = [
     ['all', '发现图片', unsupported ? `另有 ${unsupported} 张不支持的格式` : undefined],
     ['meta', '读到元数据'],
-    ['ok', '提取成功', manualN ? `含手动指定 ${manualN} 张` : undefined],
+    ['ok', '提取成功', [manualN && `含手动指定 ${manualN} 张`, ruleN && `按来源规则 ${ruleN} 张`].filter(Boolean).join('，') || undefined],
     ['check', '需确认'],
     ['error', '失败'],
     ['used', '参与分析'],
@@ -211,16 +217,18 @@ function ImagePanel({ onOpen }: { onOpen: (id: string) => void }) {
 }
 
 function ImageRow({ im, on, onOpen }: { im: ScannedImage; on: boolean; onOpen: () => void }) {
-  const manual = useMining((s) => s.manual)
-  const e = effective(im, manual)
+  const { manual, hits } = useMining()
+  const e = effective(im, { manual, hits })
   return (
-    <div className="group flex items-start gap-2 rounded-lg px-2 py-1.5 hover:bg-tint/[0.04]" data-testid="mining-image" data-status={e.status} data-manual={e.manual ? '' : undefined}>
+    <div className="group flex items-start gap-2 rounded-lg px-2 py-1.5 hover:bg-tint/[0.04]" data-testid="mining-image" data-status={e.status} data-manual={e.manual ? '' : undefined} data-rule={e.viaRule ? '' : undefined}>
       <Checkbox className="mt-0.5" checked={on} disabled={e.status === 'error'} onCheckedChange={(v) => toggleInclude(im.id, !!v)} aria-label={`${im.name} 参与分析`} />
       <button type="button" className="min-w-0 flex-1 text-left" onClick={onOpen}>
         <div className="flex items-center gap-1.5">
           <StatusDot tone={e.status === 'ok' ? 'ok' : e.status === 'check' ? 'warn' : 'error'} />
           <span className="truncate text-[12.5px]">{im.name}</span>
           {e.manual && <span className="shrink-0 rounded bg-primary/10 px-1 text-[10px] text-primary">手动</span>}
+          {e.viaRule && <span className="shrink-0 rounded bg-primary/10 px-1 text-[10px] text-primary" title={e.viaRule.rule.name}>规则</span>}
+          {!e.manual && hits[im.id]?.conflict && <span className="shrink-0 rounded bg-warning/15 px-1 text-[10px]" title="来源规则得到的 Prompt 与自动识别不同">差异</span>}
         </div>
         <div className={cn('truncate text-[11px]', e.status === 'error' ? 'text-destructive' : 'font-mono text-muted-foreground')}>
           {e.status === 'error' ? im.error : e.status === 'check' ? `需要确认：${im.notes.at(-1)}` : e.positive.replace(/\s+/g, ' ')}
@@ -233,12 +241,12 @@ function ImageRow({ im, on, onOpen }: { im: ScannedImage; on: boolean; onOpen: (
 type DlgTab = 'prompt' | 'sources' | 'raw'
 
 function ImageDialog({ id, onClose }: { id: string | null; onClose: () => void }) {
-  const { images, include, manual, result } = useMining()
+  const { images, include, manual, hits, result } = useMining()
   const [tab, setTab] = useState<DlgTab>('prompt')
   const im = images.find((i) => i.id === id)
   useEffect(() => setTab('prompt'), [id])
   const same = result?.duplicates.find((g) => id && g.includes(id))
-  const e = im ? effective(im, manual) : null
+  const e = im ? effective(im, { manual, hits }) : null
   return (
     <Dialog open={!!im} onOpenChange={(o) => !o && onClose()}>
       <DialogContent className="flex max-h-[min(88vh,820px)] flex-col gap-3 sm:max-w-5xl" data-testid="mining-image-dialog">
@@ -258,11 +266,11 @@ function ImageDialog({ id, onClose }: { id: string | null; onClose: () => void }
               <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-3">
                 <div className="flex flex-wrap items-center gap-2 text-[12px]">
                   <StatusDot tone={e.status === 'ok' ? 'ok' : e.status === 'check' ? 'warn' : 'error'} />
-                  <span data-testid="img-status">{e.manual ? '已手动指定' : e.status === 'ok' ? '已读取' : e.status === 'check' ? '需要确认' : '无法提取'}</span>
-                  {im.source && !e.manual && <span className="text-muted-foreground">来源：{SOURCE_LABEL[im.source] ?? im.source}</span>}
+                  <span data-testid="img-status">{e.manual ? '已手动指定' : e.viaRule ? '按来源规则读取' : e.status === 'ok' ? '已读取' : e.status === 'check' ? '需要确认' : '无法提取'}</span>
+                  {im.source && !e.manual && !e.viaRule && <span className="text-muted-foreground">来源：{SOURCE_LABEL[im.source] ?? im.source}</span>}
                   {e.status !== 'error' && (
                     <label className="ml-auto flex items-center gap-1.5">
-                      <Checkbox checked={isIncluded(im, { include, manual })} onCheckedChange={(v) => toggleInclude(im.id, !!v)} />
+                      <Checkbox checked={isIncluded(im, { include, manual, hits })} onCheckedChange={(v) => toggleInclude(im.id, !!v)} />
                       参与分析
                     </label>
                   )}
@@ -302,12 +310,13 @@ function ImageDialog({ id, onClose }: { id: string | null; onClose: () => void }
 }
 
 function PromptPanel({ im, same, onSources, onRaw }: { im: ScannedImage; same: number; onSources: () => void; onRaw: () => void }) {
-  const manual = useMining((s) => s.manual)
-  const e = effective(im, manual)
+  const { manual, hits } = useMining()
+  const e = effective(im, { manual, hits })
   const m = manual[im.id]
+  const hit = hits[im.id]
   return (
     <>
-      {im.error && !e.manual && (
+      {im.error && !e.manual && !e.viaRule && (
         <div className="rounded-lg bg-destructive/10 px-3 py-2 text-[12px] text-destructive" data-testid="img-error">
           {im.error}
           <div className="mt-1.5 flex flex-wrap gap-2 text-foreground">
@@ -324,6 +333,23 @@ function PromptPanel({ im, same, onSources, onRaw }: { im: ScannedImage; same: n
           </div>
         </div>
       )}
+      {e.viaRule && !m && (
+        <div className="rounded-lg bg-primary/[0.06] px-3 py-2 text-[12px] ring-1 ring-primary/20" data-testid="via-rule">
+          按来源规则「{e.viaRule.rule.name}」读取：{e.viaRule.c.label}
+          {im.status !== 'ok' && <span className="text-muted-foreground">（自动提取：{im.status === 'error' ? im.error : '需要确认'}）</span>}
+          {im.fallback && im.positive && <span className="text-muted-foreground">（自动识别的已知节点结果已被规则替代）</span>}
+        </div>
+      )}
+      {hit?.conflict && !m && (
+        <div className="rounded-lg bg-warning/10 px-3 py-2 text-[12px]" data-testid="rule-conflict">
+          来源规则「{hit.rule.name}」得到的 Prompt 与自动识别结果不同，当前保留自动识别结果：
+          <div className="mt-1 line-clamp-3 font-mono text-[11.5px] break-all whitespace-pre-wrap">{hit.c.text}</div>
+          <Button size="xs" variant="secondary" className="mt-1.5" onClick={() => pickCandidate(im.id, hit.c)} data-testid="use-rule-result">
+            改用规则结果
+          </Button>
+        </div>
+      )}
+      {e.viaRule?.c.warn && !m && <div className="rounded-lg bg-warning/10 px-3 py-2 text-[12px]">{e.viaRule.c.warn}</div>}
       {!!im.notes.length && <div className="rounded-lg bg-warning/10 px-3 py-2 text-[12px] whitespace-pre-line">{im.notes.join('\n')}</div>}
       {same > 0 && <div className="text-[12px] text-muted-foreground">与另外 {same} 张图片的 Prompt 完全相同</div>}
       {m ? (
@@ -335,12 +361,12 @@ function PromptPanel({ im, same, onSources, onRaw }: { im: ScannedImage; same: n
         </>
       ) : (
         <>
-          {im.status !== 'error' && <PromptField label="正向 Prompt（原文）" value={im.positive} readOnly copy minRows={4} />}
+          {e.status !== 'error' && <PromptField label={e.viaRule ? '正向 Prompt（来源规则）' : '正向 Prompt（原文）'} value={e.positive} readOnly copy minRows={4} />}
           <div className="flex gap-2">
-            <Button size="xs" variant="ghost" onClick={() => setManualText(im.id, im.positive)} data-testid="edit-manual">
-              {im.status === 'error' ? '手动输入 Prompt' : '手动修改'}
+            <Button size="xs" variant="ghost" onClick={() => setManualText(im.id, e.positive)} data-testid="edit-manual">
+              {e.status === 'error' ? '手动输入 Prompt' : '手动修改'}
             </Button>
-            {im.status !== 'error' && !!im.candidates.length && (
+            {e.status !== 'error' && !!im.candidates.length && (
               <Button size="xs" variant="ghost" onClick={onSources}>
                 改用其他来源
               </Button>
@@ -353,30 +379,83 @@ function PromptPanel({ im, same, onSources, onRaw }: { im: ScannedImage; same: n
   )
 }
 
+function ApplyBox({ im, rule }: { im: ScannedImage; rule: SourceRule }) {
+  const { manual, hits, images } = useMining()
+  const [strict, setStrict] = useState(false)
+  const [override, setOverride] = useState(false)
+  const [name, setName] = useState('')
+  const r = useMemo(() => ({ ...rule, strictId: strict && !!rule.nodeId }), [rule, strict])
+  const rep = useMemo(() => reportFor(r, im.id, override, { images, manual, hits }), [r, im.id, override, images, manual, hits])
+  const isNode = r.kind === 'node'
+  const rows: [string, number, string][] = [
+    ['已是此来源的 Prompt', rep.same, 'same'],
+    ['自动提取已成功（保留）', rep.autoKept, 'auto'],
+    [isNode ? `没有 ${r.classType} 节点（或该字段为空）` : '没有这个字段', rep.missing, 'missing'],
+    ['有多个同类型节点，无法区分', rep.ambiguous, 'ambiguous'],
+    ['唯一的同类型节点连到负向（不会当作正向）', rep.negative, 'negative'],
+    [`节点 #${r.nodeId} 是其他类型`, rep.idMismatch, 'id'],
+    ['已手动修改，跳过', rep.edited, 'edited'],
+    ['没有可读取的元数据', rep.noMeta, 'nometa'],
+  ]
+  return (
+    <div className="space-y-2 rounded-lg bg-primary/[0.06] px-3 py-2.5 text-[12px] ring-1 ring-primary/20" data-testid="apply-rule-box">
+      <div>
+        当前使用「{rule.label}」{isNode && rule.nodeId ? `（本图节点 #${rule.nodeId}）` : ''}。
+        {isNode ? '在其他图片中查找同类型节点的同一字段（不要求其他节点和连线一致），每张图片读取自己节点中的文本。' : '在其他图片中读取同名字段。'}
+      </div>
+      <div className="grid grid-cols-2 gap-x-4 gap-y-0.5 text-[11.5px]" data-testid="apply-report">
+        <div>
+          扫描图片 <b className="tabular-nums">{rep.total}</b> 张
+        </div>
+        <div data-testid="report-targets">
+          可以应用 <b className="text-primary tabular-nums">{rep.targets.length}</b> 张
+        </div>
+        {rows
+          .filter(([, n]) => n > 0)
+          .map(([l, n, k]) => (
+            <div key={k} className="text-muted-foreground" data-testid={`report-${k}`}>
+              {l} <span className="tabular-nums">{n}</span> 张
+            </div>
+          ))}
+      </div>
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5">
+        {isNode && rule.nodeId && (
+          <label className="flex items-center gap-1.5" title="只匹配相同节点编号的节点，同时校验节点类型与字段">
+            <Checkbox checked={strict} onCheckedChange={(v) => setStrict(!!v)} data-testid="strict-id" />
+            只匹配节点 #{rule.nodeId}
+          </label>
+        )}
+        {(rep.autoKept > 0 || override) && (
+          <label className="flex items-center gap-1.5">
+            <Checkbox checked={override} onCheckedChange={(v) => setOverride(!!v)} data-testid="override-auto" />
+            也替换自动提取成功但内容不同的图片
+          </label>
+        )}
+        <div className="flex-1" />
+        <Button size="xs" disabled={!rep.targets.length} onClick={() => void applyRule(r, im.id, override)} data-testid="apply-rule">
+          应用到 {rep.targets.length} 张
+        </Button>
+      </div>
+      <div className="flex items-center gap-2 border-t border-primary/15 pt-2">
+        <TextInput value={name} onChange={setName} placeholder={rule.label} className="h-7 max-w-64 text-[12px]" />
+        <Button size="xs" variant="secondary" onClick={() => void saveRule(r, name)} data-testid="save-rule">
+          保存为来源规则
+        </Button>
+        <span className="text-[11px] text-muted-foreground">保存在工作区中，以后扫描时自动使用（自动提取可靠时不覆盖，只提示差异）</span>
+      </div>
+    </div>
+  )
+}
+
 function SourcesPanel({ im }: { im: ScannedImage }) {
-  const { manual, images } = useMining()
+  const manual = useMining((s) => s.manual)
   const cur = manual[im.id]
-  const targets = useMemo(() => (cur?.rule ? ruleTargets(cur.rule, im.id, { images, manual }) : []), [cur, im.id, images, manual])
   if (!im.candidates.length)
     return <EmptyState title="没有可选择的文本来源" description={im.fields.length ? '元数据中没有找到可能是 Prompt 的文本。可以在「原始元数据」中查看内容，或在「正向 Prompt」中手动输入。' : '图片中没有任何文本元数据（可能已被压缩、转存或清除）。'} />
-  const scope = cur?.rule?.kind === 'node' ? '使用相同工作流结构' : '含相同元数据字段'
   return (
     <div className="space-y-2" data-testid="img-sources">
-      <div className="text-[11.5px] text-muted-foreground">
-        元数据中所有可能是 Prompt 的文本。选择一项作为这张图片的正向 Prompt。工作流节点按「节点类型 + 连接结构」匹配（不依赖节点编号），可以应用到使用相同工作流的其他图片。
-      </div>
-      {cur?.rule && (
-        <div className="flex items-center gap-2 rounded-lg bg-primary/[0.06] px-3 py-2 text-[12px] ring-1 ring-primary/20" data-testid="apply-rule-box">
-          <span className="min-w-0 flex-1">
-            当前使用「{cur.rule.label}」。{targets.length ? `另有 ${targets.length} 张${scope}的图片可以使用同一来源（手动修改过的图片不受影响）。` : `没有其他${scope}的图片需要应用。`}
-          </span>
-          {!!targets.length && (
-            <Button size="xs" onClick={() => applyRule(cur.rule!, im.id)} data-testid="apply-rule">
-              应用到 {targets.length} 张
-            </Button>
-          )}
-        </div>
-      )}
+      <div className="text-[11.5px] text-muted-foreground">元数据中所有可能是 Prompt 的文本。选择一项作为这张图片的正向 Prompt，然后可以应用到其他图片，或保存为来源规则。</div>
+      {cur?.rule && <ApplyBox key={`${cur.rule.key}:${cur.rule.nodeId ?? ''}`} im={im} rule={cur.rule} />}
       {im.candidates.map((c) => {
         const active = !!cur?.rule && cur.positive === c.text && cur.label === c.label
         const [rl, rc] = ROLE_LABEL[c.role]
@@ -395,11 +474,76 @@ function SourcesPanel({ im }: { im: ScannedImage }) {
                 </Button>
               )}
             </div>
+            {c.warn && <div className="mt-1 text-[11px] text-warning" data-testid="source-warn">{c.warn}</div>}
             <div className="mt-1 line-clamp-4 font-mono text-[11.5px] break-all whitespace-pre-wrap text-foreground/80">{c.text}</div>
           </div>
         )
       })}
     </div>
+  )
+}
+
+function RulesDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (o: boolean) => void }) {
+  const { rules, hits, images } = useMining()
+  const stats = (id: string) => {
+    const hs = Object.values(hits).filter((h) => h.rule.id === id)
+    return { used: hs.filter((h) => h.used).length, conflict: hs.filter((h) => h.conflict).length }
+  }
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="sm:max-w-2xl" data-testid="rules-dialog">
+        <DialogHeader>
+          <DialogTitle>Prompt 来源规则</DialogTitle>
+          <DialogDescription>
+            在图片详情的「Prompt 来源」中选择一项后可保存为规则。扫描图片时，自动提取失败或需要确认的图片按规则读取唯一匹配的节点字段；自动提取可靠时不覆盖，只提示差异。规则保存在工作区 data/prompt-source-rules.json，随工作区迁移；靠前的规则优先。
+          </DialogDescription>
+        </DialogHeader>
+        {!rules.length && <div className="rounded-xl bg-tint/[0.03] px-3 py-6 text-center text-[12.5px] text-muted-foreground">还没有来源规则</div>}
+        <div className="max-h-[60vh] space-y-2 overflow-y-auto">
+          {rules.map((r, i) => {
+            const st = stats(r.id)
+            return (
+              <div key={r.id} className="rounded-xl bg-card p-3 ring-1 ring-tint/[0.08]" data-testid="rule-row">
+                <div className="flex items-center gap-2">
+                  <Checkbox checked={r.enabled} onCheckedChange={(v) => void updateRule(r.id, { enabled: !!v })} aria-label={`启用 ${r.name}`} />
+                  <TextInput value={r.name} onChange={(v) => useMining.setState({ rules: rules.map((x) => (x.id === r.id ? { ...x, name: v } : x)) })} onBlur={() => void updateRule(r.id, { name: r.name })} className="h-8 max-w-72 text-[13px] font-medium" />
+                  <div className="flex-1" />
+                  <Button size="icon-sm" variant="ghost" disabled={i === 0} onClick={() => moveRule(r.id, -1)} aria-label="上移">
+                    <ChevronUp />
+                  </Button>
+                  <Button size="icon-sm" variant="ghost" disabled={i === rules.length - 1} onClick={() => moveRule(r.id, 1)} aria-label="下移">
+                    <ChevronDown />
+                  </Button>
+                  <Button
+                    size="icon-sm"
+                    variant="ghost"
+                    aria-label={`删除 ${r.name}`}
+                    data-testid="delete-rule"
+                    onClick={async () => {
+                      if (await confirm({ title: `删除来源规则「${r.name}」？`, description: '只删除规则，不影响图片、手动指定的内容和已保存的素材。', confirmText: '删除', destructive: true })) await deleteRule(r.id)
+                    }}
+                  >
+                    <Trash2 />
+                  </Button>
+                </div>
+                <div className="mt-1.5 flex flex-wrap items-center gap-x-4 gap-y-1 text-[11.5px] text-muted-foreground">
+                  <span className="font-mono">{r.rule.kind === 'node' ? `${r.rule.classType} · ${r.rule.field === '@encoded' ? '编码的文本' : r.rule.field}` : r.rule.label}</span>
+                  {r.rule.kind === 'node' && r.rule.nodeId && (
+                    <label className="flex items-center gap-1.5">
+                      <Checkbox checked={!!r.rule.strictId} onCheckedChange={(v) => void updateRule(r.id, { strictId: !!v })} />
+                      只匹配节点 #{r.rule.nodeId}
+                    </label>
+                  )}
+                  <span>
+                    当前 {images.length} 张中按此规则读取 <b className="text-foreground tabular-nums">{st.used}</b> 张{st.conflict ? ` · 与自动识别不同 ${st.conflict} 张` : ''}
+                  </span>
+                </div>
+              </div>
+            )
+          })}
+        </div>
+      </DialogContent>
+    </Dialog>
   )
 }
 
@@ -895,7 +1039,12 @@ export default function MiningPage() {
   const [openImg, setOpenImg] = useState<string | null>(null)
   const [sources, setSources] = useState<{ title: string; ids: string[] } | null>(null)
   const [dictOpen, setDictOpen] = useState(false)
-  useEffect(() => void loadDict(), [])
+  const [rulesOpen, setRulesOpen] = useState(false)
+  const rulesN = useMining((s) => s.rules.length)
+  useEffect(() => {
+    void loadDict()
+    void loadRules()
+  }, [])
   const canAnalyze = includedImages(useMining.getState()).length > 0
   const onSources = (title: string, ids: string[]) => setSources({ title, ids })
   return (
@@ -905,6 +1054,9 @@ export default function MiningPage() {
         description="从保留生成参数的 PNG 中读取正向 Prompt，找出反复出现的标签组合并保存为素材。全部在本地完成，不修改原图片。"
         actions={
           <>
+            <Button variant="ghost" size="sm" onClick={() => setRulesOpen(true)} data-testid="open-rules">
+              <ListChecks /> 来源规则{rulesN ? `（${rulesN}）` : ''}
+            </Button>
             <Button variant="ghost" size="sm" onClick={() => setDictOpen(true)} data-testid="open-dict">
               <BookA /> 词典{dict ? `（${dict.tags.toLocaleString()}）` : ''}
             </Button>
@@ -1016,6 +1168,7 @@ export default function MiningPage() {
       <ImageDialog id={openImg} onClose={() => setOpenImg(null)} />
       <SourcesDialog title={sources?.title ?? ''} ids={sources?.ids ?? null} onClose={() => setSources(null)} onOpen={setOpenImg} />
       <DictDialog open={dictOpen} onOpenChange={setDictOpen} />
+      <RulesDialog open={rulesOpen} onOpenChange={setRulesOpen} />
     </div>
   )
 }
