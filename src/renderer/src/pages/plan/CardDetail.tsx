@@ -2,22 +2,21 @@
 // 「高级组合设置」默认折叠，可以按池覆盖规则或禁止某些素材，只对当前任务生效（不修改素材库中的动作卡），可一键恢复默认。
 
 import { useMemo, useState } from 'react'
-import { Camera, MapPin, RotateCcw, Shirt, Users, X } from 'lucide-react'
+import { MapPin, RotateCcw, Shirt, Users, X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { CopyButton, Disclosure, FieldLabel, NumberStepper, PromptField } from '@/components/common'
 import { CardPools, PickSources } from '@/components/card-pools'
-import { api, call } from '@/lib/api'
 import type { MaterialOption } from '@/lib/material-select'
-import { reloadLib, templatesOf, useLib, usePlan } from '@/lib/stores'
+import { templatesOf, useLib, usePlan } from '@/lib/stores'
 import { cn } from '@/lib/utils'
 import { effectivePool, isSoloCard, normalizePool } from '@shared/cards'
 import { setItemSizes, sizeTotal } from '@shared/planner'
 import { PLACEHOLDER_HELP } from '@shared/prompt'
 import { CARD_POOLS, type CardPoolKey, type PlanUnit, type PoolConfig, type TaskItem } from '@shared/types'
 import { MaterialPicker } from './MaterialPicker'
-import { CameraEditor, PickField, Section, SizeCards } from './PoseDetail'
+import { CameraField, PickField, Section, SizeCards } from './PoseDetail'
 
-type PickerKey = 'card' | 'scene' | 'camera' | 'outfit' | 'outfit2'
+type PickerKey = 'card' | 'scene' | 'outfit' | 'outfit2'
 
 export function CardItemDetail({ index, units, onClose }: { index: number; units: PlanUnit[]; onClose: () => void }) {
   const lib = useLib((s) => s.lib)
@@ -27,7 +26,6 @@ export function CardItemDetail({ index, units, onClose }: { index: number; units
   const [shown, setShown] = useState(0)
   const cards = templatesOf(lib, 'position')
   const scenes = templatesOf(lib, 'scene')
-  const cameras = templatesOf(lib, 'camera')
   const charId = task?.data.character_id
   const char2Id = task?.data.second_character_id ?? null
   const outfits = useMemo(() => (lib?.outfits ?? []).filter((o) => o.character_id === charId), [lib, charId])
@@ -46,7 +44,6 @@ export function CardItemDetail({ index, units, onClose }: { index: number; units
   const char = lib?.characters.find((c) => c.id === charId)
   const char2 = char2Id ? lib?.characters.find((c) => c.id === char2Id) : undefined
   const defaultScene = T(task.data.scene_id)
-  const camera = T(item.camera_id)
   const sized = !!item.sizes
   const total = sized ? sizeTotal(item.sizes) : item.count
   const overridden = new Set(Object.keys(item.card_rules ?? {}) as CardPoolKey[])
@@ -54,12 +51,6 @@ export function CardItemDetail({ index, units, onClose }: { index: number; units
   const pools = Object.fromEntries(CARD_POOLS.map(({ key }) => [key, effectivePool(card, item, key)])) as Record<CardPoolKey, PoolConfig>
   const unit = units[Math.min(shown, Math.max(0, units.length - 1))] ?? null
 
-  const newCamera = async () => {
-    const r = await call(api['templates.save']({ kind: 'camera', name: `镜头 ${cameras.length + 1}`, positive: '' }))
-    if (!r) return
-    await reloadLib()
-    set({ camera_id: r.id })
-  }
   const setPool = (key: CardPoolKey, pool: PoolConfig) => update((d) => (d.items[index].card_rules = { ...d.items[index].card_rules, [key]: normalizePool(pool, key) }))
   const resetPool = (key: CardPoolKey) =>
     update((d) => {
@@ -81,7 +72,6 @@ export function CardItemDetail({ index, units, onClose }: { index: number; units
     // 换成另一张动作卡时，本任务对原卡的覆盖不再适用
     card: { title: '动作卡', items: cards, value: single(item.card_id), onChange: (ids) => ids[0] && ids[0] !== item.card_id && update((d) => Object.assign(d.items[index], { card_id: ids[0], card_rules: undefined, card_exclude: undefined })), empty: '还没有动作卡，可在「素材库 → 动作卡」中添加' },
     scene: { title: '场景', items: scenes, value: single(item.scene_id), noneLabel: defaultScene ? `任务默认：${defaultScene.name}` : '不指定', onChange: (ids) => set({ scene_id: ids[0] ?? null }), empty: '场景库为空，可在「素材库 → 场景」中添加' },
-    camera: { title: '镜头', items: cameras, value: single(item.camera_id), noneLabel: '不指定', onChange: (ids) => set({ camera_id: ids[0] ?? null }) },
     outfit: { title: `主角色服装（${char?.name ?? ''}）`, items: outfitOpts(outfits), value: single(item.outfit_id), noneLabel: '不指定', onChange: (ids) => set({ outfit_id: ids[0] ?? null }), empty: charId ? '该角色还没有服装' : '先选择主角色' },
     outfit2: { title: `第二角色服装（${char2?.name ?? ''}）`, items: outfitOpts(outfits2), value: single(item.second_outfit_id), noneLabel: '不指定', onChange: (ids) => set({ second_outfit_id: ids[0] ?? null }) },
   }
@@ -105,21 +95,7 @@ export function CardItemDetail({ index, units, onClose }: { index: number; units
         <Section title="画面内容" testId="detail-scene">
           <PickField label="动作卡" names={nameOf(item.card_id, cards)} placeholder="选择动作卡" onOpen={() => setPicker('card')} testId="pick-card" hint={card ? '基础 Prompt、子体位、局部姿态、表情和互动按动作卡的默认规则自动组合' : undefined} />
           <PickField label="场景" icon={<MapPin />} names={nameOf(item.scene_id, scenes)} placeholder={defaultScene ? `任务默认：${defaultScene.name}` : '不指定'} onOpen={() => setPicker('scene')} onClear={() => set({ scene_id: null })} testId="pick-scene" />
-          <PickField
-            label="镜头"
-            icon={<Camera />}
-            names={nameOf(item.camera_id, cameras)}
-            placeholder="不指定"
-            onOpen={() => setPicker('camera')}
-            onClear={() => set({ camera_id: null })}
-            testId="pick-camera"
-            hint={
-              <button type="button" className="hover:text-foreground" onClick={() => void newCamera()}>
-                + 新建镜头
-              </button>
-            }
-          />
-          {camera && <CameraEditor key={camera.id} t={camera} />}
+          <CameraField item={item} onChange={set} />
         </Section>
 
         <Section title="角色配置" testId="detail-roles">
@@ -175,7 +151,7 @@ export function CardItemDetail({ index, units, onClose }: { index: number; units
                   </Button>
                   <span>组合 Seed {unit.meta.combo_seed}（在任务设置中修改）</span>
                 </div>
-                <PickSources picks={unit.meta.picks} card={unit.meta.card} />
+                <PickSources picks={unit.meta.picks} card={unit.meta.card} camera={unit.meta.camera} />
                 <div>
                   <FieldLabel right={<CopyButton text={unit.positive} />}>正面</FieldLabel>
                   <pre className="max-h-72 overflow-y-auto rounded-lg bg-inset p-3 font-mono text-[12px] leading-relaxed whitespace-pre-wrap select-text">{unit.positive || '（空）'}</pre>

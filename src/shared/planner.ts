@@ -3,7 +3,7 @@
 // 主角色（character_id）与可选的第二角色（second_character_id）来自同一个角色库；第二角色按动作启用。
 // 多表情时按选择顺序依次生成，每个表情张数相同；不能整除时报错，由用户修改张数。
 
-import { drawPool, effectivePool, fixedConflicts, isSoloCard, poolsOf, resolvePool, unitRandom } from './cards'
+import { drawCamera, drawPool, effectivePool, fixedConflicts, isSoloCard, poolsOf, resolvePool, unitRandom } from './cards'
 import { compose, fillPlaceholders, joinParts, unescapeSeparator } from './prompt'
 import type {
   CardPick,
@@ -165,11 +165,17 @@ export function itemStateIds2(it: Partial<TaskItem>): number[] {
   return v.length ? v : it.second_pose_id ? [it.second_pose_id] : []
 }
 
-/** 旧数据中可能缺少字段：补齐默认值（不修改原对象）。旧版单选动作迁移为状态多选（一个元素），原字段置空 */
+/** 动作的镜头候选：新数据的 camera_ids；旧任务只有单选的 camera_id 时转换为一个元素的数组 */
+export function itemCameraIds(it: Partial<TaskItem>): number[] {
+  const v = [...new Set(ids(it.camera_ids))]
+  return v.length ? v : it.camera_id ? [it.camera_id] : []
+}
+
+/** 旧数据中可能缺少字段：补齐默认值（不修改原对象）。旧版单选动作迁移为状态多选（一个元素），原字段置空；旧版单选镜头转换为候选列表，原字段保留 */
 export function normalizeTaskData(d: Partial<TaskData> | null | undefined): TaskData {
   const base = newTaskData()
   const out = { ...base, ...(d ?? {}) } as TaskData
-  out.items = (d?.items ?? []).map((it) => ({ ...newItem(), ...it, state_ids: itemStateIds(it), second_state_ids: itemStateIds2(it), pose_id: null, second_pose_id: null }))
+  out.items = (d?.items ?? []).map((it) => ({ ...newItem(), ...it, state_ids: itemStateIds(it), second_state_ids: itemStateIds2(it), pose_id: null, second_pose_id: null, camera_ids: itemCameraIds(it) }))
   return out
 }
 
@@ -400,6 +406,14 @@ export function expandTask(data: TaskData, lib: PlanLibrary, settings: Settings,
   const onceWarn = (msg: string) => {
     if (!warnings.includes(msg)) warnings.push(msg)
   }
+  /** 仍存在的镜头候选：全部被删除时报错（与单选时相同），部分被删除时提示并跳过（与素材池的随机候选相同） */
+  const cameraCandidates = (it: TaskItem, where: string): Template[] => {
+    const wanted = itemCameraIds(it)
+    const found = wanted.map((id) => tpl(id)).filter((t): t is Template => !!t)
+    if (wanted.length && !found.length) errors.push(`${where}：所选镜头模板已被删除`)
+    else if (found.length !== wanted.length) onceWarn(`${where}：所选镜头中有素材已被删除，抽取时跳过`)
+    return found
+  }
 
   /**
    * 动作卡：基础 Prompt + 结构变体 + 各池抽取结果。模块沿用已有的拼接位置：
@@ -416,8 +430,7 @@ export function expandTask(data: TaskData, lib: PlanLibrary, settings: Settings,
     const solo = isSoloCard(card)
     where = `第 ${pi + 1} 个动作「${card.name}」`
     const outfit = checkOutfit(it.outfit_id, where)
-    const camera = tpl(it.camera_id)
-    if (it.camera_id && !camera) errors.push(`${where}：所选镜头模板已被删除`)
+    const cameras = cameraCandidates(it, where)
     const scene = it.scene_id ? tpl(it.scene_id) : defaultScene
     if (it.scene_id && !scene) errors.push(`${where}：所选场景已被删除`)
     const second = !solo && !!char2
@@ -447,6 +460,7 @@ export function expandTask(data: TaskData, lib: PlanLibrary, settings: Settings,
     const slots = sized ? sizeSchedule(it.sizes, 0).map((s) => s.size) : Array.from({ length: count }, () => undefined)
     slots.forEach((size, k) => {
       const rnd = unitRandom(comboSeed, pi, k)
+      const camera = drawCamera(cameras, comboSeed, pi, k)
       const got = {} as Record<CardPoolKey, Template[]>
       const picks: CardPick[] = []
       for (const p of pools) {
@@ -544,8 +558,7 @@ export function expandTask(data: TaskData, lib: PlanLibrary, settings: Settings,
       if (e) exprs.push(e)
       else errors.push(`${where}：有表情模板已被删除`)
     }
-    const camera = tpl(it.camera_id)
-    if (it.camera_id && !camera) errors.push(`${where}：所选镜头模板已被删除`)
+    const cameras = cameraCandidates(it, where)
     const scene = it.scene_id ? tpl(it.scene_id) : defaultScene
     if (it.scene_id && !scene) errors.push(`${where}：所选场景已被删除`)
     const maleOn = !!it.male_enabled
@@ -596,6 +609,7 @@ export function expandTask(data: TaskData, lib: PlanLibrary, settings: Settings,
     let k = 0
     for (const { e, j, size } of slots) {
       const n = per
+      const camera = drawCamera(cameras, comboSeed, pi, k)
       const m = baseModules(outfit)
       m.content = stateModule(states, char)
       m.expression = filled(e, char)
@@ -630,6 +644,8 @@ export function expandTask(data: TaskData, lib: PlanLibrary, settings: Settings,
         n: k + 1,
         of: count,
       }
+      // 旧方式的动作只有选了多个镜头才用到组合 Seed；其他情况计划结构不变
+      if (cameras.length > 1) meta.combo_seed = comboSeed
       if (scene) meta.scene = scene.name
       if (position) meta.position = position.name
       if (sub) meta.subposition = sub.name

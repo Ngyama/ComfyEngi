@@ -7,7 +7,7 @@
  * - pose / act：旧类型，打开工作区时迁移为 state（只改 kind，原值记录在 legacy_kind）；未迁移的文件按状态显示
  * - position / subposition：动作卡（旧版双人主体位）/ 它的子体位（结构变体，parent_id 指向动作卡）。动作卡配置保存在 card 字段
  * - scene：场景（环境、地点、背景）
- * - male / camera：兼容素材（旧版男性描述、镜头），不在素材库中显示；镜头在套图任务中选择和新建
+ * - male / camera：兼容素材（旧版男性描述、镜头），不在素材库中显示；镜头已是素材库的独立分类
  */
 export type TemplateKind = 'global' | 'scene' | 'state' | 'pose' | 'position' | 'subposition' | 'act' | 'expression' | 'male' | 'camera'
 
@@ -209,7 +209,10 @@ export interface TaskItem {
   outfit_id: number | null
   expression_ids: number[]
   count: number
+  /** 旧版：单选镜头。读取时转换为一个元素的 camera_ids；修改镜头时同步为 camera_ids 的第一个 */
   camera_id: number | null
+  /** 镜头候选（素材 ID）：选 1 个时每张图片都使用它，选多个时每张图片各抽 1 个，不选则没有镜头 Prompt */
+  camera_ids?: number[]
   male_enabled: boolean
   male_ids: number[]
   male_extra: string

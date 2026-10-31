@@ -31,7 +31,7 @@ import { api, call } from '@/lib/api'
 import { hueOf } from '@/lib/hooks'
 import { confirm, reloadLib, templatesOf, useLib, useNav, usePlan, useRunner } from '@/lib/stores'
 import { cn } from '@/lib/utils'
-import { defaultItemCount, defaultSizes, expandTask, itemStateIds, newCardItem, newItem, newTaskWithDefaults, setItemSizes, sizeCount } from '@shared/planner'
+import { defaultItemCount, defaultSizes, expandTask, itemCameraIds, itemStateIds, newCardItem, newItem, newTaskWithDefaults, setItemSizes, sizeCount } from '@shared/planner'
 import type { Plan } from '@shared/api'
 import { DEFAULT_SETTINGS, SIZE_PRESETS, type Library, type PlanUnit, type TaskData, type TaskItem } from '@shared/types'
 import { PlanPreviewDialog, TaskSettingsDialog } from './dialogs'
@@ -236,7 +236,7 @@ function PoseCard({
   const missing = isCard ? !card : item.position_id ? !position : !states.length || states.some((t) => !t)
   const outfit = item.outfit_id ? lib?.outfits.find((o) => o.id === item.outfit_id) : undefined
   const exprs = item.expression_ids.map((e) => T(e)?.name ?? '（已删除）')
-  const camera = T(item.camera_id)
+  const cameras = itemCameraIds(item).map((id) => T(id)?.name ?? '（已删除）')
   const per = exprs.length && item.count % exprs.length === 0 ? item.count / exprs.length : null
   const sizeText = item.sizes
     ? SIZE_PRESETS.filter((p) => sizeCount(item.sizes, p.key))
@@ -293,10 +293,10 @@ function PoseCard({
               ♂ 男性（旧版）
             </span>
           )}
-          {camera && (
-            <span className="inline-flex shrink-0 items-center gap-1 rounded-md bg-tint/[0.06] px-1.5 py-0.5 text-[10.5px] text-muted-foreground">
-              <Camera className="size-3" />
-              {camera.name}
+          {cameras.length > 0 && (
+            <span className="inline-flex min-w-0 shrink items-center gap-1 rounded-md bg-tint/[0.06] px-1.5 py-0.5 text-[10.5px] text-muted-foreground" title={cameras.length > 1 ? `每张图片随机抽取 1 个：${cameras.join('、')}` : undefined} data-testid="camera-badge">
+              <Camera className="size-3 shrink-0" />
+              <span className="truncate">{cameras.length > 1 ? `随机 ${cameras.join(' / ')}` : cameras[0]}</span>
             </span>
           )}
         </div>

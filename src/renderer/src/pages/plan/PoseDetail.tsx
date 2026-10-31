@@ -6,13 +6,11 @@ import { useMemo, useState, type ReactNode } from 'react'
 import { Camera, ChevronRight, Image as ImageIcon, MapPin, Minus, Plus, Shirt, Smile, Users, X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Switch } from '@/components/ui/switch'
-import { Chip, CopyButton, Disclosure, FieldLabel, NumberStepper, PromptField, TextInput } from '@/components/common'
-import { api, call } from '@/lib/api'
-import { useDraft } from '@/lib/hooks'
+import { Chip, CopyButton, Disclosure, FieldLabel, NumberStepper, PromptField } from '@/components/common'
 import type { MaterialOption } from '@/lib/material-select'
-import { reloadLib, templatesOf, useLib, usePlan } from '@/lib/stores'
+import { templatesOf, useLib, usePlan } from '@/lib/stores'
 import { cn } from '@/lib/utils'
-import { itemStateIds, itemStateIds2, setItemSizes, sizeCount, sizeTotal, stepSize } from '@shared/planner'
+import { itemCameraIds, itemStateIds, itemStateIds2, setItemSizes, sizeCount, sizeTotal, stepSize } from '@shared/planner'
 import { PLACEHOLDER_HELP } from '@shared/prompt'
 import { SIZE_PRESETS, type PlanUnit, type SizeKey, type TaskItem, type Template } from '@shared/types'
 import { MaterialPicker } from './MaterialPicker'
@@ -123,23 +121,69 @@ export function SizeCards({ item, onChange }: { item: TaskItem; onChange: (k: Si
   )
 }
 
-/** 编辑当前选中的镜头（镜头素材不在素材库中显示，在任务中直接新建和修改） */
-export function CameraEditor({ t }: { t: Template }) {
-  const { draft, patch } = useDraft<Template>(t, t.id, async (v) => {
-    await call(api['templates.save']({ id: v.id, _revision: v._revision, name: v.name, positive: v.positive } as never))
-    await reloadLib()
-  })
-  if (!draft) return null
+/**
+ * 动作的镜头：已选的镜头显示为标签，可以逐个移除或全部清空，点 + 从素材库中多选（不在动作页平铺素材）。
+ * 只保存素材 ID；camera_id 同步为第一个，旧版本打开任务时仍能读到一个镜头。
+ */
+export function CameraField({ item, onChange }: { item: TaskItem; onChange: (patch: Pick<TaskItem, 'camera_id' | 'camera_ids'>) => void }) {
+  const lib = useLib((s) => s.lib)
+  const [open, setOpen] = useState(false)
+  const cameras = templatesOf(lib, 'camera')
+  const ids = itemCameraIds(item)
+  const save = (next: number[]) => onChange({ camera_ids: next, camera_id: next[0] ?? null })
   return (
-    <div className="space-y-2 rounded-lg bg-tint/[0.03] p-2.5">
-      <TextInput value={draft.name} onChange={(v) => patch({ name: v })} placeholder="镜头名称" />
-      <PromptField value={draft.positive} onChange={(v) => patch({ positive: v })} placeholder="镜头 Prompt（原样保存），例如 pov, from above" minRows={2} />
-      <div className="text-[11px] text-muted-foreground">修改镜头会影响所有使用它的任务（已入队的不受影响）。</div>
+    <div className="grid grid-cols-[88px_1fr] items-start gap-2" data-testid="camera-field">
+      <div className="flex items-center gap-1 pt-2 text-[12px] text-muted-foreground [&_svg]:size-3">
+        <Camera />
+        镜头
+      </div>
+      <div className="min-w-0">
+        <div className="flex min-h-9 flex-wrap items-center gap-1 rounded-lg bg-tint/[0.035] px-1.5 py-1 ring-1 ring-tint/[0.1]">
+          {ids.map((id) => {
+            const name = cameras.find((t) => t.id === id)?.name || '（已删除）'
+            return (
+              <span key={id} className="inline-flex h-6 max-w-full items-center gap-0.5 rounded-md bg-primary/10 pl-1.5 text-[12px]" data-testid="camera-tag">
+                <span className="min-w-0 truncate" title={name}>
+                  {name}
+                </span>
+                <button type="button" aria-label={`移除镜头 ${name}`} className="grid size-5 shrink-0 place-items-center rounded text-muted-foreground hover:text-foreground" onClick={() => save(ids.filter((x) => x !== id))}>
+                  <X className="size-3" />
+                </button>
+              </span>
+            )
+          })}
+          <button type="button" onClick={() => setOpen(true)} aria-label="选择镜头" data-testid="pick-camera" className={cn('rounded-md text-muted-foreground hover:bg-tint/[0.06] hover:text-foreground', ids.length ? 'grid size-6 place-items-center' : 'h-6 flex-1 px-1 text-left text-[13px]')}>
+            {ids.length ? <Plus className="size-3.5" /> : '不指定，点击选择'}
+          </button>
+          {ids.length > 0 && (
+            <button type="button" onClick={() => save([])} data-testid="camera-clear" className="ml-auto h-6 shrink-0 rounded-md px-1.5 text-[11.5px] text-muted-foreground hover:bg-tint/[0.06] hover:text-foreground">
+              清空
+            </button>
+          )}
+        </div>
+        {ids.length > 0 && (
+          <div className="mt-1 text-[11px] text-muted-foreground" data-testid="camera-hint">
+            {ids.length > 1 ? `每张图片从这 ${ids.length} 个镜头中随机抽取 1 个` : '每张图片都使用这个镜头'}
+          </div>
+        )}
+      </div>
+      <MaterialPicker
+        open={open}
+        onOpenChange={setOpen}
+        title="镜头"
+        description="可多选：选 1 个时每张图片都使用它，选多个时每张图片随机抽取 1 个。在「素材库 → 镜头视角」中管理。"
+        items={cameras}
+        value={ids}
+        multi
+        onChange={save}
+        empty="镜头库为空，可在「素材库 → 镜头视角」中添加"
+        testId="material-picker"
+      />
     </div>
   )
 }
 
-type PickerKey = 'pose' | 'position' | 'sub' | 'acts' | 'scene' | 'camera' | 'outfit' | 'exprs' | 'outfit2' | 'pose2' | 'expr2'
+type PickerKey = 'pose' | 'position' | 'sub' | 'acts' | 'scene' | 'outfit' | 'exprs' | 'outfit2' | 'pose2' | 'expr2'
 
 export function PoseDetail({ index, firstUnit, onClose }: { index: number; firstUnit: PlanUnit | null; onClose: () => void }) {
   const lib = useLib((s) => s.lib)
@@ -153,7 +197,6 @@ export function PoseDetail({ index, firstUnit, onClose }: { index: number; first
   const acts = states
   const scenes = templatesOf(lib, 'scene')
   const exprs = templatesOf(lib, 'expression')
-  const cameras = templatesOf(lib, 'camera')
   const maleBaseId = task?.data.male_base_id ?? null
   const legacyMales = templatesOf(lib, 'male').filter((t) => t.id !== maleBaseId)
   const charId = task?.data.character_id
@@ -186,19 +229,12 @@ export function PoseDetail({ index, firstUnit, onClose }: { index: number; first
   const defaultScene = T(task.data.scene_id)
   const actIds = item.act_ids ?? []
   const childSubs = position ? subs.filter((s) => s.parent_id === position.id) : []
-  const camera = T(item.camera_id)
   // 旧任务的男性设置：只在该动作仍在使用时显示，便于查看或关闭；新任务使用第二角色
   const legacyMale = item.male_enabled || !!item.male_ids.length || !!(item.male_pose_ids ?? []).length || !!(item.male_expression_ids ?? []).length || !!item.male_extra
   const legacySelected = [...(item.male_pose_ids ?? []), ...(item.male_expression_ids ?? [])].map((id) => T(id)).filter((t): t is Template => !!t)
   const secondOn = !!item.second_enabled
   const multiNames = (ids: number[]) => ids.map((id) => T(id)?.name || '（已删除）')
 
-  const newCamera = async () => {
-    const r = await call(api['templates.save']({ kind: 'camera', name: `镜头 ${cameras.length + 1}`, positive: '' }))
-    if (!r) return
-    await reloadLib()
-    set({ camera_id: r.id })
-  }
   const pickPosition = (id: number) => {
     // 子体位从属于主体位：原子体位不属于新主体位时清除
     const keepSub = sub && sub.parent_id === id
@@ -223,7 +259,6 @@ export function PoseDetail({ index, firstUnit, onClose }: { index: number; first
     sub: { title: `子体位（${position?.name ?? ''}）`, items: childSubs, value: single(item.subposition_id), noneLabel: '不指定（只用主体位）', onChange: (ids) => set({ subposition_id: ids[0] ?? null }), description: '只列出属于当前主体位的子体位，补充在主体位之后。' },
     acts: { title: '行为（可叠加）', items: acts, value: actIds, multi: true, onChange: (ids) => set({ act_ids: ids }), description: '从状态素材中选择，可多选，按点选顺序拼接在主体位、子体位之后；行为不绑定主体位。', empty: '还没有状态素材' },
     scene: { title: '场景', items: scenes, value: single(item.scene_id), noneLabel: defaultScene ? `任务默认：${defaultScene.name}` : '不指定', onChange: (ids) => set({ scene_id: ids[0] ?? null }), empty: '场景库为空，可在「素材库 → 场景」中添加' },
-    camera: { title: '镜头', items: cameras, value: single(item.camera_id), noneLabel: '不指定', onChange: (ids) => set({ camera_id: ids[0] ?? null }) },
     outfit: { title: `主角色服装（${mainName}）`, items: outfitOpts(outfits), value: single(item.outfit_id), noneLabel: '不指定', onChange: (ids) => set({ outfit_id: ids[0] ?? null }), empty: charId ? '该角色还没有服装' : '先选择主角色' },
     exprs: { title: `主角色表情（${mainName}）`, items: exprs, value: item.expression_ids, multi: true, numbered: true, onChange: (ids) => set({ expression_ids: ids }), description: '可多选，总张数平均分配给各表情；序号为生成顺序。', empty: '表情库为空，可在素材库中添加' },
     outfit2: { title: `第二角色服装（${char2?.name ?? ''}）`, items: outfitOpts(outfits2), value: single(item.second_outfit_id), noneLabel: '不指定', onChange: (ids) => set({ second_outfit_id: ids[0] ?? null }) },
@@ -296,23 +331,7 @@ export function PoseDetail({ index, firstUnit, onClose }: { index: number; first
             </>
           )}
           <PickField label="场景" icon={<MapPin />} names={nameOf(item.scene_id, scenes)} placeholder={defaultScene ? `任务默认：${defaultScene.name}` : '不指定'} onOpen={() => setPicker('scene')} onClear={() => set({ scene_id: null })} testId="pick-scene" />
-          <PickField
-            label="镜头"
-            icon={<Camera />}
-            names={nameOf(item.camera_id, cameras)}
-            placeholder="不指定"
-            onOpen={() => setPicker('camera')}
-            onClear={() => set({ camera_id: null })}
-            testId="pick-camera"
-            hint={
-              <span className="flex gap-3">
-                <button type="button" className="hover:text-foreground" onClick={() => void newCamera()}>
-                  + 新建镜头
-                </button>
-              </span>
-            }
-          />
-          {camera && <CameraEditor key={camera.id} t={camera} />}
+          <CameraField item={item} onChange={set} />
         </Section>
 
         <Section title="角色配置" testId="detail-roles">

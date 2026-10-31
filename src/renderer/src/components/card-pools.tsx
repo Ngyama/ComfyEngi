@@ -1,13 +1,13 @@
-// 动作卡的素材池：每个池都是「固定 Prompt + 随机候选 Prompt」两栏，素材在两栏之间拖动。
+// 动作卡的素材池：每个池都是「固定 Prompt + 随机候选 Prompt」两栏，素材显示为自动换行的紧凑标签，在两栏之间拖动。
 // 素材库中编辑动作卡，套图任务中按池覆盖（只对当前任务生效）。
 // 每个池折叠为一行摘要，一次只展开一个，避免在主界面同时铺开所有素材池。
 
 import { useState } from 'react'
-import { closestCenter, DndContext, KeyboardSensor, PointerSensor, pointerWithin, rectIntersection, useDroppable, useSensor, useSensors, type CollisionDetection, type DragEndEvent, type DragOverEvent } from '@dnd-kit/core'
-import { arrayMove, SortableContext, sortableKeyboardCoordinates, verticalListSortingStrategy } from '@dnd-kit/sortable'
+import { createPortal } from 'react-dom'
+import { closestCenter, DndContext, DragOverlay, MeasuringStrategy, PointerSensor, pointerWithin, rectIntersection, useDroppable, useSensor, useSensors, type CollisionDetection, type DragMoveEvent } from '@dnd-kit/core'
+import { SortableContext, useSortable } from '@dnd-kit/sortable'
 import { ChevronDown, ChevronRight, GripVertical, Plus, RotateCcw, X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
-import { useSortableItem } from '@/components/sortable'
 import { cn } from '@/lib/utils'
 import { MaterialPicker } from '@/pages/plan/MaterialPicker'
 import { fixedConflicts, movePoolItem, normalizePool, poolSummary, poolsOf, resolvePool } from '@shared/cards'
@@ -32,43 +32,61 @@ const ZONES: { zone: Zone; title: string; hint: string; empty: string }[] = [
 ]
 const ZONE_ID: Record<Zone, string> = { fixed: 'zone-fixed', random: 'zone-random' }
 
-/** 指针所在的素材优先，其次是所在的栏（空栏也能放入）；键盘拖动时按位置判断 */
+/** 指针所在的素材优先；在栏内的空白处时取最近的标签（优先同一行，例如放到行尾），空栏才算放入栏本身 */
 const collision: CollisionDetection = (args) => {
   const within = pointerWithin(args)
   const hits = within.length ? within : rectIntersection(args)
-  const rows = hits.filter((h) => !String(h.id).startsWith('zone-'))
-  if (rows.length) return rows
+  const chips = hits.filter((h) => !String(h.id).startsWith('zone-'))
+  if (chips.length) return chips
+  const zone = hits.length ? args.droppableRects.get(hits[0].id) : undefined
+  const p = args.pointerCoordinates
+  if (zone && p) {
+    let best: { id: string | number; d: number } | null = null
+    for (const { id } of args.droppableContainers) {
+      const r = args.droppableRects.get(id)
+      if (!r || String(id).startsWith('zone-') || r.top < zone.top || r.bottom > zone.bottom) continue
+      const d = Math.max(r.top - p.y, 0, p.y - r.bottom) * 1000 + Math.max(r.left - p.x, 0, p.x - r.right)
+      if (!best || d < best.d) best = { id, d }
+    }
+    if (best) return [{ id: best.id }]
+  }
   return hits.length ? hits : closestCenter(args)
 }
 
-/** 一个素材：拖动手柄、名称、移除 */
-function PoolRow({ id, name, struck, onRemove, onRestore }: { id: number; name: string; struck: boolean; onRemove: () => void; onRestore?: () => void }) {
-  const s = useSortableItem(String(id))
+/** 素材标签的外观：宽度随名称变化，过长时截断（完整名称在 title 中） */
+const CHIP = 'inline-flex h-7 max-w-full items-center gap-0.5 rounded-lg px-0.5 text-[12.5px] ring-1'
+/** 标签的宽度各不相同，不用位移预览：拖动时直接调整实际顺序，由浏览器重新换行，被拖动的标签由浮层跟随指针 */
+const noShift = () => null
+
+/** 一个素材标签：拖动手柄、名称、移除 */
+function PoolChip({ id, name, struck, onRemove, onRestore, onKeyMove }: { id: number; name: string; struck: boolean; onRemove: () => void; onRestore?: () => void; onKeyMove: (key: string) => boolean }) {
+  const s = useSortable({ id: String(id) })
   return (
-    <div ref={s.setNodeRef} style={s.style} data-testid="pool-item" className={cn('flex h-8 items-center gap-1.5 rounded-lg bg-tint/[0.04] pl-1 pr-1 text-[12.5px] ring-1 ring-tint/[0.08]', s.isDragging && 'shadow-lg shadow-tint/15')}>
-      <button type="button" ref={s.setActivatorNodeRef} {...s.attributes} {...s.listeners} aria-label={`拖动 ${name}`} className="flex size-6 shrink-0 cursor-grab touch-none items-center justify-center rounded text-muted-foreground hover:text-foreground active:cursor-grabbing">
+    <div ref={s.setNodeRef} data-testid="pool-item" className={cn(CHIP, 'bg-tint/[0.04] ring-tint/[0.08]', s.isDragging && 'bg-primary/[0.08] opacity-60 ring-primary/50')}>
+      <button type="button" ref={s.setActivatorNodeRef} {...s.attributes} {...s.listeners} onKeyDown={(e) => onKeyMove(e.key) && e.preventDefault()} data-pool-grip={id} aria-label={`拖动 ${name}`} title="拖动调整；也可以用方向键：左右调整顺序，上下移到另一栏" className="flex size-5 shrink-0 cursor-grab touch-none items-center justify-center rounded text-muted-foreground hover:text-foreground active:cursor-grabbing">
         <GripVertical className="size-3.5" />
       </button>
-      <span className={cn('min-w-0 flex-1 truncate', struck && 'text-muted-foreground line-through')} title={name}>
+      <span className={cn('max-w-64 min-w-0 truncate', struck && 'text-muted-foreground line-through')} title={name}>
         {name}
       </span>
       {struck && onRestore && (
-        <Button size="xs" variant="ghost" onClick={onRestore}>
+        <Button size="xs" variant="ghost" className="h-5 shrink-0 px-1" onClick={onRestore}>
           恢复抽取
         </Button>
       )}
-      <button type="button" aria-label={`移除 ${name}`} onClick={onRemove} className="flex size-6 shrink-0 items-center justify-center rounded text-muted-foreground hover:text-foreground">
+      <button type="button" aria-label={`移除 ${name}`} onClick={onRemove} className="flex size-5 shrink-0 items-center justify-center rounded text-muted-foreground hover:text-foreground">
         <X className="size-3.5" />
       </button>
     </div>
   )
 }
 
-/** 一栏：标题、添加按钮、可排序的素材列表；空栏也可以放入 */
-function PoolZone({ poolKey, zone, title, hint, empty, ids, byId, strike, onAdd, onRemove, onRestore }: { poolKey: CardPoolKey; zone: Zone; title: string; hint: string; empty: string; ids: number[]; byId: Map<number, Template>; strike: Set<number>; onAdd: () => void; onRemove: (id: number) => void; onRestore: (id: number) => void }) {
+/** 一栏：标题、添加按钮、可排序的素材标签；空栏也可以放入。正在拖动的素材所在的栏高亮 */
+function PoolZone({ poolKey, zone, title, hint, empty, ids, byId, strike, dragging, onAdd, onRemove, onRestore, onKeyMove }: { poolKey: CardPoolKey; zone: Zone; title: string; hint: string; empty: string; ids: number[]; byId: Map<number, Template>; strike: Set<number>; dragging: number | null; onAdd: () => void; onRemove: (id: number) => void; onRestore: (id: number) => void; onKeyMove: (id: number, key: string) => boolean }) {
   const { setNodeRef, isOver } = useDroppable({ id: ZONE_ID[zone] })
+  const active = isOver || (dragging !== null && ids.includes(dragging))
   return (
-    <div ref={setNodeRef} data-testid={`pool-${poolKey}-${zone}`} className={cn('rounded-lg bg-tint/[0.02] p-2 ring-1 ring-tint/[0.08]', isOver && 'ring-primary/40')}>
+    <div ref={setNodeRef} data-testid={`pool-${poolKey}-${zone}`} data-drop-active={active || undefined} className={cn('rounded-lg bg-tint/[0.02] p-2 ring-1 ring-tint/[0.08]', active && 'bg-primary/[0.03] ring-primary/40')}>
       <div className="mb-1.5 flex items-center gap-2">
         <span className="text-[12px] font-medium">{title}</span>
         <span className="min-w-0 truncate text-[11px] text-muted-foreground">{hint}</span>
@@ -76,13 +94,13 @@ function PoolZone({ poolKey, zone, title, hint, empty, ids, byId, strike, onAdd,
           <Plus /> 添加
         </Button>
       </div>
-      <SortableContext items={ids.map(String)} strategy={verticalListSortingStrategy}>
-        <div className="min-h-8 space-y-1">
+      <SortableContext items={ids.map(String)} strategy={noShift}>
+        <div className="flex min-h-7 flex-wrap gap-1">
           {ids.map((id) => {
             const struck = zone === 'random' && strike.has(id)
-            return <PoolRow key={id} id={id} name={byId.get(id)?.name || '（已删除）'} struck={struck} onRemove={() => onRemove(id)} onRestore={struck ? () => onRestore(id) : undefined} />
+            return <PoolChip key={id} id={id} name={byId.get(id)?.name || '（已删除）'} struck={struck} onRemove={() => onRemove(id)} onRestore={struck ? () => onRestore(id) : undefined} onKeyMove={(key) => onKeyMove(id, key)} />
           })}
-          {!ids.length && <div className="flex h-8 items-center justify-center rounded-lg border border-dashed border-tint/[0.14] text-[11px] text-muted-foreground">{empty}</div>}
+          {!ids.length && <div className="flex h-7 w-full items-center justify-center rounded-lg border border-dashed border-tint/[0.14] text-[11px] text-muted-foreground">{empty}</div>}
         </div>
       </SortableContext>
     </div>
@@ -92,8 +110,9 @@ function PoolZone({ poolKey, zone, title, hint, empty, ids, byId, strike, onAdd,
 /** 固定 / 随机两栏。拖动期间用本地状态显示，松手后通过 onChange 保存，保存完成后回到外部数据 */
 function PoolEditor({ poolKey, value, byId, strike, onChange, onAdd, onRestore }: { poolKey: CardPoolKey; value: Lists; byId: Map<number, Template>; strike: Set<number>; onChange: (next: Lists) => unknown; onAdd: (zone: Zone) => void; onRestore: (id: number) => void }) {
   const [draft, setDraft] = useState<Lists | null>(null)
+  const [dragging, setDragging] = useState<number | null>(null)
   const lists = draft ?? value
-  const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 5 } }), useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }))
+  const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 5 } }))
   const zoneOf = (dndId: string | number, l: Lists): Zone | null => {
     const s = String(dndId)
     if (s === ZONE_ID.fixed) return 'fixed'
@@ -101,35 +120,83 @@ function PoolEditor({ poolKey, value, byId, strike, onChange, onAdd, onRestore }
     if (l.fixed.includes(Number(s))) return 'fixed'
     return l.random.includes(Number(s)) ? 'random' : null
   }
-  // 拖到另一栏时立即移过去（移动，不复制）；落点在目标素材的上方或下方
-  const onDragOver = ({ active, over }: DragOverEvent) => {
-    if (!over) return
+  const same = (a: Lists, b: Lists) => a.fixed.join() === b.fixed.join() && a.random.join() === b.random.join()
+  // 拖动时立即把素材移到落点（跨栏是移动，不复制）。指针在目标标签的左半边时放在它前面，右半边时放在它后面：
+  // 标签宽度不同也不会来回跳动（换位后指针仍在同一侧，或落在被拖动的标签自己上）
+  const track = ({ active, over, activatorEvent, delta }: DragMoveEvent) => {
+    if (!over || active.id === over.id) return
+    const id = Number(active.id)
     const from = zoneOf(active.id, lists)
     const to = zoneOf(over.id, lists)
-    if (!from || !to || from === to) return
-    const at = lists[to].indexOf(Number(over.id))
-    const translated = active.rect.current.translated
-    const below = !!translated && translated.top > over.rect.top + over.rect.height / 2
-    setDraft(movePoolItem(lists, Number(active.id), to, at < 0 ? lists[to].length : at + (below ? 1 : 0)))
+    if (!from || !to) return
+    const others = lists[to].filter((x) => x !== id)
+    const at = others.indexOf(Number(over.id))
+    if (at < 0 && from === to) return
+    const after = (activatorEvent as PointerEvent).clientX + delta.x > over.rect.left + over.rect.width / 2
+    const next = movePoolItem(lists, id, to, at < 0 ? others.length : at + (after ? 1 : 0))
+    if (!same(next, lists)) setDraft(next)
   }
-  const onDragEnd = ({ active, over }: DragEndEvent) => {
-    let next = lists
-    const zone = over ? zoneOf(over.id, lists) : null
-    if (over && zone && zoneOf(active.id, lists) === zone && active.id !== over.id && !String(over.id).startsWith('zone-')) {
-      next = { ...lists, [zone]: arrayMove(lists[zone], lists[zone].indexOf(Number(active.id)), lists[zone].indexOf(Number(over.id))) }
-    }
-    if (next.fixed.join() === value.fixed.join() && next.random.join() === value.random.join()) return setDraft(null)
+  const commit = (next: Lists) => {
+    if (same(next, value)) return setDraft(null)
     setDraft(next)
     void Promise.resolve(onChange(next)).finally(() => setDraft(null))
   }
+  const onDragEnd = () => {
+    setDragging(null)
+    commit(lists)
+  }
+  // 键盘：左右键在栏内调整顺序，上键移到固定栏，下键移到随机栏（放在末尾）；修改立即保存，焦点留在这个素材上
+  const onKeyMove = (id: number, key: string) => {
+    const zone = zoneOf(id, lists)
+    if (!zone) return false
+    const at = lists[zone].indexOf(id)
+    const moves: Record<string, Lists | undefined> = {
+      ArrowLeft: at > 0 ? movePoolItem(lists, id, zone, at - 1) : undefined,
+      ArrowRight: at < lists[zone].length - 1 ? movePoolItem(lists, id, zone, at + 1) : undefined,
+      ArrowUp: zone === 'random' ? movePoolItem(lists, id, 'fixed', lists.fixed.length) : undefined,
+      ArrowDown: zone === 'fixed' ? movePoolItem(lists, id, 'random', lists.random.length) : undefined,
+    }
+    if (!(key in moves)) return false
+    const next = moves[key]
+    if (next) {
+      commit(next)
+      requestAnimationFrame(() => document.querySelector<HTMLElement>(`[data-pool-grip="${id}"]`)?.focus())
+    }
+    return true
+  }
   const remove = (id: number) => onChange({ fixed: lists.fixed.filter((x) => x !== id), random: lists.random.filter((x) => x !== id) })
+  const draggingName = dragging === null ? '' : byId.get(dragging)?.name || '（已删除）'
   return (
-    <DndContext sensors={sensors} collisionDetection={collision} onDragOver={onDragOver} onDragEnd={onDragEnd} onDragCancel={() => setDraft(null)}>
+    <DndContext
+      sensors={sensors}
+      collisionDetection={collision}
+      measuring={{ droppable: { strategy: MeasuringStrategy.Always } }}
+      onDragStart={({ active }) => setDragging(Number(active.id))}
+      onDragMove={track}
+      onDragOver={track}
+      onDragEnd={onDragEnd}
+      onDragCancel={() => {
+        setDragging(null)
+        setDraft(null)
+      }}
+    >
       <div className="space-y-2">
         {ZONES.map((z) => (
-          <PoolZone key={z.zone} poolKey={poolKey} {...z} ids={lists[z.zone]} byId={byId} strike={strike} onAdd={() => onAdd(z.zone)} onRemove={remove} onRestore={onRestore} />
+          <PoolZone key={z.zone} poolKey={poolKey} {...z} ids={lists[z.zone]} byId={byId} strike={strike} dragging={dragging} onAdd={() => onAdd(z.zone)} onRemove={remove} onRestore={onRestore} onKeyMove={onKeyMove} />
         ))}
       </div>
+      {createPortal(
+        <DragOverlay dropAnimation={null}>
+          {dragging !== null && (
+            <div className={cn(CHIP, 'cursor-grabbing bg-popover shadow-lg shadow-tint/20 ring-primary/60')} data-testid="pool-drag-overlay">
+              <GripVertical className="size-3.5 shrink-0 text-muted-foreground" />
+              <span className="max-w-64 min-w-0 truncate">{draggingName}</span>
+              <X className="mx-0.5 size-3.5 shrink-0 text-muted-foreground" />
+            </div>
+          )}
+        </DragOverlay>,
+        document.body,
+      )}
     </DndContext>
   )
 }
@@ -247,7 +314,7 @@ export function CardPools({
 const POOL_LABEL = Object.fromEntries(CARD_POOLS.map((p) => [p.key, p.label])) as Record<CardPoolKey, string>
 
 /** 一张图片实际使用的素材：按池列出，标明固定 / 随机（来自冻结的计划，与 Prompt 一致） */
-export function PickSources({ picks, card }: { picks?: CardPick[]; card?: string }) {
+export function PickSources({ picks, card, camera }: { picks?: CardPick[]; card?: string; camera?: string }) {
   if (!card) return null
   const by = new Map<CardPoolKey, CardPick[]>()
   for (const p of picks ?? []) by.set(p.pool, [...(by.get(p.pool) ?? []), p])
@@ -271,6 +338,12 @@ export function PickSources({ picks, card }: { picks?: CardPick[]; card?: string
         </div>
       ))}
       {!by.size && <div className="text-muted-foreground">本张没有从素材池加入素材（只用基础 Prompt）</div>}
+      {camera && (
+        <div className="flex gap-2" data-testid="pick-camera-source">
+          <span className="w-28 shrink-0 text-muted-foreground">镜头</span>
+          <span>{camera}</span>
+        </div>
+      )}
     </div>
   )
 }

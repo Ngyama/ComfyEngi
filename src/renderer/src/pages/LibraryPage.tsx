@@ -1,9 +1,9 @@
-// 素材库：全局 / 场景 / 状态 / 表情 / 动作卡。卡片浏览 + 右侧编辑，修改自动保存。
-// 状态（旧版单人动作与行为合并而来）、表情、场景只编辑名称、正面 Prompt、显示优先级与可选的互斥组；它们是全局共享素材。
+// 素材库：全局 / 场景 / 状态 / 表情 / 镜头视角 / 动作卡。卡片浏览 + 右侧编辑，修改自动保存。
+// 状态（旧版单人动作与行为合并而来）、表情、场景、镜头只编辑名称、正面 Prompt、显示优先级与可选的互斥组；它们是全局共享素材。
 // 动作卡（旧版主体位）= 基础 Prompt + 子体位（结构变体）+ 各素材池的固定素材与随机候选（只保存 ID）；套图任务中只需选择动作卡。
 // 优先级只影响选择列表中的排列（高 → 普通 → 低，同级保持手动排序），不影响 Prompt。
 // 旧文件中的分类、标签、适用对象、备注等字段不在界面中显示，保存时也不会写入（原值保留）。
-// 旧版男性描述与镜头不在素材库中显示：数据与任务引用保持不变，镜头在套图任务中选择和新建。
+// 旧版男性描述不在素材库中显示：数据与任务引用保持不变。
 
 import { useState } from 'react'
 import { ChevronDown, ChevronRight, Copy, GripVertical, Pickaxe, Plus, Shapes, Trash2, X } from 'lucide-react'
@@ -21,12 +21,13 @@ import { cardMaterialIds, cardPool, isSoloCard, normalizeCard } from '@shared/ca
 import { PLACEHOLDER_HELP } from '@shared/prompt'
 import { CARD_POOLS, TEMPLATE_KINDS, type ActionCard, type CardPoolKey, type Library, type PoolConfig, type Template, type TemplateKind } from '@shared/types'
 
-type Tab = 'global' | 'scene' | 'state' | 'expression' | 'cards'
+type Tab = 'global' | 'scene' | 'state' | 'expression' | 'camera' | 'cards'
 const TABS: [Tab, string][] = [
   ['global', '全局'],
   ['scene', '场景'],
   ['state', '状态'],
   ['expression', '表情'],
+  ['camera', '镜头视角'],
   ['cards', '动作卡'],
 ]
 const STATE_HINT = '状态素材（局部姿态、手部动作、双人互动等，旧版「单人动作」与「行为」都在这里）。全局共享：动作卡只记录各素材池使用哪些状态，不复制 Prompt。'
@@ -40,7 +41,7 @@ const HINTS: Record<TemplateKind, string> = {
   act: STATE_HINT,
   expression: '表情 Prompt（全局共享）。动作卡分别配置主角色、第二角色允许使用的表情；可用互斥组避免同一张图片抽到相互矛盾的表情。',
   male: '男性描述（兼容素材）：分类为「基础」的可作为任务的男性基础描述；旧版的男性动作 / 表情模板仍可在任务的男性设置中选择。',
-  camera: '镜头（兼容素材）：仍可在任务的动作详情中选择，POV 不会自动启用男性出场。',
+  camera: '视角、景别、构图等镜头 Prompt（全局共享）。在套图任务的动作详情中多选：选 1 个时每张图片都使用它，选多个时每张图片随机抽取 1 个。POV 不会自动启用男性出场。',
 }
 /** 状态可能被引用的位置：主角色 / 第二角色的状态、双人动作的行为，以及旧任务中的单选动作字段 */
 const STATE_REFS = ['state_ids', 'second_state_ids', 'act_ids', 'pose_id', 'second_pose_id', 'male_pose_ids']
@@ -54,7 +55,7 @@ const REF_FIELDS: Record<TemplateKind, string[]> = {
   act: STATE_REFS,
   expression: ['expression_ids', 'male_expression_ids', 'second_expression_id'],
   male: ['male_base_id', 'male_ids'],
-  camera: ['camera_id'],
+  camera: ['camera_id', 'camera_ids'],
 }
 /** 使用某个素材的动作卡（素材池的固定素材或随机候选） */
 function cardsUsing(lib: Library | null, id: number): string[] {
@@ -76,8 +77,8 @@ async function createSoloCards(list: Template[]): Promise<number[]> {
   return out
 }
 
-/** 只有全局 Prompt 编辑负面 Prompt；其他素材只有名称与正面（旧文件中的负面仍会使用，如实显示并可清空） */
-const WITH_NEGATIVE: TemplateKind[] = ['global']
+/** 只有全局 Prompt 和镜头编辑负面 Prompt；其他素材只有名称与正面（旧文件中的负面仍会使用，如实显示并可清空） */
+const WITH_NEGATIVE: TemplateKind[] = ['global', 'camera']
 
 function TemplateCard({ t, selected, onClick, sortable }: { t: Template; selected: boolean; onClick: () => void; sortable: boolean }) {
   const s = useSortableItem(String(t.id))
@@ -217,7 +218,7 @@ export function TemplateEditor({ t, onClose, onDeleted }: { t: Template; onClose
           </div>
         )}
         {showNeg ? (
-          <PromptField label="负面 Prompt" value={draft.negative} onChange={(v) => patch({ negative: v })} placeholder="通用负面 Prompt，可留空。新任务的负面 Prompt 统一来自这里" minRows={2} copy />
+          <PromptField label="负面 Prompt" value={draft.negative} onChange={(v) => patch({ negative: v })} placeholder={kind === 'camera' ? '这个镜头专用的负面 Prompt，可留空' : '通用负面 Prompt，可留空。新任务的负面 Prompt 统一来自这里'} minRows={2} copy />
         ) : (
           <LegacyNegative value={draft.negative} onClear={() => patch({ negative: '' })} />
         )}
@@ -630,6 +631,7 @@ export default function LibraryPage() {
     scene: count('scene'),
     state: count('state'),
     expression: count('expression'),
+    camera: count('camera'),
     cards: count('position'),
   }
   const add = async () => {

@@ -943,7 +943,6 @@ function SaveBar() {
         {MINING_SAVE_KINDS.map((k) => (
           <option key={k} value={k} className="bg-popover">
             {TEMPLATE_KINDS[k]}
-            {k === 'camera' ? '（在套图任务中选择）' : ''}
           </option>
         ))}
       </select>

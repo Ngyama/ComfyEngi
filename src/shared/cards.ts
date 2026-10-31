@@ -121,6 +121,15 @@ export function seededRandom(seed: number): () => number {
 /** 某个动作第 n 张图片的抽取随机数：只由组合 Seed、动作序号、张序号决定 */
 export const unitRandom = (comboSeed: number, itemIndex: number, n: number) => seededRandom(mixSeed(comboSeed, itemIndex, n))
 
+/** 镜头的随机数单独成流：修改素材池或镜头候选不会互相改变抽取结果 */
+const CAMERA_STREAM = 0x63616d
+
+/** 一张图片的镜头：没有候选时为空；只有 1 个时直接使用；多个时由组合 Seed、动作序号和张序号决定，均匀抽取（与优先级无关） */
+export function drawCamera<T>(candidates: T[], comboSeed: number, itemIndex: number, n: number): T | null {
+  if (candidates.length <= 1) return candidates[0] ?? null
+  return candidates[Math.floor(seededRandom(mixSeed(comboSeed, itemIndex, n, CAMERA_STREAM))() * candidates.length)]
+}
+
 const groupOf = (t: Template) => (t.exclusive ?? '').trim()
 
 /**
