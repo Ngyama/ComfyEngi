@@ -4,7 +4,7 @@ import { copyFileSync, readFileSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { describe, expect, it } from 'vitest'
-import { drawPool, mixSeed, normalizeCard, normalizeRule, seededRandom } from '@shared/cards'
+import { cardPool, drawPool, effectivePool, migrateRule, mixSeed, movePoolItem, normalizeCard, normalizePool, poolSummary, resolvePool, seededRandom } from '@shared/cards'
 import { expandTask, newCardItem, newInteractionItem, normalizeTaskData, setItemSizes } from '@shared/planner'
 import type { ActionCard, PlanUnit, TaskItem, Template } from '@shared/types'
 import { enqueueTask, loadPlanLibrary, planForTask } from '../src/main/plan'
@@ -37,12 +37,10 @@ function setup() {
   const card = (name: string, positive: string, c: ActionCard) => T('position', name, positive, { card: c })
   const solo = card('鸭子坐', 'wariza, sitting', {
     solo: true,
-    pools: { pose: [st.lean, st.back, st.arms, st.hand], expr: [ex.smile, ex.blush] },
-    rules: { pose: { mode: 'random', min: 0, max: 2 }, expr: { mode: 'random', min: 1, max: 1 } },
+    pools: { pose: { fixed: [], random: [st.lean, st.back, st.arms, st.hand] }, expr: { fixed: [], random: [ex.smile, ex.blush] } },
   })
   const duo = card('正常位', 'missionary, 1boy', {
-    pools: { pose: [st.legs], interaction: [st.hug, st.kiss], pose2: [st.p2, st.p2b], expr: [ex.cold], expr2: [ex.e2] },
-    rules: { pose: { mode: 'random', min: 0, max: 1 }, interaction: { mode: 'random', min: 0, max: 1 }, pose2: { mode: 'random', min: 1, max: 1 }, expr: { mode: 'random', min: 1, max: 1 }, expr2: { mode: 'random', min: 1, max: 1 } },
+    pools: { pose: { fixed: [], random: [st.legs] }, interaction: { fixed: [], random: [st.hug, st.kiss] }, pose2: { fixed: [], random: [st.p2, st.p2b] }, expr: { fixed: [], random: [ex.cold] }, expr2: { fixed: [], random: [ex.e2] } },
   })
   const v1 = T('subposition', '标准', 'standard_variant', { parent_id: duo })
   const v2 = T('subposition', '抬腿', 'leg_up', { parent_id: duo })
@@ -120,51 +118,39 @@ describe('动作卡生成', () => {
 
   it('6. 固定素材始终出现，且不会再被随机抽到', () => {
     const env = setup()
-    const it = cardItem(env.solo, 50, { card_rules: { pose: { mode: 'random', fixed: [env.st.arms], min: 0, max: 1 } } })
+    const it = cardItem(env.solo, 50, { card_rules: { pose: { fixed: [env.st.arms], random: [env.st.lean, env.st.back, env.st.hand] } } })
     const { units } = expand(env, [it])
     for (const u of units) {
       const pose = (u.meta.picks ?? []).filter((p) => p.pool === 'pose')
       expect(pose[0]).toMatchObject({ id: env.st.arms, random: false })
-      expect(pose.filter((p) => p.id === env.st.arms)).toHaveLength(1)
-      expect(pose.length).toBeLessThanOrEqual(2)
-      expect(u.modules.content[0].startsWith('arms_up')).toBe(true)
+      expect(pose).toHaveLength(2)
+      expect(pose[1].random).toBe(true)
+      expect(pose[1].id).not.toBe(env.st.arms)
+      expect(u.modules.content[0].startsWith('arms_up, ')).toBe(true)
     }
-    expect(units.some((u) => posIds(u, 'pose').length === 2)).toBe(true)
   })
 
-  it('7 / 8. 随机数量按配置抽取；数量为 0 时不加入素材', () => {
+  it('7 / 8. 两栏为空不加入内容；只有固定素材时全部加入；随机栏只有一个候选时直接使用', () => {
     const env = setup()
-    const two = expand(env, [cardItem(env.solo, 30, { card_rules: { pose: { mode: 'random', min: 2, max: 2 } } })]).units
-    for (const u of two) expect(posIds(u, 'pose')).toHaveLength(2)
-    const range = expand(env, [cardItem(env.solo, 60)]).units.map((u) => posIds(u, 'pose').length)
-    expect(new Set(range)).toEqual(new Set([0, 1, 2]))
-    const zero = expand(env, [cardItem(env.solo, 30, { card_rules: { pose: { mode: 'random', min: 0, max: 0 } } })]).units
-    for (const u of zero) {
+    const none = expand(env, [cardItem(env.solo, 5, { card_rules: { pose: { fixed: [], random: [] } } })]).units
+    for (const u of none) {
       expect(posIds(u, 'pose')).toEqual([])
       expect(u.modules.content).toEqual(['', ''])
     }
-    // 关闭的池不加入任何内容；固定模式只用固定素材
-    const off = expand(env, [cardItem(env.solo, 5, { card_rules: { expr: { mode: 'off' } } })]).units
-    for (const u of off) expect(u.modules.expression).toEqual(['', ''])
-    const fixed = expand(env, [cardItem(env.solo, 5, { card_rules: { expr: { mode: 'fixed', fixed: [env.ex.blush] } } })]).units
-    for (const u of fixed) expect(u.modules.expression[0]).toBe('blush')
+    const fixedOnly = expand(env, [cardItem(env.solo, 5, { card_rules: { pose: { fixed: [env.st.arms, env.st.hand], random: [] } } })]).units
+    for (const u of fixedOnly) expect(u.modules.content[0]).toBe('arms_up, heart_hands')
+    const single = expand(env, [cardItem(env.solo, 20, { card_rules: { expr: { fixed: [], random: [env.ex.blush] } } })]).units
+    for (const u of single) expect(u.modules.expression[0]).toBe('blush')
   })
 
-  it('9. 互斥组中的素材一张图片最多抽取一个；固定了冲突素材时提示而不修改', () => {
+  it('9. 随机候选中已固定素材的同互斥组素材不会被抽到；固定了冲突素材时提示而不修改', () => {
     const env = setup()
-    const { units } = expand(env, [cardItem(env.solo, 200, { card_rules: { pose: { mode: 'random', min: 3, max: 3 } } })])
-    for (const u of units) {
-      const ids = posIds(u, 'pose')
-      expect(ids.includes(env.st.lean) && ids.includes(env.st.back)).toBe(false)
-      expect(ids).toHaveLength(3) // 4 个候选中有 2 个同组：最多只能抽到 3 个
-    }
-    const r = expand(env, [cardItem(env.solo, 2, { card_rules: { pose: { mode: 'fixed', fixed: [env.st.lean, env.st.back] } } })])
+    const r = expand(env, [cardItem(env.solo, 2, { card_rules: { pose: { fixed: [env.st.lean, env.st.back] } } })])
     expect(r.errors).toEqual([])
     expect(r.warnings.some((w) => w.includes('互斥组「上身」'))).toBe(true)
     for (const u of r.units) expect(u.modules.content[0]).toBe('leaning_forward, leaning_back')
-    // 固定素材所在的组也会排除同组的候选
-    const g = expand(env, [cardItem(env.solo, 100, { card_rules: { pose: { mode: 'random', fixed: [env.st.lean], min: 3, max: 3 } } })]).units
-    for (const u of g) expect(posIds(u, 'pose')).not.toContain(env.st.back)
+    const g = expand(env, [cardItem(env.solo, 100, { card_rules: { pose: { fixed: [env.st.lean], random: [env.st.back, env.st.arms] } } })]).units
+    for (const u of g) expect(posIds(u, 'pose')).toEqual([env.st.lean, env.st.arms])
   })
 
   it('10. 主角色与第二角色的姿态、表情分别进入对应模块', () => {
@@ -212,7 +198,7 @@ describe('动作卡生成', () => {
     expect(plan.errors).toEqual([])
     const before = env.s.listUnits(runId!).map((u) => [u.positive, u.meta.picks, u.inputs])
     env.s.save('templates', { id: env.st.lean, positive: 'CHANGED' })
-    env.s.save('templates', { id: env.solo, positive: 'CHANGED_BASE', card: { solo: true, pools: { pose: [env.st.legs] } } })
+    env.s.save('templates', { id: env.solo, positive: 'CHANGED_BASE', card: { solo: true, pools: { pose: { fixed: [], random: [env.st.legs] } } } })
     env.s.save('tasks', { id: task.id, data: { ...task.data, combo_seed: 6 } })
     expect(env.s.listUnits(runId!).map((u) => [u.positive, u.meta.picks, u.inputs])).toEqual(before)
     // 新计划使用修改后的素材（尚未入队的任务自动使用更新后的内容）
@@ -249,7 +235,7 @@ describe('任务覆盖与安全处理', () => {
     const card = () => env.s.get('templates', env.solo)!.card
     const before = structuredClone(card())
     const plain = expand(env, [cardItem(env.solo, 20)]).units.map((u) => u.positive)
-    const over = expand(env, [cardItem(env.solo, 20, { card_rules: { pose: { mode: 'off' } }, card_exclude: [env.ex.smile] })]).units
+    const over = expand(env, [cardItem(env.solo, 20, { card_rules: { pose: { fixed: [], random: [] } }, card_exclude: [env.ex.smile] })]).units
     for (const u of over) {
       expect(u.modules.content).toEqual(['', ''])
       expect(u.modules.expression[0]).toBe('blush')
@@ -272,29 +258,32 @@ describe('任务覆盖与安全处理', () => {
     expect(r1.errors).toEqual([])
     expect(r1.warnings.some((w) => w.includes('有素材已被删除'))).toBe(true)
     expect(r1.units.every((u) => !posIds(u, 'pose').includes(env.st.lean))).toBe(true)
-    const r2 = expand(env, [cardItem(env.solo, 3, { card_rules: { pose: { mode: 'fixed', fixed: [env.st.lean] } } })])
+    const r2 = expand(env, [cardItem(env.solo, 3, { card_rules: { pose: { fixed: [env.st.lean], random: [] } } })])
     expect(r2.errors.some((e) => e.includes('固定的素材已被删除'))).toBe(true)
     env.s.remove('templates', env.solo)
     expect(expand(env, [cardItem(env.solo, 3)]).errors).toEqual(['第 1 个动作：动作卡已被删除'])
   })
 
-  it('抽取规则的边界：负数、超出范围、min > max、未知模式；候选不足时安全处理', () => {
-    expect(normalizeRule({ mode: 'random', min: -3, max: 99 })).toEqual({ mode: 'random', min: 0, max: 20 })
-    expect(normalizeRule({ mode: 'random', min: 3, max: 1 })).toEqual({ mode: 'random', min: 1, max: 3 })
-    expect(normalizeRule({ mode: 'what' }, { mode: 'off' })).toEqual({ mode: 'off' })
-    expect(normalizeCard({ solo: 1, pools: { pose: [3, 3, 'x', -1, 4], bogus: [1] }, rules: { expr: { mode: 'fixed', fixed: [9] } } })).toEqual({ pools: { pose: [3, 4] }, rules: { expr: { mode: 'fixed', fixed: [9] } } })
+  it('配置的边界：非法 ID、重复素材、同时在两栏；候选不足时安全处理', () => {
+    expect(normalizePool({ fixed: [3, 3, 'x', -1, 4], random: [4, 5, 5] }, 'pose')).toEqual({ fixed: [3, 4], random: [5] })
+    expect(normalizePool(null, 'pose')).toEqual({ fixed: [], random: [] })
+    expect(normalizePool(null, 'variant')).toEqual({ fixed: [] })
+    expect(normalizeCard({ solo: 1, pools: { pose: { fixed: [3], random: [3, 4] }, bogus: { fixed: [1] }, expr: { fixed: [], random: [] } } })).toEqual({ pools: { pose: { fixed: [3], random: [4] } } })
     const t = (id: number) => ({ id, name: String(id), exclusive: '' }) as Template
-    expect(drawPool({ mode: 'random', min: 5, max: 5 }, [], [t(1), t(2)], seededRandom(1)).random.map((x) => x.id)).toEqual([1, 2])
-    expect(drawPool({ mode: 'random', min: 1, max: 1 }, [], [], seededRandom(1))).toEqual({ fixed: [], random: [] })
+    expect(drawPool([], [], seededRandom(1))).toEqual({ fixed: [], random: [] })
+    expect(drawPool([t(1)], [t(1)], seededRandom(1)).random).toEqual([])
+    expect(poolSummary(0, 0)).toBe('未配置')
+    expect(poolSummary(2, 3)).toContain('固定 2 项')
   })
 
   it('复制动作卡：子体位一起复制，卡片中固定的子体位指向副本自己的子体位', () => {
     const env = setup()
-    env.s.save('templates', { id: env.duo, card: { ...env.s.get('templates', env.duo)!.card, rules: { variant: { mode: 'fixed', fixed: [env.v2] } } } })
+    const c0 = env.s.get('templates', env.duo)!.card!
+    env.s.save('templates', { id: env.duo, card: { ...c0, pools: { ...c0.pools, variant: { fixed: [env.v2], random: [] } } } })
     const copy = env.s.duplicate('templates', env.duo)!
     const subs = env.s.list('templates').filter((t) => t.parent_id === copy)
     expect(subs.map((t) => t.name)).toEqual(['标准', '抬腿'])
-    expect(env.s.get('templates', copy)!.card!.rules!.variant!.fixed).toEqual([subs[1].id])
+    expect(env.s.get('templates', copy)!.card!.pools!.variant).toEqual({ fixed: [subs[1].id], random: [] })
     const { units, errors } = expand(env, [cardItem(copy, 2)], { second_character_id: env.char2 })
     expect(errors).toEqual([])
     expect(units[0].modules.interaction[0]).toContain('leg_up')
@@ -309,7 +298,7 @@ describe('14. 旧素材与任务兼容', () => {
     expect(r.errors).toEqual([])
     expect(r.units.map((u) => u.modules.interaction[0])).toEqual(['missionary, 1boy, leg_up, hug', 'missionary, 1boy, leg_up, hug'])
     expect(r.units[0].meta.picks).toBeUndefined()
-    // 没有 card 配置的旧主体位：双人卡、默认规则（随机一个子体位）、素材池为空
+    // 没有 card 配置的旧主体位：双人卡、随机一个子体位、其他素材池为空
     const old = env.T('position', '旧主体位', 'old_base')
     env.T('subposition', '旧子体位', 'old_sub', { parent_id: old })
     const c = expand(env, [cardItem(old, 3)], { second_character_id: env.char2 })
@@ -355,10 +344,10 @@ describe('14. 旧素材与任务兼容', () => {
     const s2 = openVault(root)
     expect(readFileSync(path, 'utf8')).toBe(text)
     const st = s2.save('templates', { kind: 'state', name: '前倾', positive: 'leaning_forward', exclusive: '上身' })
-    s2.save('templates', { id: pos, card: normalizeCard({ solo: true, pools: { pose: [st] }, rules: { pose: { mode: 'random', min: 1, max: 1 } } }) })
+    s2.save('templates', { id: pos, card: normalizeCard({ solo: true, pools: { pose: { random: [st] } } }) })
     s2.close()
     const s3 = openVault(root)
-    expect(s3.get('templates', pos)!.card).toEqual({ solo: true, pools: { pose: [st] }, rules: { pose: { mode: 'random', min: 1, max: 1 } } })
+    expect(s3.get('templates', pos)!.card).toEqual({ solo: true, pools: { pose: { fixed: [], random: [st] } } })
     expect(s3.get('templates', st)!.exclusive).toBe('上身')
     const plan = expandTask(normalizeTaskData({ ...s3.get('tasks', s3.save('tasks', { name: 't', data: { character_id: null, items: [{ ...newCardItem(pos), count: 2 }] } }))!.data }), loadPlanLibrary(s3), s3.settings())
     expect(plan.units.map((u) => u.modules.content[0])).toEqual(['leaning_forward', 'leaning_forward'])
@@ -372,5 +361,165 @@ describe('14. 旧素材与任务兼容', () => {
     const s = new Store(path, { backupDir: join(dir, 'b') })
     expect((s.db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(SCHEMA_VERSION)
     s.close()
+  })
+})
+
+describe('素材池：固定 Prompt + 随机候选 Prompt', () => {
+  it('固定素材全部加入，每张图片从随机栏独立抽取且只抽取一个（A + B + 一个随机候选）', () => {
+    const env = setup()
+    const { lean, arms, hand, legs, hug, kiss } = env.st
+    const it = cardItem(env.solo, 200, { card_rules: { pose: { fixed: [arms, hand], random: [lean, legs, hug, kiss] } } })
+    const { units, errors } = expand(env, [it])
+    expect(errors).toEqual([])
+    const seen = new Map<number, number>()
+    for (const u of units) {
+      const pose = (u.meta.picks ?? []).filter((p) => p.pool === 'pose')
+      expect(pose.map((p) => p.id).slice(0, 2)).toEqual([arms, hand])
+      expect(pose.slice(0, 2).every((p) => !p.random)).toBe(true)
+      expect(pose).toHaveLength(3)
+      expect(pose[2].random).toBe(true)
+      seen.set(pose[2].id, (seen.get(pose[2].id) ?? 0) + 1)
+      expect(u.modules.content[0].startsWith('arms_up, heart_hands, ')).toBe(true)
+    }
+    // 均匀抽取：4 个候选都会出现，且比例接近 1/4；不要求整套图片平均分配
+    expect([...seen.keys()].sort((a, b) => a - b)).toEqual([lean, legs, hug, kiss].sort((a, b) => a - b))
+    for (const n of seen.values()) expect(n).toBeGreaterThan(25)
+  })
+
+  it('各池独立：修改一个池不改变其他池的抽取结果；同一组合 Seed 结果相同', () => {
+    const env = setup()
+    const exprOf = (extra: Partial<TaskItem>) => expand(env, [cardItem(env.solo, 40, extra)]).units.map((u) => posIds(u, 'expr'))
+    const base = exprOf({})
+    expect(exprOf({ card_rules: { pose: { fixed: [], random: [] } } })).toEqual(base)
+    expect(exprOf({ card_rules: { pose: { fixed: [env.st.arms], random: [env.st.hand] } } })).toEqual(base)
+    expect(exprOf({})).toEqual(base)
+  })
+
+  it('子体位：没有 random 时为全部子体位；明确列出后只用列出的；只有固定时不抽取', () => {
+    const env = setup()
+    const card = env.s.get('templates', env.duo)!
+    expect(resolvePool(cardPool(card, 'variant'), card, 'variant', env.s.list('templates').filter((t) => t.kind === 'subposition'))).toEqual({ fixed: [], random: [env.v1, env.v2] })
+    const only = expand(env, [cardItem(env.duo, 10, { card_rules: { variant: { random: [env.v2] } } })], { second_character_id: env.char2 }).units
+    for (const u of only) expect(posIds(u, 'variant')).toEqual([env.v2])
+    const fixed = expand(env, [cardItem(env.duo, 10, { card_rules: { variant: { fixed: [env.v1], random: [] } } })], { second_character_id: env.char2 }).units
+    for (const u of fixed) expect(u.meta.picks!.filter((p) => p.pool === 'variant')).toEqual([expect.objectContaining({ id: env.v1, random: false })])
+    const none = expand(env, [cardItem(env.duo, 3, { card_rules: { variant: { fixed: [], random: [] } } })], { second_character_id: env.char2 }).units
+    for (const u of none) expect(posIds(u, 'variant')).toEqual([])
+  })
+
+  it('拖动：两栏之间双向移动、栏内排序；移动不复制，素材不会重复', () => {
+    const start = { fixed: [1, 2], random: [3, 4, 5] }
+    expect(movePoolItem(start, 2, 'random', 1)).toEqual({ fixed: [1], random: [3, 2, 4, 5] })
+    expect(movePoolItem(start, 4, 'fixed', 0)).toEqual({ fixed: [4, 1, 2], random: [3, 5] })
+    expect(movePoolItem(start, 5, 'random', 0)).toEqual({ fixed: [1, 2], random: [5, 3, 4] })
+    expect(movePoolItem(start, 1, 'fixed', 99)).toEqual({ fixed: [2, 1], random: [3, 4, 5] })
+    expect(movePoolItem({ fixed: [], random: [7] }, 7, 'fixed', 0)).toEqual({ fixed: [7], random: [] })
+    expect(start).toEqual({ fixed: [1, 2], random: [3, 4, 5] })
+  })
+
+  it('保存、关闭、重新打开后两栏的顺序和归属不变（Vault）', () => {
+    const root = tempDir()
+    createVault(root)
+    const s = openVault(root)
+    const pos = s.save('templates', { kind: 'position', name: '卡', positive: 'base' })
+    const a = s.save('templates', { kind: 'state', name: 'A', positive: 'a' })
+    const b = s.save('templates', { kind: 'state', name: 'B', positive: 'b' })
+    const c = s.save('templates', { kind: 'state', name: 'C', positive: 'c' })
+    s.save('templates', { id: pos, card: normalizeCard({ pools: { pose: { fixed: [c, a], random: [b] } } }) })
+    s.close()
+    const s2 = openVault(root)
+    expect(cardPool(s2.get('templates', pos)!, 'pose')).toEqual({ fixed: [c, a], random: [b] })
+    s2.close()
+  })
+})
+
+describe('旧三模式配置迁移', () => {
+  it('关闭 → 两栏为空；固定 → 固定栏；随机 → 固定 + 候选，保留顺序，去掉重复，数量不再生效', () => {
+    const card = normalizeCard({
+      solo: true,
+      pools: { pose: [5, 3, 4, 3], expr: [8, 9], interaction: [10], extra: [11], pose2: [12] },
+      rules: {
+        pose: { mode: 'random', fixed: [7, 4, 7], min: 2, max: 3 },
+        expr: { mode: 'fixed', fixed: [9, 8] },
+        interaction: { mode: 'off', fixed: [10] },
+        pose2: { mode: 'what', min: 0, max: 0 },
+      },
+    })
+    expect(card).toEqual({
+      solo: true,
+      pools: {
+        pose: { fixed: [7, 4], random: [5, 3] },
+        expr: { fixed: [9, 8], random: [] },
+        pose2: { fixed: [], random: [12] },
+      },
+    })
+    // 再次整理结果不变
+    expect(normalizeCard(card)).toEqual(card)
+    expect(JSON.stringify(card)).not.toMatch(/mode|min|max|rules/)
+  })
+
+  it('没有规则的池沿用旧默认：附加为关闭，其他为随机；子体位保留「全部」「限定」「关闭」「固定」的含义', () => {
+    expect(normalizeCard({ pools: { pose: [1], extra: [2] } })).toEqual({ pools: { pose: { fixed: [], random: [1] } } })
+    expect(normalizeCard({ pools: { extra: [2] }, rules: { extra: { mode: 'random', min: 0, max: 0 } } })).toEqual({ pools: { extra: { fixed: [], random: [2] } } })
+    expect(cardPool({ card: { rules: { variant: { mode: 'random', min: 1, max: 1 } } } as never }, 'variant')).toEqual({ fixed: [] })
+    expect(cardPool({ card: { pools: { variant: [3] } } as never }, 'variant')).toEqual({ fixed: [], random: [3] })
+    expect(cardPool({ card: { rules: { variant: { mode: 'off' } } } as never }, 'variant')).toEqual({ fixed: [], random: [] })
+    expect(cardPool({ card: { rules: { variant: { mode: 'fixed', fixed: [4] } } } as never }, 'variant')).toEqual({ fixed: [4], random: [] })
+    expect(migrateRule(undefined, 'extra', [1])).toEqual({ fixed: [], random: [] })
+    expect(cardPool(null, 'pose')).toEqual({ fixed: [], random: [] })
+  })
+
+  it('旧动作卡可以直接生成：每个随机池每张最多一个，固定素材全部加入；不改写文件，保存后写入新结构且结果相同', () => {
+    const env = setup()
+    const old = env.T('position', '旧卡', 'old_card', {
+      card: { solo: true, pools: { pose: [env.st.lean, env.st.arms, env.st.hand], expr: [env.ex.smile, env.ex.blush] }, rules: { pose: { mode: 'random', fixed: [env.st.legs], min: 2, max: 3 }, expr: { mode: 'fixed', fixed: [env.ex.cold] } } },
+    })
+    const a = expand(env, [cardItem(old, 30)])
+    expect(a.errors).toEqual([])
+    for (const u of a.units) {
+      const pose = (u.meta.picks ?? []).filter((p) => p.pool === 'pose')
+      expect(pose[0]).toMatchObject({ id: env.st.legs, random: false })
+      expect(pose).toHaveLength(2)
+      expect(posIds(u, 'expr')).toEqual([env.ex.cold])
+    }
+    const raw = env.s.get('templates', old)!.card as unknown as { rules?: unknown }
+    expect(raw.rules).toBeDefined()
+    env.s.save('templates', { id: old, card: normalizeCard(raw) })
+    expect((env.s.get('templates', old)!.card as unknown as { rules?: unknown }).rules).toBeUndefined()
+    expect(expand(env, [cardItem(old, 30)]).units.map((u) => u.positive)).toEqual(a.units.map((u) => u.positive))
+  })
+
+  it('任务中的旧覆盖：关闭、固定、随机都能转换，随机候选来自动作卡；禁止抽取继续生效', () => {
+    const env = setup()
+    const card = env.s.get('templates', env.solo)!
+    expect(effectivePool(card, { card_rules: { pose: { mode: 'off' } } }, 'pose')).toEqual({ fixed: [], random: [] })
+    expect(effectivePool(card, { card_rules: { pose: { mode: 'fixed', fixed: [env.st.legs] } } }, 'pose')).toEqual({ fixed: [env.st.legs], random: [] })
+    expect(effectivePool(card, { card_rules: { pose: { mode: 'random', fixed: [env.st.arms], min: 0, max: 5 } } }, 'pose')).toEqual({ fixed: [env.st.arms], random: [env.st.lean, env.st.back, env.st.hand] })
+    expect(effectivePool(card, { card_rules: { pose: { fixed: [env.st.arms], random: [env.st.hand] } } }, 'pose')).toEqual({ fixed: [env.st.arms], random: [env.st.hand] })
+    const { units } = expand(env, [cardItem(env.solo, 20, { card_rules: { pose: { mode: 'off' } }, card_exclude: [env.ex.smile] })])
+    for (const u of units) {
+      expect(posIds(u, 'pose')).toEqual([])
+      expect(u.modules.expression[0]).toBe('blush')
+    }
+  })
+
+  it('已入队的图片不受迁移和后续编辑影响', () => {
+    const env = setup()
+    env.lib.addWorkflow()
+    const old = env.T('position', '旧卡', 'old_card', { card: { solo: true, pools: { pose: [env.st.lean, env.st.arms] }, rules: { pose: { mode: 'random', min: 2, max: 2 } } } })
+    const task = env.lib.makeTask([cardItem(old, 10)], '冻结', { male_base_id: null, combo_seed: 5 })
+    const { runId } = enqueueTask(env.s, task)
+    const before = structuredClone(env.s.listUnits(runId!))
+    env.s.save('templates', { id: old, card: normalizeCard(env.s.get('templates', old)!.card) })
+    env.s.save('templates', { id: old, card: { solo: true, pools: { pose: { fixed: [env.st.hand], random: [] } } } })
+    expect(env.s.listUnits(runId!)).toEqual(before)
+  })
+
+  it('复制旧动作卡：固定的子体位指向副本，并写入新结构', () => {
+    const env = setup()
+    env.s.save('templates', { id: env.duo, card: { rules: { variant: { mode: 'fixed', fixed: [env.v2] } } } as never })
+    const copy = env.s.duplicate('templates', env.duo)!
+    const subs = env.s.list('templates').filter((t) => t.parent_id === copy)
+    expect(env.s.get('templates', copy)!.card!.pools!.variant).toEqual({ fixed: [subs[1].id], random: [] })
   })
 })

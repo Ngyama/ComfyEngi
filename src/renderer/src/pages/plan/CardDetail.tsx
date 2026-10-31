@@ -10,10 +10,10 @@ import { api, call } from '@/lib/api'
 import type { MaterialOption } from '@/lib/material-select'
 import { reloadLib, templatesOf, useLib, usePlan } from '@/lib/stores'
 import { cn } from '@/lib/utils'
-import { effectiveRule, isSoloCard, normalizeRule } from '@shared/cards'
+import { effectivePool, isSoloCard, normalizePool } from '@shared/cards'
 import { setItemSizes, sizeTotal } from '@shared/planner'
 import { PLACEHOLDER_HELP } from '@shared/prompt'
-import { CARD_POOLS, type CardPoolKey, type PlanUnit, type PoolRule, type TaskItem } from '@shared/types'
+import { CARD_POOLS, type CardPoolKey, type PlanUnit, type PoolConfig, type TaskItem } from '@shared/types'
 import { MaterialPicker } from './MaterialPicker'
 import { CameraEditor, PickField, Section, SizeCards } from './PoseDetail'
 
@@ -51,7 +51,7 @@ export function CardItemDetail({ index, units, onClose }: { index: number; units
   const total = sized ? sizeTotal(item.sizes) : item.count
   const overridden = new Set(Object.keys(item.card_rules ?? {}) as CardPoolKey[])
   const tuned = overridden.size + (item.card_exclude?.length ? 1 : 0)
-  const rules = Object.fromEntries(CARD_POOLS.map(({ key }) => [key, effectiveRule(card, item, key)])) as Record<CardPoolKey, PoolRule>
+  const pools = Object.fromEntries(CARD_POOLS.map(({ key }) => [key, effectivePool(card, item, key)])) as Record<CardPoolKey, PoolConfig>
   const unit = units[Math.min(shown, Math.max(0, units.length - 1))] ?? null
 
   const newCamera = async () => {
@@ -60,8 +60,8 @@ export function CardItemDetail({ index, units, onClose }: { index: number; units
     await reloadLib()
     set({ camera_id: r.id })
   }
-  const setRule = (key: CardPoolKey, rule: PoolRule) => update((d) => (d.items[index].card_rules = { ...d.items[index].card_rules, [key]: normalizeRule(rule) }))
-  const resetRule = (key: CardPoolKey) =>
+  const setPool = (key: CardPoolKey, pool: PoolConfig) => update((d) => (d.items[index].card_rules = { ...d.items[index].card_rules, [key]: normalizePool(pool, key) }))
+  const resetPool = (key: CardPoolKey) =>
     update((d) => {
       const it = d.items[index]
       const next = { ...it.card_rules }
@@ -204,8 +204,8 @@ export function CardItemDetail({ index, units, onClose }: { index: number; units
             }
           >
             <div className="space-y-2" data-testid="card-advanced">
-              <div className="text-[11px] text-muted-foreground">修改只对当前任务生效。例如固定某个子体位、修改随机数量、关闭随机互动、临时固定某个局部姿态，或禁止某个表情被抽到。</div>
-              <CardPools card={card} rules={rules} overridden={overridden} onRule={setRule} onReset={resetRule} exclude={item.card_exclude ?? []} onExclude={(ids) => set({ card_exclude: ids.length ? ids : undefined })} />
+              <div className="text-[11px] text-muted-foreground">修改只对当前任务生效。例如把某个子体位或局部姿态拖到固定栏，或移除不想被抽到的随机候选。</div>
+              <CardPools card={card} pools={pools} overridden={overridden} onPool={setPool} onReset={resetPool} exclude={item.card_exclude ?? []} onExclude={(ids) => set({ card_exclude: ids.length ? ids : undefined })} />
             </div>
           </Disclosure>
         )}

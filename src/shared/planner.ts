@@ -3,7 +3,7 @@
 // 主角色（character_id）与可选的第二角色（second_character_id）来自同一个角色库；第二角色按动作启用。
 // 多表情时按选择顺序依次生成，每个表情张数相同；不能整除时报错，由用户修改张数。
 
-import { drawPool, effectiveRule, fixedConflicts, isSoloCard, poolCandidates, poolsOf, unitRandom } from './cards'
+import { drawPool, effectivePool, fixedConflicts, isSoloCard, poolsOf, resolvePool, unitRandom } from './cards'
 import { compose, fillPlaceholders, joinParts, unescapeSeparator } from './prompt'
 import type {
   CardPick,
@@ -423,21 +423,20 @@ export function expandTask(data: TaskData, lib: PlanLibrary, settings: Settings,
     const second = !solo && !!char2
     const outfit2 = second ? checkOutfit(it.second_outfit_id, `${where}（第二角色）`, char2) : null
     const exclude = new Set(it.card_exclude ?? [])
-    // 每个池：规则、固定素材、随机候选（只取仍存在的素材；固定素材被删除时报错，候选被删除时只提示）
+    // 每个池：固定素材、随机候选（只取仍存在的素材；固定素材被删除时报错，候选被删除时只提示）
     const pools = poolsOf(solo).map(({ key, label }) => {
-      const rule = effectiveRule(card, it, key)
+      const pool = resolvePool(effectivePool(card, it, key), card, key, variants)
       const fixed: Template[] = []
-      for (const id of rule.mode === 'off' ? [] : (rule.fixed ?? [])) {
+      for (const id of pool.fixed) {
         const t = tpl(id)
         if (!t) errors.push(`${where}：${label}中固定的素材已被删除`)
         else if (key === 'variant' && t.parent_id !== card.id) errors.push(`${where}：固定的子体位「${t.name}」不属于动作卡「${card.name}」`)
         else fixed.push(t)
       }
-      const ids = rule.mode === 'random' ? poolCandidates(card, key, variants) : []
-      const candidates = ids.map((id) => tpl(id)).filter((t): t is Template => !!t)
-      if (candidates.length !== ids.length) onceWarn(`动作卡「${card.name}」的${label}中有素材已被删除，抽取时跳过`)
+      const candidates = pool.random.map((id) => tpl(id)).filter((t): t is Template => !!t)
+      if (candidates.length !== pool.random.length) onceWarn(`动作卡「${card.name}」的${label}中有素材已被删除，抽取时跳过`)
       for (const c of fixedConflicts(fixed)) onceWarn(`${where}：${label}中${c}，请确认是否需要调整`)
-      return { key, rule, fixed, candidates: candidates.filter((t) => !exclude.has(t.id)) }
+      return { key, fixed, candidates: candidates.filter((t) => !exclude.has(t.id)) }
     })
     const sized = !!it.sizes
     const count = sized ? sizeTotal(it.sizes) : toInt(it.count)
@@ -451,7 +450,7 @@ export function expandTask(data: TaskData, lib: PlanLibrary, settings: Settings,
       const got = {} as Record<CardPoolKey, Template[]>
       const picks: CardPick[] = []
       for (const p of pools) {
-        const r = drawPool(p.rule, p.fixed, p.candidates, rnd)
+        const r = drawPool(p.fixed, p.candidates, rnd)
         got[p.key] = [...r.fixed, ...r.random]
         for (const t of r.fixed) picks.push({ pool: p.key, id: t.id, name: t.name, random: false })
         for (const t of r.random) picks.push({ pool: p.key, id: t.id, name: t.name, random: true })

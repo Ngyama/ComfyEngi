@@ -69,7 +69,7 @@ export interface Template extends Timestamps {
   priority?: Priority
   /** 迁移为 state 之前的类型（pose / act），只作记录 */
   legacy_kind?: string
-  /** 动作卡配置（只用于主体位 position：主体位即动作卡，子体位即它的结构变体）。没有时为双人动作卡、默认抽取规则、素材池为空 */
+  /** 动作卡配置（只用于主体位 position：主体位即动作卡，子体位即它的结构变体）。没有时为双人动作卡、随机一个子体位、其他素材池为空 */
   card?: ActionCard | null
   /** 互斥组（状态、表情可选）：同一素材池中同组的素材，一张图片最多随机抽取一个 */
   exclusive?: string
@@ -96,11 +96,16 @@ export const CARD_POOLS: { key: CardPoolKey; label: string; source: 'variant' | 
   { key: 'extra', label: '附加', source: 'state' },
 ]
 /**
- * 素材池的抽取规则：off 不加入；fixed 只使用固定素材；random 固定素材 + 从候选中随机抽取 min～max 个（固定素材不会被再次抽到）
+ * 素材池配置：fixed 中的素材全部加入每张图片；random 中的素材每张图片均匀随机抽取 1 个。两栏都可以为空，同一素材只属于一栏。
+ * 子体位没有 random 时，候选为这张卡的全部子体位（固定的除外）。
  */
-export type PoolMode = 'off' | 'fixed' | 'random'
-export interface PoolRule {
-  mode: PoolMode
+export interface PoolConfig {
+  fixed?: number[]
+  random?: number[]
+}
+/** 旧版抽取规则（关闭 / 固定 / 随机 min～max）：只用于读取旧数据，读取时转换为 PoolConfig */
+export interface LegacyPoolRule {
+  mode: 'off' | 'fixed' | 'random'
   fixed?: number[]
   min?: number
   max?: number
@@ -108,19 +113,8 @@ export interface PoolRule {
 export interface ActionCard {
   /** true = 单人动作卡（不使用第二角色与双人互动）；没有时为双人（旧主体位） */
   solo?: boolean
-  /** 各素材池允许使用的素材 ID（只保存 ID，不复制 Prompt）。variant 没有时为全部子体位 */
-  pools?: Partial<Record<CardPoolKey, number[]>>
-  /** 默认抽取规则（没有的池使用 DEFAULT_POOL_RULES） */
-  rules?: Partial<Record<CardPoolKey, PoolRule>>
-}
-export const DEFAULT_POOL_RULES: Record<CardPoolKey, PoolRule> = {
-  variant: { mode: 'random', min: 1, max: 1 },
-  pose: { mode: 'random', min: 0, max: 1 },
-  expr: { mode: 'random', min: 1, max: 1 },
-  interaction: { mode: 'random', min: 0, max: 1 },
-  pose2: { mode: 'random', min: 0, max: 1 },
-  expr2: { mode: 'random', min: 0, max: 1 },
-  extra: { mode: 'off' },
+  /** 各素材池的固定素材与随机候选（只保存 ID，不复制 Prompt） */
+  pools?: Partial<Record<CardPoolKey, PoolConfig>>
 }
 /** 一张图片实际使用的素材（随计划冻结在运行记录中，用于查看来源） */
 export interface CardPick {
@@ -234,13 +228,13 @@ export interface TaskItem {
   second_pose_id?: number | null
   second_expression_id?: number | null
   /**
-   * 动作卡（主体位 ID）：有此字段的动作按动作卡展开——基础 Prompt + 各素材池按规则抽取，单人卡不加入第二角色。
+   * 动作卡（主体位 ID）：有此字段的动作按动作卡展开——基础 Prompt + 各素材池的固定素材与随机抽取结果，单人卡不加入第二角色。
    * 没有此字段的旧动作按原有方式展开（结果不变）
    */
   card_id?: number | null
-  /** 本任务对动作卡默认规则的覆盖（按池替换，只对当前任务生效；删除即恢复动作卡默认设置） */
-  card_rules?: Partial<Record<CardPoolKey, PoolRule>>
-  /** 本任务中禁止随机抽取的素材 */
+  /** 本任务对动作卡素材池的覆盖（按池替换，只对当前任务生效；删除即恢复动作卡默认设置）。旧任务中可能是旧版规则 */
+  card_rules?: Partial<Record<CardPoolKey, PoolConfig | LegacyPoolRule>>
+  /** 旧任务中禁止随机抽取的素材（继续生效，界面可以恢复，不再新增） */
   card_exclude?: number[]
   /** 场景：null 时沿用任务的默认场景 */
   scene_id?: number | null

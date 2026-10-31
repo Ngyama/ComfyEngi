@@ -1,6 +1,6 @@
 // 素材库：全局 / 场景 / 状态 / 表情 / 动作卡。卡片浏览 + 右侧编辑，修改自动保存。
 // 状态（旧版单人动作与行为合并而来）、表情、场景只编辑名称、正面 Prompt、显示优先级与可选的互斥组；它们是全局共享素材。
-// 动作卡（旧版主体位）= 基础 Prompt + 子体位（结构变体）+ 各素材池允许使用的素材 ID 与默认抽取规则；套图任务中只需选择动作卡。
+// 动作卡（旧版主体位）= 基础 Prompt + 子体位（结构变体）+ 各素材池的固定素材与随机候选（只保存 ID）；套图任务中只需选择动作卡。
 // 优先级只影响选择列表中的排列（高 → 普通 → 低，同级保持手动排序），不影响 Prompt。
 // 旧文件中的分类、标签、适用对象、备注等字段不在界面中显示，保存时也不会写入（原值保留）。
 // 旧版男性描述与镜头不在素材库中显示：数据与任务引用保持不变，镜头在套图任务中选择和新建。
@@ -17,9 +17,9 @@ import { confirm, reloadLib, templatesOf, useLib, useNav } from '@/lib/stores'
 import { cn } from '@/lib/utils'
 import { CardPools } from '@/components/card-pools'
 import { MaterialPicker } from './plan/MaterialPicker'
-import { cardRule, isSoloCard, normalizeCard } from '@shared/cards'
+import { cardMaterialIds, cardPool, isSoloCard, normalizeCard } from '@shared/cards'
 import { PLACEHOLDER_HELP } from '@shared/prompt'
-import { CARD_POOLS, TEMPLATE_KINDS, type ActionCard, type CardPoolKey, type Library, type PoolRule, type Template, type TemplateKind } from '@shared/types'
+import { CARD_POOLS, TEMPLATE_KINDS, type ActionCard, type CardPoolKey, type Library, type PoolConfig, type Template, type TemplateKind } from '@shared/types'
 
 type Tab = 'global' | 'scene' | 'state' | 'expression' | 'cards'
 const TABS: [Tab, string][] = [
@@ -29,7 +29,7 @@ const TABS: [Tab, string][] = [
   ['expression', '表情'],
   ['cards', '动作卡'],
 ]
-const STATE_HINT = '状态素材（局部姿态、手部动作、双人互动等，旧版「单人动作」与「行为」都在这里）。全局共享：动作卡只记录各素材池允许使用哪些状态，不复制 Prompt。'
+const STATE_HINT = '状态素材（局部姿态、手部动作、双人互动等，旧版「单人动作」与「行为」都在这里）。全局共享：动作卡只记录各素材池使用哪些状态，不复制 Prompt。'
 const HINTS: Record<TemplateKind, string> = {
   global: '画质、画风等通用 Prompt。每个套图任务选择其中一个。',
   scene: '可复用的环境 Prompt（卧室、教室、街道等）。与剧情库不同：场景只描述环境，在任务中按动作选择。',
@@ -56,10 +56,10 @@ const REF_FIELDS: Record<TemplateKind, string[]> = {
   male: ['male_base_id', 'male_ids'],
   camera: ['camera_id'],
 }
-/** 使用某个素材的动作卡（素材池候选或固定素材） */
+/** 使用某个素材的动作卡（素材池的固定素材或随机候选） */
 function cardsUsing(lib: Library | null, id: number): string[] {
   return templatesOf(lib, 'position')
-    .filter((c) => CARD_POOLS.some(({ key }) => (c.card?.pools?.[key] ?? []).includes(id) || (c.card?.rules?.[key]?.fixed ?? []).includes(id)))
+    .filter((c) => cardMaterialIds(c).includes(id))
     .map((c) => c.name || '（未命名）')
 }
 /** 可设置互斥组的素材 */
@@ -209,7 +209,7 @@ export function TemplateEditor({ t, onClose, onDeleted }: { t: Template; onClose
               onClick={async () => {
                 flush()
                 const r = await createSoloCards([{ ...t, ...draft }])
-                if (r.length) toast.success(`已创建单人动作卡「${draft.name}」`, { description: '在「动作卡」中配置素材池与抽取规则' })
+                if (r.length) toast.success(`已创建单人动作卡「${draft.name}」`, { description: '在「动作卡」中配置素材池' })
               }}
             >
               转为单人动作卡
@@ -380,13 +380,13 @@ function CardDetail({ p, onDeleted }: { p: Template; onDeleted: () => void }) {
   const { draft, patch, flush } = useTemplateDraft(p)
   if (!draft) return null
   const solo = isSoloCard(p)
-  const card: ActionCard = p.card ?? {}
+  const card: ActionCard = normalizeCard(p.card)
   const saveCard = async (next: ActionCard) => {
     flush()
     await call(api['templates.save']({ id: p.id, card: normalizeCard(next) } as never))
     await reloadLib()
   }
-  const rules = Object.fromEntries(CARD_POOLS.map(({ key }) => [key, cardRule(p, key)])) as Record<CardPoolKey, PoolRule>
+  const pools = Object.fromEntries(CARD_POOLS.map(({ key }) => [key, cardPool(p, key)])) as Record<CardPoolKey, PoolConfig>
   return (
     <div className="max-w-3xl space-y-6" data-testid="position-detail">
       <div className="flex items-center gap-3">
@@ -484,7 +484,10 @@ function CardDetail({ p, onDeleted }: { p: Template; onDeleted: () => void }) {
               onClick={async () => {
                 const r = await call(api['templates.save']({ kind: 'subposition', name: `子体位${subs.length + 1}`, parent_id: p.id } as never))
                 if (r) {
-                  await reloadLib()
+                  // 卡片已经明确列出随机候选时，新子体位也加入，避免新建后不参与生成
+                  const variant = card.pools?.variant
+                  if (variant?.random) await saveCard({ ...card, pools: { ...card.pools, variant: { ...variant, random: [...variant.random, r.id] } } })
+                  else await reloadLib()
                   setOpen(r.id)
                 }
               }}
@@ -512,13 +515,8 @@ function CardDetail({ p, onDeleted }: { p: Template; onDeleted: () => void }) {
         </div>
       </section>
       <section>
-        <FieldLabel hint="素材本身在「状态」「表情」中统一管理；这里只记录这张卡允许使用哪些素材，以及默认怎样抽取。套图任务中可以临时覆盖，不会改动这里">素材池与默认抽取规则</FieldLabel>
-        <CardPools
-          card={p}
-          rules={rules}
-          onRule={(key, rule) => void saveCard({ ...card, rules: { ...card.rules, [key]: rule } })}
-          onCandidates={(key, ids) => void saveCard({ ...card, pools: { ...card.pools, [key]: ids } })}
-        />
+        <FieldLabel hint="素材本身在「状态」「表情」中统一管理；这里只记录这张卡使用哪些素材。固定 Prompt 全部加入每张图片，随机候选 Prompt 每张图片抽取 1 个，可以在两栏之间拖动。套图任务中可以临时覆盖，不会改动这里">素材池</FieldLabel>
+        <CardPools card={p} pools={pools} onPool={(key, pool) => saveCard({ ...card, pools: { ...card.pools, [key]: pool } })} />
         {solo && <div className="mt-2 text-[11px] text-muted-foreground">单人动作卡不使用第二角色与双人互动：套图任务选择了第二角色时，这张卡仍生成单人图片。</div>}
       </section>
     </div>

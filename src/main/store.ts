@@ -1,4 +1,5 @@
 import { FileLibrary, FILE_TABLES } from './file-library'
+import { normalizeCard } from '@shared/cards'
 import { isLegacyDefaultOrder } from '@shared/prompt'
 // SQLite 存储（Electron 内置 node:sqlite）。表结构与旧版 Python 程序完全相同，
 // 旧数据库可直接打开；所有 Prompt 文本以原始字符串写入 TEXT 列，读写不做转换。
@@ -314,13 +315,13 @@ export class Store {
         void _rev
         remap.set(old, this.save('templates', { ...rest, parent_id: newId }))
       }
-      // 动作卡中限定或固定的子体位指向副本自己的子体位（其他素材池引用全局素材，保持不变）
+      // 动作卡中固定或限定的子体位指向副本自己的子体位（其他素材池引用全局素材，保持不变）
       const card = (rec as Partial<Template>).card
-      if (remap.size && card && (card.pools?.variant || card.rules?.variant?.fixed)) {
+      const next = card ? normalizeCard(card) : null
+      const variant = next?.pools?.variant
+      if (remap.size && next && variant) {
         const m = (ids?: number[]) => ids?.map((x) => remap.get(x) ?? x)
-        const next = structuredClone(card)
-        if (next.pools?.variant) next.pools.variant = m(next.pools.variant)
-        if (next.rules?.variant?.fixed) next.rules.variant.fixed = m(next.rules.variant.fixed)
+        next.pools!.variant = { ...variant, fixed: m(variant.fixed), ...(variant.random ? { random: m(variant.random) } : {}) }
         this.save('templates', { id: newId, card: next })
       }
       return newId
