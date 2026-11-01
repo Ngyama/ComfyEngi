@@ -8,7 +8,7 @@
 
 import { createHash, randomUUID } from 'node:crypto'
 import { mkdir, readFile, rm, writeFile } from 'node:fs/promises'
-import { join } from 'node:path'
+import { join, extname } from 'node:path'
 import { applyInputs, ComfyError, extractOutputs, finalOutputNodes, historyError, historyInterrupted, NODE_BYPASS } from '@shared/mapping'
 import type { AttemptState, ExecutionAttempt, OutputFile, RunnerEvent, RunnerState, RunnerStatus, RunUnit, Settings } from '@shared/types'
 import { ComfyClient, ComfyHTTPError, EventStream, promptBody, type ComfyApi, type EventSource, type HistoryEntry } from './comfy-client'
@@ -539,9 +539,12 @@ export class Runner {
       delete o.save_error
       try {
         const sub = String(o.subfolder ?? '').split(/[\\/]/).filter((p) => p && p !== '.' && p !== '..').map((p) => p.replace(/[<>:"|?*\x00-\x1f]/g, '_'))
-        const name = String(o.filename).split(/[\\/]/).pop()!.replace(/[<>:"|?*\x00-\x1f]/g, '_')
-        if (!name) throw new Error('ComfyUI 没有返回文件名')
-        const target = join(dir, ...sub)
+        const base = String(o.filename).split(/[\\/]/).pop()!.replace(/[<>:"|?*\x00-\x1f]/g, '_')
+        if (!base) throw new Error('ComfyUI 没有返回文件名')
+        // 套图复刻：保存为与原图相同的文件名（不覆盖已有文件），不使用 ComfyUI 的子文件夹
+        const stem = unit.meta?.output_name
+        const name = stem ? `${stem}${extname(base)}` : base
+        const target = stem ? dir : join(dir, ...sub)
         await mkdir(target, { recursive: true })
         const data = await client.fetchImage(o)
         const r = await saveVerified(target, name, data)

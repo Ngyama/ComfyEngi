@@ -1,11 +1,12 @@
 // 历史 Prompt 提取（主进程部分）：扫描 PNG 读取 Prompt、标签词典的导入与保存、把选中的组合保存为素材。
 // 图片只以只读方式打开读取元数据，不修改、移动或重新编码；不访问网络，不需要 ComfyUI。
 
-import { existsSync, mkdirSync, readFileSync, statSync } from 'node:fs'
+import { closeSync, existsSync, mkdirSync, openSync, readFileSync, readSync, statSync } from 'node:fs'
 import { readdir, stat } from 'node:fs/promises'
 import { basename, dirname, extname, join } from 'node:path'
 import { MINING_LIMITS, MINING_SAVE_KINDS, type DictionaryInfo, type MiningSaveItem, type MiningSaveOutcome, type RawMeta, type ScannedImage, type ScanFound, type ScanResult } from '@shared/mining'
 import { extractPrompt, parseJsonLoose, type SavedSourceRule, type SourceRule } from '@shared/prompt-source'
+import { imageLoras, recoverParams } from '@shared/replica'
 import { parseDictionary, promptSignature } from '@shared/tags'
 import { TEMPLATE_KINDS } from '@shared/types'
 import { atomic } from './file-library'
@@ -58,6 +59,39 @@ export async function listPngs(dir: string, recursive: boolean, errors: string[]
   return out
 }
 
+/** 图片的实际像素尺寸（只读文件开头）；无法识别时返回 null */
+export function pixelSize(path: string): { width: number; height: number } | null {
+  try {
+    const fd = openSync(path, 'r')
+    const buf = Buffer.alloc(256 * 1024)
+    const len = readSync(fd, buf, 0, buf.length, 0)
+    closeSync(fd)
+    const b = buf.subarray(0, len)
+    if (b.toString('latin1', 1, 4) === 'PNG') return { width: b.readUInt32BE(16), height: b.readUInt32BE(20) }
+    if (b.toString('latin1', 0, 4) === 'RIFF' && b.toString('latin1', 8, 12) === 'WEBP') {
+      const kind = b.toString('latin1', 12, 16)
+      if (kind === 'VP8X') return { width: b.readUIntLE(24, 3) + 1, height: b.readUIntLE(27, 3) + 1 }
+      if (kind === 'VP8 ') return { width: b.readUInt16LE(26) & 0x3fff, height: b.readUInt16LE(28) & 0x3fff }
+      if (kind === 'VP8L') {
+        const v = b.readUInt32LE(21)
+        return { width: (v & 0x3fff) + 1, height: ((v >> 14) & 0x3fff) + 1 }
+      }
+      return null
+    }
+    if (b[0] === 0xff && b[1] === 0xd8) {
+      for (let i = 2; i + 9 < b.length; ) {
+        if (b[i] !== 0xff) return null
+        const m = b[i + 1]
+        if (m >= 0xc0 && m <= 0xcf && m !== 0xc4 && m !== 0xc8 && m !== 0xcc) return { width: b.readUInt16BE(i + 7), height: b.readUInt16BE(i + 5) }
+        i += 2 + b.readUInt16BE(i + 2)
+      }
+    }
+    return null
+  } catch {
+    return null
+  }
+}
+
 /** 读取一张图片的 Prompt：任何异常都转为该图片的错误，不影响整批 */
 export async function scanImage(path: string): Promise<ScannedImage> {
   const base: Pick<ScannedImage, 'id' | 'name' | 'folder' | 'size' | 'format' | 'fields'> = { id: path, name: basename(path), folder: dirname(path), size: 0, format: null, fields: [] }
@@ -70,8 +104,9 @@ export async function scanImage(path: string): Promise<ScannedImage> {
     const meta = readImageMeta(path)
     base.format = meta.format
     base.fields = meta.fields.map((f) => ({ key: f.key, via: f.via, size: f.text.length }))
-    const r = extractPrompt(fieldMap(meta.fields))
-    return { ...base, ...r, notes: [...meta.warnings, ...r.notes] }
+    const chunks = fieldMap(meta.fields)
+    const r = extractPrompt(chunks)
+    return { ...base, ...r, notes: [...meta.warnings, ...r.notes], params: recoverParams(chunks, r.source, pixelSize(path)), loras: imageLoras(chunks, r.positive) }
   } catch (e) {
     return { ...base, status: 'error', positive: '', negative: '', source: null, notes: [], candidates: [], error: (e as Error).message || String(e) }
   }

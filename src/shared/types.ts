@@ -426,6 +426,10 @@ export interface UnitMeta {
   combo_seed?: number
   /** 入队时冻结的输出目录：完成后最终图片复制到这里（没有时不复制） */
   output_dir?: string
+  /** 套图复刻：原图路径、保存时使用的文件名（不含扩展名）与替换记录 */
+  source_image?: string
+  output_name?: string
+  replica?: { original_positive: string; original_negative: string; removed: string[]; manual: boolean; params: unknown[] }
   /** 第二角色出场时：角色名、服装、动作、表情 */
   character2?: string
   outfit2?: string
@@ -450,7 +454,7 @@ export interface InputValue {
 
 /** 计划展开后的一张图 */
 export interface PlanUnit {
-  section: 'story' | 'pose'
+  section: 'story' | 'pose' | 'replica'
   item_index: number
   item_label: string
   sub_index: number

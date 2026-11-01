@@ -56,6 +56,30 @@ export function normalizeControls(val: unknown): WorkflowControls | null {
   return { overrides, bypass }
 }
 
+// ---------------- 节点分类（只用于列表显示；认不出的第三方节点放入「其他」，不猜用途）
+
+export type NodeCategory = 'prompt' | 'model' | 'sampler' | 'image' | 'output' | 'other'
+export const NODE_CATEGORIES: [NodeCategory, string][] = [['prompt', 'Prompt / 文本'], ['model', '模型与 LoRA'], ['sampler', '采样'], ['image', '图像处理'], ['output', '输出'], ['other', '其他']]
+
+export function nodeCategory(api: ApiWorkflow, nid: string): NodeCategory {
+  const n = api[nid]
+  if (!n) return 'other'
+  const ct = n.class_type
+  if (typeof n.inputs?.filename_prefix === 'string' || /^(Save|Preview)|SaveImage|PreviewImage/i.test(ct)) return 'output'
+  if (findLoraLoaders(api).some((l) => l.node === nid) || /CheckpointLoader|VAELoader|CLIPLoader|UNETLoader|ControlNetLoader|UpscaleModelLoader|CLIPSetLastLayer|ModelSampling|DifferentialDiffusion/i.test(ct)) return 'model'
+  if (/KSampler|SamplerCustom|UltimateSDUpscale|Detailer|BasicScheduler|Guider/i.test(ct)) return 'sampler'
+  if (toggleStructure(n) || /TextEncode|Wildcard|TriggerWord|StringConcat|RegexReplace|^String|Prompt|WidgetToString/i.test(ct)) return 'prompt'
+  if (/Image|Upscale|VAEDecode|VAEEncode|Canny|ControlNetApply|Latent/i.test(ct)) return 'image'
+  return 'other'
+}
+
+/** 校验消息中提到的节点（节点列表上的异常标记） */
+export function problemNodes(msgs: Message[]): Set<string> {
+  const out = new Set<string>()
+  for (const [lvl, m] of msgs) if (lvl === 'error') for (const hit of m.matchAll(/(?:节点 #?|#)(\d+)/g)) out.add(hit[1])
+  return out
+}
+
 // ---------------- 输入类型
 
 export type LiteralKind = 'string' | 'number' | 'boolean' | 'json'
@@ -319,7 +343,7 @@ export function mergeControlInputs(api: ApiWorkflow, base: InputValue[], ctl: In
 export function checkFrozenControls(api: ApiWorkflow, inputs: InputValue[], info: ObjectInfo): Message[] {
   const out: Message[] = []
   for (const x of inputs) {
-    if (x.source !== NODE_OVERRIDE) continue
+    if (x.source !== NODE_OVERRIDE && x.source !== 'replica_param') continue
     const node = api[String(x.node)]
     for (const m of checkOverrideValue(node?.inputs?.[x.input], x.value, inputSpec(info[node?.class_type ?? ''], x.input))) out.push(['error', `节点覆盖：${tag(String(x.node), node)} 的 ${x.input}：${m}`])
   }

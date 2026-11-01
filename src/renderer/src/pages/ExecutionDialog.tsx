@@ -10,7 +10,8 @@ import { CopyButton, FieldLabel } from '@/components/common'
 import { PickSources } from '@/components/card-pools'
 import { api, call } from '@/lib/api'
 import { cn } from '@/lib/utils'
-import { NODE_BYPASS, sourceLabel, TRIGGER_DISABLE } from '@shared/mapping'
+import { NODE_BYPASS, sourceLabel } from '@shared/mapping'
+import { changeLines, type ChangeLine } from '@shared/workflow-analysis'
 import type { AttemptState, ExecutionDetail, ExecutionInspection, InputChange, OutputFile } from '@shared/types'
 
 const STATES: Record<AttemptState, [string, 'ok' | 'warn' | 'bad' | 'muted']> = {
@@ -95,6 +96,7 @@ function Overview({ d, x }: { d: ExecutionDetail; x: ExecutionInspection }) {
           ['生成单元 ID', `${u.id}（第 ${u.idx + 1} 张）`],
           ['ComfyUI Prompt ID', a.prompt_id ?? '—'],
           ['工作流', d.run?.workflow_name ?? '—'],
+          ...(u.meta?.source_image ? [['复刻原图', u.meta.source_image] as [string, React.ReactNode]] : []),
           ['构建时间', fmt(a.built_at)],
           ['提交时间', fmt(a.submitted_at)],
           ['完成时间', fmt(a.finished_at)],
@@ -186,43 +188,48 @@ function PromptTab({ d }: { d: ExecutionDetail }) {
   )
 }
 
-/** 按节点列出原始工作流与最终工作流的差异：任务预览和执行详情共用，内容来自实际构建结果的比较 */
-export function ChangeList({ changes, unchanged }: { changes: InputChange[]; unchanged: number }) {
-  const nodes = [...new Set(changes.map((c) => c.node))]
+function ChangeRow({ l }: { l: ChangeLine }) {
+  const [open, setOpen] = useState(false)
+  const head = (
+    <span className="min-w-0 flex-1 truncate">
+      <span className="font-mono text-muted-foreground">#{l.node}</span> {l.title !== l.class_type ? l.title : l.class_type}
+      {l.label && <span className="text-muted-foreground">：{l.label} </span>}
+      {l.kind === 'bypass' && <span className="ml-1 rounded bg-warning/10 px-1 text-warning" data-testid="change-bypassed">节点已绕过</span>}
+      {l.kind === 'trigger' && <span className="ml-1 rounded bg-success/10 px-1 text-success" data-testid="change-trigger-disabled">注入关闭</span>}
+      {l.kind === 'rewire' && <span>改接 {l.before} → {l.after}</span>}
+      {(l.kind === 'value' || l.kind === 'lora') && !l.long && <span>{l.before} <span className="text-muted-foreground">→</span> <b className="font-medium">{l.after}</b></span>}
+      {l.long && <span className="text-muted-foreground">已修改</span>}
+    </span>
+  )
+  const expandable = l.long || l.kind === 'lora'
   return (
-    <div className="space-y-4">
-      <div className="text-xs text-muted-foreground">比较原始 API 工作流与最终工作流：{nodes.length} 个节点有变化，其余 {unchanged} 个节点完全沿用原值。</div>
-      {nodes.map((nid) => {
-        const list = changes.filter((c) => c.node === nid)
-        return (
-          <div key={nid} className="rounded-xl bg-tint/[0.03] p-3 ring-1 ring-tint/[0.08]" data-testid="exec-change-node" data-node={nid}>
-            <div className="mb-2 text-xs font-medium select-text">
-              节点 #{nid} {list[0].class_type}
-              {list[0].title !== list[0].class_type && <span className="ml-1 font-normal text-muted-foreground">· {list[0].title}</span>}
-              {list.some((c) => c.source === TRIGGER_DISABLE) && <span className="ml-2 rounded bg-success/10 px-1 text-[10.5px] font-normal text-success" data-testid="change-trigger-disabled">触发词注入已禁用</span>}
-            </div>
-            <div className="space-y-3">
-              {list.map((c) => c.source === NODE_BYPASS ? (
-                <div key={c.input} className="text-xs" data-testid="change-bypassed">
-                  <span className="rounded bg-warning/10 px-1 text-warning">节点已绕过</span>
-                  <span className="ml-2 text-muted-foreground">不出现在提交的工作流中，使用它的节点已改接到它的上游。</span>
-                </div>
-              ) : (
-                <div key={c.input} className="space-y-1">
-                  <div className="font-mono text-[11.5px] select-text">
-                    {c.input}
-                    <span className="ml-2 font-sans text-[10.5px] text-muted-foreground">{c.source ? sourceLabel(c.source) : '没有对应的写入记录'}</span>
-                  </div>
-                  <div className="grid grid-cols-2 gap-2">
-                    <Value label="原始值" v={c.before} />
-                    <Value label="本次提交" v={c.after} />
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
-        )
-      })}
+    <div className="rounded-lg bg-tint/[0.03] px-2.5 py-1.5 text-xs select-text" data-testid="exec-change-node" data-node={l.node} data-kind={l.kind} data-source={l.source}>
+      <div className="flex items-center gap-1.5">
+        {head}
+        {l.source && l.kind === 'value' && <span className="shrink-0 text-[10.5px] text-muted-foreground">{sourceLabel(l.source)}</span>}
+        {expandable && (
+          <button type="button" className="shrink-0 text-muted-foreground hover:text-foreground" onClick={() => setOpen(!open)} aria-label="展开比较" data-testid="change-expand">
+            {open ? <ChevronDown className="size-3.5" /> : <ChevronRight className="size-3.5" />}
+          </button>
+        )}
+      </div>
+      {open && (
+        <div className="mt-1.5 grid grid-cols-2 gap-2">
+          <Value label="原始值" v={l.change.before} />
+          <Value label="本次提交" v={l.change.after} />
+        </div>
+      )}
+    </div>
+  )
+}
+
+/** 可读的参数变化：任务预览、工作流页面和执行详情共用，内容来自实际构建结果与原始工作流的比较 */
+export function ChangeList({ changes, unchanged }: { changes: InputChange[]; unchanged: number }) {
+  const lines = changeLines(changes)
+  return (
+    <div className="space-y-1.5">
+      <div className="pb-1 text-[11.5px] text-muted-foreground">{new Set(lines.map((l) => l.node)).size} 个节点有变化，{unchanged} 个节点沿用原值</div>
+      {lines.map((l, i) => <ChangeRow key={i} l={l} />)}
     </div>
   )
 }

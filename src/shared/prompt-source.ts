@@ -297,6 +297,14 @@ function findSamplers(g: Graph, ids: string[]) {
   return { samplers, positiveOnly, pipes, first }
 }
 
+/** 工作流中的采样器及其是否为第一次采样（后面还会读取参数；判断方法与 Prompt 提取相同） */
+export function samplersOfGraph(graph: unknown): { id: string; first: boolean }[] {
+  if (!validGraph(graph)) return []
+  const ids = nodeIds(graph)
+  const { samplers, first } = findSamplers(graph, ids)
+  return samplers.map((id) => ({ id, first: first(id) }))
+}
+
 const validGraph = (graph: unknown): graph is Graph => !!graph && typeof graph === 'object' && !Array.isArray(graph)
 const nodeIds = (g: Graph) => Object.keys(g).filter((id) => g[id] && typeof g[id] === 'object' && typeof g[id].class_type === 'string' && g[id].inputs && typeof g[id].inputs === 'object').sort(byId)
 

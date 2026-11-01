@@ -1,14 +1,14 @@
-// 节点详情：一个节点的全部输入、连接来源，以及这个工作流的参数覆盖与绕过。只改工作流记录中的控制配置，不修改导入的 API JSON。
+// 选中节点的详情与控制：输入按类型用对应控件直接编辑（写入工作流的控制配置，不修改导入的 API JSON）。
 
 import { useEffect, useState } from 'react'
-import { AlertCircle, ArrowUpRight, Ban, RotateCcw } from 'lucide-react'
+import { ArrowUpRight, ChevronDown, ChevronRight, Layers, Plus, RotateCcw } from 'lucide-react'
 import { Button } from '@/components/ui/button'
-import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Switch } from '@/components/ui/switch'
-import { CopyButton, FieldLabel } from '@/components/common'
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
+import { CopyButton } from '@/components/common'
 import { cn } from '@/lib/utils'
-import { isLink, nodeTitle } from '@shared/mapping'
-import { checkBypass, checkOverrideValue, consumersOf, inputControl, inputSpec, literalKind, type InputState } from '@shared/node-controls'
+import { findLoraLoaders, isLink, newEntry, nodeTitle, toggleStructure, TRIGGER_DISABLE } from '@shared/mapping'
+import { checkBypass, checkOverrideValue, consumersOf, inputControl, inputSpec, literalKind, type InputSpec, type InputState } from '@shared/node-controls'
 import type { ApiWorkflow, MappingEntry, ObjectInfo, WorkflowControls } from '@shared/types'
 import { Select } from './WorkflowEditor'
 
@@ -18,198 +18,259 @@ const STATE_TONE: Record<InputState, string> = {
   lora: 'bg-primary/15 text-primary',
   trigger: 'bg-success/10 text-success',
   override: 'bg-warning/10 text-warning',
-  original: 'bg-tint/[0.04] text-muted-foreground',
+  original: '',
 }
 
-const text = (v: unknown) => (typeof v === 'string' ? v : JSON.stringify(v, null, 2) ?? String(v))
+const brief = (v: unknown) => {
+  const s = typeof v === 'string' ? v : JSON.stringify(v)
+  return (s ?? '').length > 60 ? `${s.slice(0, 60)}…` : s
+}
+const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b)
+const field = 'w-full rounded-lg bg-tint/[0.045] px-2 py-1.5 text-[12.5px] ring-1 ring-tint/[0.112] outline-none focus:ring-primary/50 disabled:opacity-60'
 
-function Raw({ label, v, testid }: { label: string; v: unknown; testid?: string }) {
-  const s = text(v)
+function Fold({ title, children, testid, defaultOpen = false }: { title: string; children: React.ReactNode; testid?: string; defaultOpen?: boolean }) {
+  const [open, setOpen] = useState(defaultOpen)
   return (
-    <div className="min-w-0" data-testid={testid}>
-      <div className="flex items-center text-[10.5px] text-muted-foreground">
-        {label}
-        <span className="ml-auto">
-          <CopyButton text={s} />
-        </span>
-      </div>
-      <pre className="mt-0.5 max-h-40 overflow-auto rounded-md bg-inset p-1.5 font-mono text-[11px] leading-relaxed whitespace-pre-wrap select-text">{s || '（空）'}</pre>
+    <div data-testid={testid}>
+      <button type="button" className="flex items-center gap-1 text-[11.5px] text-muted-foreground hover:text-foreground" onClick={() => setOpen(!open)} data-testid={testid ? `${testid}-toggle` : undefined}>
+        {open ? <ChevronDown className="size-3.5" /> : <ChevronRight className="size-3.5" />}
+        {title}
+      </button>
+      {open && <div className="mt-1.5">{children}</div>}
     </div>
   )
 }
 
-/** 输入框内容 → 值。按工作流原值的类型解析，解析失败返回错误文字 */
-function parseDraft(kind: ReturnType<typeof literalKind>, draft: string): { value: unknown } | { error: string } {
-  if (kind === 'string') return { value: draft }
-  if (kind === 'boolean') return { value: draft === 'true' }
-  if (kind === 'number') {
-    const n = Number(draft)
-    return draft.trim() === '' || Number.isNaN(n) ? { error: '请输入数字' } : { value: n }
-  }
-  try {
-    return { value: JSON.parse(draft) }
-  } catch (e) {
-    return { error: `JSON 无效：${(e as Error).message}` }
-  }
-}
-
-function OverrideEditor({ original, current, spec, onSave, onCancel }: { original: unknown; current?: unknown; spec: ReturnType<typeof inputSpec>; onSave: (v: unknown) => void; onCancel: () => void }) {
+/** 输入的值：按类型选择控件。离开输入框或按回车时提交；与原值相同等于恢复原值 */
+function ValueControl({ original, value, spec, disabled, onCommit }: { original: unknown; value: unknown; spec: InputSpec | null; disabled?: boolean; onCommit: (v: unknown) => string[] }) {
   const kind = literalKind(original)
-  const start = current ?? original
-  const [draft, setDraft] = useState(kind === 'json' ? JSON.stringify(start, null, 2) : String(start))
+  const toText = (v: unknown) => (kind === 'json' ? JSON.stringify(v, null, 2) : String(v))
+  const [draft, setDraft] = useState(toText(value))
   const [error, setError] = useState('')
-  const field = 'w-full rounded-lg bg-tint/[0.045] px-2 py-1.5 font-mono text-[12px] ring-1 ring-tint/[0.112] outline-none focus:ring-primary/50'
-  return (
-    <div className="space-y-2 rounded-lg bg-tint/[0.03] p-2.5" data-testid="override-edit">
-      {kind === 'json' && <div className="flex gap-1.5 text-[11px] leading-relaxed text-warning"><AlertCircle className="mt-0.5 size-3.5 shrink-0" /> 高级 JSON 编辑：ComfyEngi 不理解这个插件输入的含义，只检查 JSON 格式。写错可能导致节点报错或得到意外结果，请自行确认结构。</div>}
-      {spec?.options ? (
-        <Select value={draft} onChange={setDraft} options={[...spec.options.map((o) => [String(o), String(o)] as [string, string]), ...(spec.options.includes(start) ? [] : [[String(start), `${String(start)}（不在可选列表中）`] as [string, string]])]} className="w-full" />
-      ) : kind === 'boolean' ? (
-        <label className="flex items-center gap-2 text-xs">
-          <Switch checked={draft === 'true'} onCheckedChange={(v) => setDraft(v ? 'true' : 'false')} data-testid="override-bool" /> {draft === 'true' ? 'true' : 'false'}
-        </label>
-      ) : kind === 'number' ? (
-        <input type="number" step="any" value={draft} min={spec?.min} max={spec?.max} onChange={(e) => setDraft(e.target.value)} className={field} data-testid="override-value" />
-      ) : (
-        <textarea value={draft} rows={kind === 'json' ? 8 : 3} onChange={(e) => setDraft(e.target.value)} className={field} data-testid="override-value" />
-      )}
-      {!spec && <div className="text-[10.5px] text-muted-foreground">没有 ComfyUI 的节点定义：只按工作流原值的类型做基础检查。</div>}
-      {spec && (spec.min !== undefined || spec.max !== undefined) && <div className="text-[10.5px] text-muted-foreground">ComfyUI 声明的范围：{spec.min ?? '—'} ~ {spec.max ?? '—'}</div>}
-      {error && <div className="text-[11px] text-destructive" data-testid="override-error">{error}</div>}
-      <div className="flex justify-end gap-1.5">
-        <Button size="sm" variant="ghost" onClick={onCancel}>取消</Button>
-        <Button
-          size="sm"
-          data-testid="override-save"
-          onClick={() => {
-            const r = parseDraft(kind, draft)
-            if ('error' in r) return setError(r.error)
-            const problems = checkOverrideValue(original, r.value, spec)
-            if (problems.length) return setError(problems.join('；'))
-            onSave(r.value)
-          }}
-        >
-          保存覆盖
-        </Button>
+  useEffect(() => {
+    setDraft(toText(value))
+    setError('')
+  }, [JSON.stringify(value)]) // eslint-disable-line react-hooks/exhaustive-deps
+  const submit = (v: unknown) => setError(onCommit(v).join('；'))
+  const commitText = () => {
+    if (draft === toText(value)) return setError('')
+    if (kind === 'number') {
+      if (draft.trim() === '' || Number.isNaN(Number(draft))) return setError('请输入数字')
+      return submit(Number(draft))
+    }
+    if (kind === 'json') {
+      try {
+        return submit(JSON.parse(draft))
+      } catch (e) {
+        return setError(`JSON 无效：${(e as Error).message}`)
+      }
+    }
+    submit(draft)
+  }
+  const onKey = (e: React.KeyboardEvent<HTMLInputElement>) => e.key === 'Enter' && e.currentTarget.blur()
+  let control: React.ReactNode
+  if (spec?.options) {
+    const opts = spec.options.map((o) => [String(o), String(o)] as [string, string])
+    if (!spec.options.includes(value)) opts.push([String(value), `${String(value)}（不在列表中）`])
+    control = disabled ? <input className={field} value={String(value)} disabled /> : <Select value={String(value)} onChange={(v) => submit(kind === 'number' ? Number(v) : v)} options={opts} className="w-full" />
+  } else if (kind === 'boolean') {
+    control = <Switch checked={value === true} disabled={disabled} onCheckedChange={(v) => submit(!!v)} data-testid="override-bool" />
+  } else if (kind === 'number') {
+    const hint = spec && (spec.min !== undefined || spec.max !== undefined) ? `${spec.min ?? '—'} ~ ${spec.max ?? '—'}` : ''
+    control = (
+      <div className="flex items-center gap-2">
+        <input type="number" step="any" disabled={disabled} value={draft} onChange={(e) => setDraft(e.target.value)} onBlur={commitText} onKeyDown={onKey} className={cn(field, 'w-36 font-mono')} data-testid="override-value" />
+        {hint && <span className="text-[10.5px] text-muted-foreground">{hint}</span>}
       </div>
+    )
+  } else if (kind === 'string') {
+    const long = draft.length > 60 || draft.includes('\n')
+    control = long ? (
+      <textarea disabled={disabled} value={draft} rows={Math.min(8, 2 + Math.ceil(draft.length / 90))} onChange={(e) => setDraft(e.target.value)} onBlur={commitText} className={cn(field, 'font-mono')} data-testid="override-value" />
+    ) : (
+      <input disabled={disabled} value={draft} onChange={(e) => setDraft(e.target.value)} onBlur={commitText} onKeyDown={onKey} className={cn(field, 'font-mono')} data-testid="override-value" />
+    )
+  } else {
+    control = (
+      <Fold title="高级 JSON" testid="override-json">
+        {!disabled && <div className="mb-1 text-[10.5px] text-warning">插件专用结构，只检查 JSON 格式，写错可能导致节点报错。</div>}
+        <textarea disabled={disabled} value={draft} rows={8} onChange={(e) => setDraft(e.target.value)} onBlur={commitText} className={cn(field, 'font-mono text-[11.5px]')} data-testid="override-value" />
+      </Fold>
+    )
+  }
+  return (
+    <div className="min-w-0">
+      {control}
+      {error && <div className="mt-1 text-[11px] text-destructive" data-testid="override-error">{error}</div>}
     </div>
   )
 }
 
-export function NodeInspector({ nid, api, mapping, controls, info, infoError, onJump, onClose, onControls }: { nid: string; api: ApiWorkflow; mapping: MappingEntry[]; controls: WorkflowControls; info: ObjectInfo | null; infoError: string | null; onJump: (nid: string) => void; onClose: () => void; onControls: (c: WorkflowControls) => void }) {
+function Hint({ text, children }: { text: string; children: React.ReactNode }) {
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <span className="inline-flex">{children}</span>
+      </TooltipTrigger>
+      <TooltipContent className="max-w-80 leading-relaxed">{text}</TooltipContent>
+    </Tooltip>
+  )
+}
+
+export function NodePanel({ nid, api, mapping, controls, info, infoError, onJump, onControls, onMapping, onAddMapping, onLora }: {
+  nid: string
+  api: ApiWorkflow
+  mapping: MappingEntry[]
+  controls: WorkflowControls
+  info: ObjectInfo | null
+  infoError: string | null
+  onJump: (nid: string) => void
+  onControls: (c: WorkflowControls) => void
+  onMapping: (m: MappingEntry[]) => void
+  onAddMapping: (input: string) => void
+  onLora: () => void
+}) {
   const node = api[nid]
-  const [editing, setEditing] = useState<string | null>(null)
-  useEffect(() => setEditing(null), [nid])
   if (!node) return null
   const spec = info?.[node.class_type]
   const bypassed = controls.bypass.find((b) => b.node === nid)
-  const others = controls.bypass.filter((b) => b.node !== nid).map((b) => b.node)
-  const check = checkBypass(api, nid, info, others)
-  const nodeMapped = mapping.filter((m) => String(m.node) === nid)
+  const check = checkBypass(api, nid, info, controls.bypass.filter((b) => b.node !== nid).map((b) => b.node))
+  const nodeMapped = mapping.filter((m) => String(m.node) === nid && m.source !== TRIGGER_DISABLE)
   const nodeOverrides = controls.overrides.filter((o) => o.node === nid)
-  const blocked = nodeMapped.length ? `这个节点有 ${nodeMapped.length} 条映射，绕过后不会生效：请先删除映射` : nodeOverrides.length ? '这个节点有参数覆盖，绕过后不会生效：请先恢复这些输入' : ''
+  const blocked = nodeMapped.length ? '节点有映射，请先删除映射' : nodeOverrides.length ? '节点有参数覆盖，请先恢复原值' : ''
+  const reason = !check.ok ? `${check.reason}${!info && infoError ? `（${infoError}）` : ''}` : blocked
+  const toggle = toggleStructure(node)
+  const triggerOff = mapping.some((m) => m.source === TRIGGER_DISABLE && String(m.node) === nid)
+  const loader = findLoraLoaders(api).find((l) => l.node === nid)
   const consumers = consumersOf(api, nid)
+  const upstream = Object.entries(node.inputs ?? {}).filter(([, v]) => isLink(v)) as [string, [string, number]][]
+  const inputs = Object.entries(node.inputs ?? {}).filter(([, v]) => !isLink(v))
+  const setOverride = (k: string, original: unknown, value: unknown): string[] => {
+    const rest = controls.overrides.filter((o) => !(o.node === nid && o.input === k))
+    if (same(value, original)) {
+      onControls({ ...controls, overrides: rest })
+      return []
+    }
+    const problems = checkOverrideValue(original, value, inputSpec(spec, k))
+    if (problems.length) return problems
+    onControls({ ...controls, overrides: [...rest, { node: nid, input: k, class_type: node.class_type, value }] })
+    return []
+  }
+  const peer = (id: string) => (api[id] ? `#${id} ${nodeTitle(api[id])}` : `#${id}`)
   return (
-    <Dialog open onOpenChange={(o) => !o && onClose()}>
-      <DialogContent className="flex max-h-[calc(100dvh-2rem)] flex-col sm:max-w-3xl" data-testid="node-detail" data-node={nid}>
-        <DialogHeader className="shrink-0">
-          <DialogTitle>节点 #{nid} {nodeTitle(node)}</DialogTitle>
-          <DialogDescription className="font-mono text-[11.5px]">{node.class_type}</DialogDescription>
-        </DialogHeader>
-        <div className="min-h-0 flex-1 space-y-4 overflow-y-auto pr-1">
-          <div className="text-[11.5px] leading-relaxed text-muted-foreground">导入的工作流不会被修改。覆盖与绕过保存在 ComfyEngi 的工作流配置中，只作用于提交时的副本；「更新 JSON」后如果节点已变化会提示失效。</div>
+    <div className="space-y-4" data-testid="node-detail" data-node={nid}>
+      <div className="flex items-start gap-3">
+        <div className="min-w-0 flex-1">
+          <div className="truncate text-[14px] font-semibold select-text">#{nid} {nodeTitle(node)}</div>
+          <div className="truncate font-mono text-[11px] text-muted-foreground select-text">{node.class_type}</div>
+        </div>
+        {toggle ? (
+          <label className="flex shrink-0 items-center gap-2 text-[12.5px]" data-testid="trigger-control">
+            自动注入触发词
+            <Switch checked={!triggerOff} onCheckedChange={(on) => onMapping(on ? mapping.filter((m) => !(m.source === TRIGGER_DISABLE && String(m.node) === nid)) : [...mapping, newEntry(TRIGGER_DISABLE, nid, 'toggle_trigger_words')])} data-testid="trigger-switch" />
+          </label>
+        ) : (
+          <div className="flex shrink-0 items-center gap-2 text-[12.5px]" data-testid="node-bypass">
+            节点启用
+            {bypassed || (check.ok && !blocked) ? (
+              <Switch checked={!bypassed} onCheckedChange={(on) => onControls({ ...controls, bypass: on ? controls.bypass.filter((b) => b.node !== nid) : [...controls.bypass, ...(check.ok ? [check.entry] : [])] })} data-testid="bypass-switch" />
+            ) : (
+              <Hint text={reason}>
+                <Switch checked disabled data-testid="bypass-switch" />
+              </Hint>
+            )}
+          </div>
+        )}
+      </div>
+      {!toggle && !bypassed && reason && <div className="truncate text-[11px] text-muted-foreground" title={reason} data-testid="bypass-reason">不能绕过：{reason}</div>}
+      {bypassed && <div className="rounded-lg bg-warning/[0.08] px-2.5 py-1.5 text-[11.5px] text-warning" data-testid="bypass-reason">已绕过，提交时不包含这个节点{bypassed.routes.length ? `，下游改接 ${bypassed.routes.map((r) => r.input).join('、')} 的来源` : ''}</div>}
+      {toggle && triggerOff && <div className="rounded-lg bg-success/[0.08] px-2.5 py-1.5 text-[11.5px] text-success">提交时节点输出空文本，触发词由角色和服装 Prompt 负责。</div>}
 
-          <section className="rounded-xl bg-tint/[0.03] p-3 ring-1 ring-tint/[0.08]" data-testid="node-bypass">
-            <div className="flex items-center gap-2 text-xs font-medium">
-              <Ban className="size-3.5" /> 节点绕过
-              <div className="flex-1" />
-              {bypassed ? (
-                <Button size="sm" variant="secondary" data-testid="bypass-restore" onClick={() => onControls({ ...controls, bypass: controls.bypass.filter((b) => b.node !== nid) })}>
-                  <RotateCcw /> 恢复节点
-                </Button>
-              ) : (
-                <Button size="sm" variant="secondary" disabled={!check.ok || !!blocked} data-testid="bypass-set" onClick={() => check.ok && onControls({ ...controls, bypass: [...controls.bypass, check.entry] })}>
-                  绕过这个节点
-                </Button>
-              )}
-            </div>
-            <div className="mt-1.5 text-[11.5px] leading-relaxed" data-testid="bypass-reason">
-              {bypassed ? (
-                <span className="text-warning">已绕过：提交时不包含这个节点，{bypassed.routes.length ? bypassed.routes.map((r) => `输出 ${r.output}（${r.type}）的使用者改接到 ${r.input} 的来源`).join('；') : '它的输出没有被其他节点使用'}。恢复后使用原来的连接。</span>
-              ) : !check.ok ? (
-                <span className="text-muted-foreground">不支持自动绕过：{check.reason}{!info && infoError ? `（${infoError}）` : ''}</span>
-              ) : blocked ? (
-                <span className="text-muted-foreground">{blocked}</span>
-              ) : (
-                <span className="text-muted-foreground">类型已确认：{check.entry.routes.length ? check.entry.routes.map((r) => `输出 ${r.output}（${r.type}）→ 输入 ${r.input}`).join('；') : '输出没有被其他节点使用'}。与 ComfyUI 编辑器的 Bypass 相同，提交时移除节点并把下游改接到上游。</span>
-              )}
-            </div>
-          </section>
+      {loader && (
+        <div className="flex items-start gap-2 rounded-xl bg-tint/[0.03] p-2.5 ring-1 ring-tint/[0.08]" data-testid="node-loras">
+          <Layers className="mt-0.5 size-3.5 shrink-0 text-muted-foreground" />
+          <div className="min-w-0 flex-1 space-y-0.5 text-[11.5px]">
+            {(loader.entries ?? [{ name: loader.lora_name, strength: node.inputs.strength_model ?? node.inputs.strength, active: true }]).map((e, i) => (
+              <div key={i} className={cn('truncate font-mono', !e.active && 'opacity-50')}>
+                {e.active ? '●' : '○'} {e.name} <span className="text-muted-foreground">{String(e.strength ?? '')}</span>
+              </div>
+            ))}
+          </div>
+          <Button size="sm" variant="ghost" onClick={onLora} data-testid="node-loras-open">在任务中配置</Button>
+        </div>
+      )}
 
-          <section>
-            <FieldLabel>全部输入</FieldLabel>
-            <div className="space-y-2">
-              {Object.entries(node.inputs ?? {}).map(([k, v]) => {
+      <div className="space-y-1.5">
+        {inputs.map(([k, v]) => {
+          const c = inputControl(api, mapping, controls, nid, k)
+          const ov = controls.overrides.find((o) => o.node === nid && o.input === k)
+          return (
+            <div key={k} className={cn('rounded-xl p-2.5 ring-1', ov ? 'bg-warning/[0.04] ring-warning/25' : 'bg-tint/[0.02] ring-tint/[0.07]')} data-testid="node-input" data-input={k} data-state={c.state}>
+              <div className="mb-1.5 flex min-h-6 items-center gap-2 text-[12px]">
+                <span className="font-medium">{k}</span>
+                {inputSpec(spec, k) && <span className="font-mono text-[10px] text-muted-foreground">{inputSpec(spec, k)!.type}</span>}
+                {c.state !== 'original' && <span className={cn('rounded px-1.5 text-[10.5px]', STATE_TONE[c.state])} data-testid="input-state">{c.label}</span>}
+                <div className="flex-1" />
+                {ov && (
+                  <>
+                    <span className="max-w-48 truncate text-[10.5px] text-muted-foreground" title={String(brief(v))} data-testid="value-original">原值 {brief(v)}</span>
+                    <Button size="icon-sm" variant="ghost" className="size-6" title="恢复原值" aria-label="恢复原值" data-testid="override-remove" onClick={() => onControls({ ...controls, overrides: controls.overrides.filter((o) => o !== ov) })}>
+                      <RotateCcw />
+                    </Button>
+                  </>
+                )}
+                {c.state === 'original' && (
+                  <Button size="icon-sm" variant="ghost" className="size-6 text-muted-foreground" title="添加为映射" aria-label="添加为映射" data-testid="add-mapping" onClick={() => onAddMapping(k)}>
+                    <Plus />
+                  </Button>
+                )}
+              </div>
+              <ValueControl key={`${nid}.${k}`} original={v} value={c.prepared && c.state === 'trigger' ? c.prepared.value : (ov?.value ?? v)} spec={inputSpec(spec, k)} disabled={!!c.blocked || !!bypassed} onCommit={(value) => setOverride(k, v, value)} />
+            </div>
+          )
+        })}
+        {!inputs.length && <div className="text-xs text-muted-foreground">没有可编辑的参数。</div>}
+      </div>
+
+      {(upstream.length > 0 || consumers.length > 0) && (
+        <div className="grid grid-cols-2 gap-3 text-[11.5px]">
+          <div>
+            <div className="mb-1 text-muted-foreground">上游</div>
+            <div className="flex flex-wrap gap-1.5">
+              {upstream.map(([k, v]) => {
                 const c = inputControl(api, mapping, controls, nid, k)
-                const ov = controls.overrides.find((o) => o.node === nid && o.input === k)
-                const isl = isLink(v)
-                const kSpec = inputSpec(spec, k)
                 return (
-                  <div key={k} className="rounded-xl bg-tint/[0.03] p-2.5 ring-1 ring-tint/[0.08]" data-testid="node-input" data-input={k} data-state={c.state}>
-                    <div className="flex flex-wrap items-center gap-2 text-xs">
-                      <span className="font-mono font-medium">{k}</span>
-                      {kSpec && <span className="font-mono text-[10.5px] text-muted-foreground">{kSpec.type}</span>}
-                      <span className={cn('rounded px-1.5 text-[10.5px]', STATE_TONE[c.state])} data-testid="input-state">{c.label}</span>
-                      <div className="flex-1" />
-                      {isl && (
-                        <Button size="sm" variant="ghost" data-testid="node-jump" onClick={() => onJump(String(v[0]))}>
-                          <ArrowUpRight /> 来自 #{String(v[0])} 输出 {v[1]}
-                        </Button>
-                      )}
-                      {!c.blocked && !ov && editing !== k && (
-                        <Button size="sm" variant="ghost" data-testid="override-open" onClick={() => setEditing(k)}>覆盖</Button>
-                      )}
-                      {ov && editing !== k && (
-                        <>
-                          <Button size="sm" variant="ghost" data-testid="override-open" onClick={() => setEditing(k)}>修改</Button>
-                          <Button size="sm" variant="ghost" data-testid="override-remove" onClick={() => onControls({ ...controls, overrides: controls.overrides.filter((o) => o !== ov) })}><RotateCcw /> 恢复原值</Button>
-                        </>
-                      )}
-                    </div>
-                    {editing === k ? (
-                      <div className="mt-2">
-                        <OverrideEditor original={v} current={ov?.value} spec={kSpec} onCancel={() => setEditing(null)} onSave={(value) => {
-                          onControls({ ...controls, overrides: [...controls.overrides.filter((o) => o !== ov), { node: nid, input: k, class_type: node.class_type, value }] })
-                          setEditing(null)
-                        }} />
-                      </div>
-                    ) : (
-                      <div className="mt-2 grid grid-cols-3 gap-2">
-                        <Raw label="工作流原始值" v={v} testid="value-original" />
-                        {c.prepared ? <Raw label="ComfyEngi 准备写入" v={c.prepared.value} testid="value-prepared" /> : <div className="text-[10.5px] text-muted-foreground" data-testid="value-prepared">ComfyEngi 准备写入<div className="mt-1.5 leading-relaxed">{c.state === 'mapping' || c.state === 'lora' ? '每张图的值由计划决定' : '不写入'}</div></div>}
-                        <div className="text-[10.5px] text-muted-foreground" data-testid="value-actual">实际提交值<div className="mt-1.5 leading-relaxed">{bypassed ? '节点不提交' : c.state === 'mapping' || c.state === 'lora' ? '在任务预览的「最终工作流」或运行记录的「执行详情」中查看' : c.prepared ? '与准备写入的值相同（提交前可在最终工作流中核对）' : '与工作流原始值相同'}</div></div>
-                      </div>
-                    )}
-                  </div>
+                  <button key={k} type="button" className="inline-flex max-w-full items-center gap-1 rounded-md bg-tint/[0.05] px-1.5 py-1 hover:bg-primary/10" data-testid="node-jump" data-input={k} data-state={c.state} onClick={() => onJump(String(v[0]))} title={`${k} ← ${peer(String(v[0]))} 输出 ${v[1]}`}>
+                    <ArrowUpRight className="size-3 shrink-0" />
+                    <span className="font-mono">{k}</span>
+                    <span className="truncate text-muted-foreground">{peer(String(v[0]))}</span>
+                  </button>
                 )
               })}
-              {!Object.keys(node.inputs ?? {}).length && <div className="text-xs text-muted-foreground">这个节点没有输入。</div>}
+              {!upstream.length && <span className="text-muted-foreground">无</span>}
             </div>
-          </section>
-
-          <section>
-            <FieldLabel>使用这个节点输出的节点</FieldLabel>
-            {!consumers.length && <div className="text-xs text-muted-foreground">没有其他节点使用它的输出。</div>}
+          </div>
+          <div>
+            <div className="mb-1 text-muted-foreground">下游</div>
             <div className="flex flex-wrap gap-1.5">
               {consumers.map((c) => (
-                <button key={`${c.node}.${c.input}`} type="button" className="rounded-md bg-tint/[0.05] px-2 py-1 font-mono text-[11px] hover:bg-primary/10" data-testid="node-consumer" onClick={() => onJump(c.node)}>
-                  输出 {c.output} → #{c.node}.{c.input}
+                <button key={`${c.node}.${c.input}`} type="button" className="inline-flex max-w-full items-center gap-1 rounded-md bg-tint/[0.05] px-1.5 py-1 hover:bg-primary/10" data-testid="node-consumer" onClick={() => onJump(c.node)} title={`输出 ${c.output} → ${peer(c.node)}.${c.input}`}>
+                  <span className="truncate">{peer(c.node)}</span>
+                  <span className="font-mono text-muted-foreground">{c.input}</span>
                 </button>
               ))}
+              {!consumers.length && <span className="text-muted-foreground">无</span>}
             </div>
-          </section>
+          </div>
         </div>
-      </DialogContent>
-    </Dialog>
+      )}
+
+      <Fold title="原始 JSON" testid="node-raw">
+        <div className="flex justify-end">
+          <CopyButton text={JSON.stringify(node, null, 2)} />
+        </div>
+        <pre className="mt-1 max-h-72 overflow-auto rounded-lg bg-inset p-2 font-mono text-[11px] whitespace-pre-wrap select-text" data-testid="node-raw-json">{JSON.stringify(node, null, 2)}</pre>
+      </Fold>
+    </div>
   )
 }

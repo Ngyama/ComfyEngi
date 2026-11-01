@@ -1,3 +1,5 @@
+import { normalizeReplicaData } from '@shared/replica'
+import { enqueueReplica, finalReplicaWorkflow, imageFromScan, planForReplica, relocateImages, relocateOne, workflowPreview } from './replica'
 import { LoraManager, pathKey } from './lora-manager'
 // IPC 处理：只响应白名单方法，并对每个参数做类型校验；Renderer 无法直接访问文件系统或数据库。
 
@@ -87,7 +89,7 @@ function record(table: TableName, v: unknown): Record<string, unknown> {
         throw new BadArg((e as Error).message)
       }
     } else if (c === 'api_json' || c === 'data') {
-      out[c] = c === 'data' ? normalizeTaskData(plain(val, 'data') as never) : plain(val, c)
+      out[c] = c === 'data' ? (table === 'replicas' ? normalizeReplicaData(plain(val, 'data') as never) : normalizeTaskData(plain(val, 'data') as never)) : plain(val, c)
     }
   }
   if ('kind' in out && !(out.kind as string in TEMPLATE_KINDS)) throw new BadArg(`未知的模板类型 ${out.kind}`)
@@ -196,6 +198,12 @@ export function registerIpc(ctx: IpcContext) {
   const vault = () => { if (!store.files) throw new Error('角色文件夹需要先打开工作区'); return store.files }
   const loras = () => { if (!store.files) throw new Error('请先打开工作区'); return new LoraManager(store.files.root) }
   const scanner = new MiningScanner()
+  const replicaScan = async (files: string[], folders: string[], recursive: boolean) => {
+    const res = await scanner.scan(files, folders, recursive, progress)
+    const rules = loadSourceRules(sourceRulesPath(ctx.dataDir))
+    const images = res.images.map((s) => imageFromScan(s, rules)).sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }))
+    return { images, errors: res.errors, cancelled: res.cancelled }
+  }
   const progress = (done: number, total: number, file: string) => {
     const win = ctx.window()
     if (win && !win.isDestroyed()) win.webContents.send(RUNNER_EVENT_CHANNEL, { kind: 'mining', done, total, file })
@@ -346,6 +354,86 @@ export function registerIpc(ctx: IpcContext) {
     'tasks.remove': (id) => store.remove('tasks', int(id)),
     'tasks.duplicate': (id) => ({ id: store.duplicate('tasks', int(id)) }),
 
+    'workflows.preview': (id) => {
+      const w = store.get('workflows', int(id))
+      if (!w) throw new BadArg('工作流不存在')
+      return workflowPreview(w)
+    },
+    'replicas.list': () => store.list('replicas').map((r) => ({ id: r.id!, name: r.name ?? '', count: r.data?.images?.length ?? 0, updated_at: (r as unknown as { updated_at?: number }).updated_at ?? null })),
+    'replicas.get': (id) => {
+      const r = store.get('replicas', int(id))
+      if (!r) return null
+      const data = normalizeReplicaData(r.data)
+      // 只有草稿中的原图可以显示缩略图
+      for (const im of data.images) if (existsSync(im.path)) scanner.allowed.add(im.path)
+      return { ...r, data }
+    },
+    'replicas.create': (name) => ({ id: store.save('replicas', record('replicas', { name: str(name), data: normalizeReplicaData(null) })) }),
+    'replicas.save': (rec) => ({ id: store.save('replicas', record('replicas', rec)) }),
+    'replicas.remove': (id) => store.remove('replicas', int(id)),
+    'replicas.addFiles': async () => {
+      const r = await dialog.showOpenDialog(ctx.window()!, { title: '选择原图', properties: ['openFile', 'multiSelections'], filters: [{ name: '图片', extensions: ['png', 'jpg', 'jpeg', 'webp'] }] })
+      if (r.canceled || !r.filePaths.length) return null
+      return replicaScan(r.filePaths, [], false)
+    },
+    'replicas.addFolder': async (recursive) => {
+      const r = await dialog.showOpenDialog(ctx.window()!, { title: '选择原图所在文件夹', properties: ['openDirectory'] })
+      if (r.canceled || !r.filePaths.length) return null
+      return replicaScan([], [r.filePaths[0]], !!recursive)
+    },
+    'replicas.relocateFolder': async (id) => {
+      const rec = store.get('replicas', int(id))
+      if (!rec) throw new BadArg('草稿不存在')
+      const r = await dialog.showOpenDialog(ctx.window()!, { title: '原图现在所在的文件夹', properties: ['openDirectory'] })
+      if (r.canceled || !r.filePaths.length) return null
+      const data = normalizeReplicaData(rec.data)
+      const res = await relocateImages(data, r.filePaths[0])
+      store.save('replicas', { id: rec.id, data: { ...data, images: res.images } })
+      for (const im of res.images) if (existsSync(im.path)) scanner.allowed.add(im.path)
+      return { relocated: res.relocated, mismatched: res.mismatched, notFound: res.notFound }
+    },
+    'replicas.relocateFile': async (id, index) => {
+      const rec = store.get('replicas', int(id))
+      if (!rec) throw new BadArg('草稿不存在')
+      const data = normalizeReplicaData(rec.data)
+      const im = data.images[int(index)]
+      if (!im) throw new BadArg('图片不存在')
+      const r = await dialog.showOpenDialog(ctx.window()!, { title: `定位 ${im.name}`, properties: ['openFile'], filters: [{ name: '图片', extensions: ['png', 'jpg', 'jpeg', 'webp'] }] })
+      if (r.canceled || !r.filePaths.length) return null
+      const next = await relocateOne(im, r.filePaths[0])
+      if (!next) return false
+      data.images[int(index)] = next
+      store.save('replicas', { id: rec.id, data })
+      scanner.allowed.add(next.path)
+      return true
+    },
+    'replicas.plan': (id) => {
+      const rec = store.get('replicas', int(id))
+      if (!rec) throw new BadArg('草稿不存在')
+      const p = planForReplica(store, rec)
+      const size = p.workflow ? generationSize(p.workflow.api_json ?? {}) : null
+      return { rows: p.rows, errors: p.errors, warnings: p.warnings, output_dir: p.output_dir, loras: p.loras, units: p.units.length, workflow: p.workflow ? { id: p.workflow.id!, name: p.workflow.name } : null, default_size: size ? { width: size.width, height: size.height } : null }
+    },
+    'replicas.finalWorkflow': (id, unit) => {
+      const rec = store.get('replicas', int(id))
+      if (!rec) throw new BadArg('草稿不存在')
+      return finalReplicaWorkflow(store, rec, int(unit))
+    },
+    'replicas.exportWorkflow': async (id, unit) => {
+      const rec = store.get('replicas', int(id))
+      if (!rec) throw new BadArg('草稿不存在')
+      const f = finalReplicaWorkflow(store, rec, int(unit))
+      const r = await dialog.showSaveDialog(ctx.window()!, { title: '导出最终工作流 JSON（API 格式）', defaultPath: `${String(f.label).replace(/\.[^.]+$/, '').replace(/[<>:"/|?*]/g, '_')}.json`, filters: [{ name: 'JSON', extensions: ['json'] }] })
+      if (r.canceled || !r.filePath) return null
+      await writeFile(r.filePath, JSON.stringify(f.json, null, 2), 'utf8')
+      return r.filePath
+    },
+    'replicas.enqueue': (id) => {
+      const rec = store.get('replicas', int(id))
+      if (!rec) throw new BadArg('草稿不存在')
+      const { runId, plan } = enqueueReplica(store, rec)
+      return { runId, errors: plan.errors, units: plan.units.length, skipped: plan.rows.filter((r) => r.state !== 'valid' && r.state !== 'excluded').length, output_dir: plan.output_dir }
+    },
     'plan.forTask': (taskId) => {
       const t = store.get('tasks', int(taskId))
       if (!t) throw new BadArg('任务不存在')

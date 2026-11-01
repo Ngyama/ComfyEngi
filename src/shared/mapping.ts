@@ -524,7 +524,7 @@ export function mappingValues(
 export const NODE_OVERRIDE = 'node_override'
 export const BYPASS_REWIRE = 'bypass_rewire'
 export const NODE_BYPASS = 'node_bypass'
-const CONTROL_LABELS: Record<string, string> = { [NODE_OVERRIDE]: '节点参数覆盖', [BYPASS_REWIRE]: '绕过节点后改接', [NODE_BYPASS]: '节点已绕过', lora_config: '任务 LoRA 配置', lora_stack: 'LoRA 列表' }
+const CONTROL_LABELS: Record<string, string> = { replica_param: '原图参数', [NODE_OVERRIDE]: '节点参数覆盖', [BYPASS_REWIRE]: '绕过节点后改接', [NODE_BYPASS]: '节点已绕过', lora_config: '任务 LoRA 配置', lora_stack: 'LoRA 列表' }
 export const sourceLabel = (s: string) => SOURCE_LABELS[s] ?? CONTROL_LABELS[s] ?? s
 
 /**

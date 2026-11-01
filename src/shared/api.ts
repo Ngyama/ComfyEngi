@@ -1,5 +1,6 @@
 // Renderer ↔ 主进程 的 IPC 契约。Preload 只暴露这里列出的方法，主进程逐个校验参数。
 
+import type { ParamRow, ReplacePart, ReplicaData, ReplicaImage, ReplicaRecord } from './replica'
 import type { UpdateCheck } from './update'
 import type { DictionaryInfo, MiningImage, MiningParams, MiningResult, MiningSaveItem, MiningSaveOutcome, RawMeta, ScanResult } from './mining'
 import type { SavedSourceRule } from './prompt-source'
@@ -7,6 +8,17 @@ import type { ApiWorkflow, ExecutionDetail, ExecutionInspection, LoraResource, C
 
 export type SaveResult = { id: number }
 export type Plan = PlanResult & { units: PlanUnit[] }
+
+export interface ReplicaPlanView {
+  rows: { index: number; path: string; name: string; state: 'valid' | 'confirm' | 'invalid' | 'missing' | 'excluded'; reason: string; positive: string; negative: string; original_positive: string; original_negative: string; parts: ReplacePart[]; removed: string[]; manual: boolean; params: ParamRow[]; seed: number; seed_generated: boolean; width: number | null; height: number | null; output_name: string; unit: number | null }[]
+  errors: string[]
+  warnings: string[]
+  output_dir: string
+  loras: string[]
+  units: number
+  workflow: { id: number; name: string } | null
+  default_size: { width: unknown; height: unknown } | null
+}
 
 export interface Api {
   'vault.info'(): {root:string|null; errors:string[]}
@@ -63,6 +75,20 @@ export interface Api {
   'tasks.remove'(id: number): void
   'tasks.duplicate'(id: number): SaveResult
 
+  'workflows.preview'(id: number): { json: ApiWorkflow; errors: string[]; changes: InputChange[]; unchanged: number }
+  'replicas.list'(): { id: number; name: string; count: number; updated_at: number | null }[]
+  'replicas.get'(id: number): ReplicaRecord | null
+  'replicas.create'(name: string): SaveResult
+  'replicas.save'(rec: { id: number; name?: string; data?: ReplicaData }): SaveResult
+  'replicas.remove'(id: number): void
+  'replicas.addFiles'(): { images: ReplicaImage[]; errors: string[]; cancelled: boolean } | null
+  'replicas.addFolder'(recursive: boolean): { images: ReplicaImage[]; errors: string[]; cancelled: boolean } | null
+  'replicas.relocateFolder'(id: number): { relocated: number; mismatched: string[]; notFound: string[] } | null
+  'replicas.relocateFile'(id: number, index: number): boolean | null
+  'replicas.plan'(id: number): ReplicaPlanView
+  'replicas.finalWorkflow'(id: number, unit: number): { json: ApiWorkflow; index: number; count: number; label: string; seed: number; errors: string[]; workflow: string; changes: InputChange[]; unchanged: number }
+  'replicas.exportWorkflow'(id: number, unit: number): string | null
+  'replicas.enqueue'(id: number): { runId: number | null; errors: string[]; units: number; skipped: number; output_dir: string }
   'plan.forTask'(taskId: number): Plan
   /** 入队前预览：某一张图将要提交的完整工作流 JSON（与执行时的构建逻辑相同，按当前素材计算） */
   'plan.finalWorkflow'(taskId: number, index: number): { json: ApiWorkflow; index: number; count: number; label: string; seed: number; errors: string[]; workflow: string; changes: InputChange[]; unchanged: number }
@@ -141,6 +167,7 @@ export const API_METHODS: ApiMethod[] = [
   'workflows.get', 'workflows.import', 'workflows.reimport', 'workflows.save', 'workflows.remove', 'workflows.onlineCheck', 'workflows.objectInfo',
   'tasks.get', 'tasks.create', 'tasks.save', 'tasks.remove', 'tasks.duplicate',
   'plan.forTask', 'plan.finalWorkflow', 'plan.exportWorkflow',
+  'workflows.preview', 'replicas.list', 'replicas.get', 'replicas.create', 'replicas.save', 'replicas.remove', 'replicas.addFiles', 'replicas.addFolder', 'replicas.relocateFolder', 'replicas.relocateFile', 'replicas.plan', 'replicas.finalWorkflow', 'replicas.exportWorkflow', 'replicas.enqueue',
   'queue.enqueue', 'queue.list', 'queue.units', 'queue.reorder', 'queue.remove', 'queue.delete', 'queue.retry', 'queue.retrySave', 'queue.pendingSummary',
   'runner.status', 'runner.precheck', 'runner.start', 'runner.pause', 'runner.stop', 'runner.interrupt', 'runner.logs',
   'history.list', 'history.image', 'history.openImage', 'history.showInFolder', 'history.execution', 'history.attempt', 'history.exportAttempt',

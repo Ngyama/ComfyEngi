@@ -6,7 +6,7 @@ import { applyInputs, findLoraLoaders, renderPrefix, isStackBinding, loraStem, m
 import { expandTask, normalizeTaskData, PlanLibrary } from '@shared/planner'
 import { MODULE_LABELS } from '@shared/prompt'
 import type { ApiWorkflow, InputChange, Lora, MappingEntry, PlanUnit, Settings, Task, TaskData, Workflow } from '@shared/types'
-import { controllableLoaders, effectiveLoraConfig, loraConfigInputs, loraConfigProblems, rolePlacement, type CharRole, type RoleState } from '@shared/lora-config'
+import { controllableLoaders, effectiveLoraConfig, loraConfigInputs, loraConfigProblems, rolePlacement, type CharRole, type RoleState, type WfLoraConfig } from '@shared/lora-config'
 import { controlInputs, controlProblems, controlsOf, mergeControlInputs } from '@shared/node-controls'
 import { diffWorkflow, findPromptInjectors, loaderChangedBy } from '@shared/workflow-analysis'
 import type { Store } from './store'
@@ -36,7 +36,7 @@ export interface FullPlan {
  * - 强度映射不完整、只能识别 lora_name 的自定义节点给出提示；没有被映射的 Loader（工作流中固定的 LoRA）保持原样，不检查。
  */
 /** LoRA 资源 → ComfyUI 中的相对模型名称（检查名称合法、文件存在）；失败时记录错误并保留原名称 */
-function resolveLoraName(store: Store, l: Lora, errors: string[]): string {
+export function resolveLoraName(store: Store, l: Lora, errors: string[]): string {
   if (!store.files || !l.resource_id) return l.name
   try {
     if (!/^[a-f0-9-]{36}$/i.test(l.resource_id)) throw new Error('无效 LoRA 资源 ID')
@@ -123,6 +123,95 @@ function checkLoraSlots(wf: Workflow, units: PlanUnit[], errors: string[], warni
   }
 }
 
+/**
+ * 工作流相关的检查与写入值（套图任务和套图复刻共用）：LoRA 配置、映射、节点控制的问题写入 errors / warnings，
+ * 每张图实际写入的值写入 u.inputs。配置有错误时 inputs 为 undefined（预览不会显示没有实际应用的内容）。
+ */
+export function buildWorkflowInputs(store: Store, wf: Workflow, units: PlanUnit[], opts: { savedCfg?: WfLoraConfig; name2?: string; prefix?: string; sizeHint?: boolean; settings: Settings; dateStr?: string; errors: string[]; warnings: string[] }) {
+  const { settings, dateStr, errors, warnings, name2 } = opts
+  const seen = new Set<string>()
+  const once = (list: string[], msg: string) => {
+    if (!seen.has(msg)) list.push(msg)
+    seen.add(msg)
+  }
+  // 任务的 LoRA 配置（按工作流保存；没有保存时使用工作流中已有的 LoRA）
+  const cfg = effectiveLoraConfig(opts.savedCfg, wf.api_json ?? {}, wf.mapping ?? [])
+  cfg.entries = cfg.entries.map((e) => (e.resource_id && e.enabled ? { ...e, name: resolveLoraName(store, { name: e.name, resource_id: e.resource_id, strength: e.strength }, errors) } : e))
+  const rolesOf = (u: PlanUnit) => {
+    const r: Partial<Record<CharRole, RoleState & { label: string }>> = {}
+    if (u.loras.length) r.lora1 = { name: u.loras[0].name, load: slotLora(u, 'lora', 1) ?? null, label: `主角色「${u.meta.character}」的 LoRA` }
+    if (name2) r.second_lora1 = { name: name2, load: u.loras2 ? (slotLora(u, 'second_lora', 1) ?? null) : null, label: '第二角色的 LoRA' }
+    return r
+  }
+  const handled = new Set<CharRole>()
+  for (const u of units) {
+    const p = loraConfigProblems(wf.api_json ?? {}, wf.mapping ?? [], cfg, rolesOf(u))
+    p.errors.forEach((m) => once(errors, m))
+    p.warnings.forEach((m) => once(warnings, m))
+    p.handled.forEach((x) => handled.add(x))
+  }
+  checkLoraSlots(wf, units, errors, warnings, once, handled)
+  // Prompt 节点只拼接部分模块时，检查有内容的模块是否都有去处
+  for (const src of ['positive', 'negative']) {
+    const entries = wf.mapping.filter((m) => m.source === src)
+    if (!entries.length || entries.some((m) => !(m.modules ?? []).length)) continue
+    const covered = new Set(entries.flatMap((m) => m.modules))
+    const idx = src === 'positive' ? 0 : 1
+    for (const u of units) for (const [k, v] of Object.entries(u.modules)) {
+      if (v[idx]?.trim() && !covered.has(k)) once(warnings, `工作流「${wf.name}」的${src === 'positive' ? '正面' : '负面'} Prompt 映射没有包含模块「${MODULE_LABELS[k] ?? k}」，其内容不会提交`)
+    }
+  }
+  const msgs = validateMapping(wf.api_json ?? {}, wf.mapping ?? [])
+  for (const [lvl, msg] of msgs) (lvl === 'error' ? errors : warnings).push(`工作流「${wf.name}」${msg}`)
+  // 节点控制：配置失效（节点 ID 或结构变化）、类型错误、与映射或 LoRA 配置冲突都阻止入队，不会静默跳过
+  const controls = controlsOf(wf)
+  const ctlMsgs = controlProblems(wf.api_json ?? {}, wf.mapping ?? [], controls)
+  for (const [lvl, msg] of ctlMsgs) (lvl === 'error' ? errors : warnings).push(`工作流「${wf.name}」${msg}`)
+  const gone = new Set(controls.bypass.map((b) => b.node))
+  if (gone.size) {
+    const loaders = controllableLoaders(wf.api_json ?? {}, wf.mapping ?? [])
+    for (const u of units)
+      for (const [role, r] of Object.entries(rolesOf(u))) {
+        if (!r.load) continue
+        const p = rolePlacement(cfg, loaders, role as CharRole, r.name)
+        if (p.kind !== 'none' && gone.has(p.node)) once(errors, `工作流「${wf.name}」节点绕过：${r.label}「${loraStem(r.name)}」要由 Loader #${p.node} 加载，但这个节点已绕过，LoRA 不会生效。请恢复节点，或在本任务中停用这个 LoRA`)
+      }
+  }
+  if (!msgs.some(([l]) => l === 'error')) {
+    for (const u of units) u.inputs = [...mappingValues(u, wf.mapping, settings, dateStr, wf.api_json), ...loraConfigInputs(wf.api_json ?? {}, wf.mapping ?? [], cfg, rolesOf(u))]
+    // Prompt 路径上不受控制的节点：明确提示（用户可能有意使用触发词节点，只提示不阻止）
+    for (const inj of findPromptInjectors(wf.api_json ?? {}, wf.mapping ?? [])) {
+      if (!inj.polarity.length || inj.disabled || gone.has(inj.node)) continue
+      once(warnings, `工作流「${wf.name}」${inj.message}`)
+      if (inj.source_node && units.some((u) => loaderChangedBy(wf.api_json, u.inputs ?? [], inj.source_node!)))
+        once(warnings, `本任务的 LoRA 配置改变了 #${inj.source_node} 实际加载的 LoRA：TriggerWord Toggle #${inj.node} 会绕过工作流中保存的开关状态，输出这些 LoRA 的全部触发词（例如同一 LoRA 的多套服装），可能造成服装特征混合。如不需要，请在工作流检查中禁止它注入`)
+    }
+    // 任务的文件名前缀：写入工作流映射的输出文件名前缀（ComfyUI 在它自己的 output 目录下按前缀保存）
+    const prefix = opts.prefix
+    if (prefix) {
+      if (!wf.mapping.some((m) => m.source === 'filename_prefix'))
+        once(warnings, `工作流「${wf.name}」没有映射「输出文件前缀」，任务中设置的文件名前缀不会生效（最终图片仍会复制到输出目录）。可在工作流映射中用「自动识别」添加`)
+      for (const u of units) u.inputs = u.inputs!.map((x) => (x.source === 'filename_prefix' ? { ...x, value: renderPrefix(prefix, u, dateStr) } : x))
+    }
+    // 动作的尺寸配置需要工作流映射「生成宽度 / 高度」才会生效
+    if (opts.sizeHint && units.some((u) => u.width)) {
+      const missing = (['width', 'height'] as const).filter((s) => !wf.mapping.some((m) => m.source === s))
+      if (missing.length)
+        once(warnings, `工作流「${wf.name}」没有映射「${missing.map((s) => (s === 'width' ? '生成宽度' : '生成高度')).join('、')}」，动作中设置的尺寸不会生效（将使用工作流默认尺寸）。可在工作流页面用「自动识别」添加`)
+    }
+    // 节点覆盖与绕过：最后接到每张图的写入值之后，随计划一起冻结。配置有问题时不构建（预览不会显示没有实际应用的内容）
+    if (ctlMsgs.some(([l]) => l === 'error')) for (const u of units) u.inputs = undefined
+    else {
+      const ctl = controlInputs(wf.api_json ?? {}, controls)
+      for (const u of units) {
+        const merged = mergeControlInputs(wf.api_json ?? {}, u.inputs!, ctl)
+        merged.conflicts.forEach((m) => once(errors, `工作流「${wf.name}」${m}`))
+        u.inputs = merged.conflicts.length ? undefined : merged.inputs
+      }
+    }
+  }
+}
+
 /** units 中的 inputs 就是之后实际写入工作流的值；预览界面显示的也是这份数据 */
 export function planForTask(store: Store, task: Task, settings?: Settings, dateStr?: string): FullPlan {
   store.files?.scan()
@@ -140,88 +229,8 @@ export function planForTask(store: Store, task: Task, settings?: Settings, dateS
   if (!wf) {
     warnings.push('尚未选择 ComfyUI 工作流：可以预览 Prompt，但不能加入执行队列')
   } else {
-    const seen = new Set<string>()
-    const once = (list: string[], msg: string) => {
-      if (!seen.has(msg)) list.push(msg)
-      seen.add(msg)
-    }
-    // 任务的 LoRA 配置（按工作流保存；没有保存时使用工作流中已有的 LoRA）
-    const cfg = effectiveLoraConfig(data.lora_configs?.[String(wf.id)], wf.api_json ?? {}, wf.mapping ?? [])
-    cfg.entries = cfg.entries.map((e) => (e.resource_id && e.enabled ? { ...e, name: resolveLoraName(store, { name: e.name, resource_id: e.resource_id, strength: e.strength }, errors) } : e))
     const name2 = units.find((u) => u.loras2?.length)?.loras2![0].name ?? secondLoraName(store, data)
-    const rolesOf = (u: PlanUnit) => {
-      const r: Partial<Record<CharRole, RoleState & { label: string }>> = {}
-      if (u.loras.length) r.lora1 = { name: u.loras[0].name, load: slotLora(u, 'lora', 1) ?? null, label: `主角色「${u.meta.character}」的 LoRA` }
-      if (name2) r.second_lora1 = { name: name2, load: u.loras2 ? (slotLora(u, 'second_lora', 1) ?? null) : null, label: '第二角色的 LoRA' }
-      return r
-    }
-    const handled = new Set<CharRole>()
-    for (const u of units) {
-      const p = loraConfigProblems(wf.api_json ?? {}, wf.mapping ?? [], cfg, rolesOf(u))
-      p.errors.forEach((m) => once(errors, m))
-      p.warnings.forEach((m) => once(warnings, m))
-      p.handled.forEach((x) => handled.add(x))
-    }
-    checkLoraSlots(wf, units, errors, warnings, once, handled)
-    // Prompt 节点只拼接部分模块时，检查有内容的模块是否都有去处
-    for (const src of ['positive', 'negative']) {
-      const entries = wf.mapping.filter((m) => m.source === src)
-      if (!entries.length || entries.some((m) => !(m.modules ?? []).length)) continue
-      const covered = new Set(entries.flatMap((m) => m.modules))
-      const idx = src === 'positive' ? 0 : 1
-      for (const u of units) for (const [k, v] of Object.entries(u.modules)) {
-        if (v[idx]?.trim() && !covered.has(k)) once(warnings, `工作流「${wf.name}」的${src === 'positive' ? '正面' : '负面'} Prompt 映射没有包含模块「${MODULE_LABELS[k] ?? k}」，其内容不会提交`)
-      }
-    }
-    const msgs = validateMapping(wf.api_json ?? {}, wf.mapping ?? [])
-    for (const [lvl, msg] of msgs) (lvl === 'error' ? errors : warnings).push(`工作流「${wf.name}」${msg}`)
-    // 节点控制：配置失效（节点 ID 或结构变化）、类型错误、与映射或 LoRA 配置冲突都阻止入队，不会静默跳过
-    const controls = controlsOf(wf)
-    const ctlMsgs = controlProblems(wf.api_json ?? {}, wf.mapping ?? [], controls)
-    for (const [lvl, msg] of ctlMsgs) (lvl === 'error' ? errors : warnings).push(`工作流「${wf.name}」${msg}`)
-    const gone = new Set(controls.bypass.map((b) => b.node))
-    if (gone.size) {
-      const loaders = controllableLoaders(wf.api_json ?? {}, wf.mapping ?? [])
-      for (const u of units)
-        for (const [role, r] of Object.entries(rolesOf(u))) {
-          if (!r.load) continue
-          const p = rolePlacement(cfg, loaders, role as CharRole, r.name)
-          if (p.kind !== 'none' && gone.has(p.node)) once(errors, `工作流「${wf.name}」节点绕过：${r.label}「${loraStem(r.name)}」要由 Loader #${p.node} 加载，但这个节点已绕过，LoRA 不会生效。请恢复节点，或在本任务中停用这个 LoRA`)
-        }
-    }
-    if (!msgs.some(([l]) => l === 'error')) {
-      for (const u of units) u.inputs = [...mappingValues(u, wf.mapping, settings, dateStr, wf.api_json), ...loraConfigInputs(wf.api_json ?? {}, wf.mapping ?? [], cfg, rolesOf(u))]
-      // Prompt 路径上不受控制的节点：明确提示（用户可能有意使用触发词节点，只提示不阻止）
-      for (const inj of findPromptInjectors(wf.api_json ?? {}, wf.mapping ?? [])) {
-        if (!inj.polarity.length || inj.disabled || gone.has(inj.node)) continue
-        once(warnings, `工作流「${wf.name}」${inj.message}`)
-        if (inj.source_node && units.some((u) => loaderChangedBy(wf.api_json, u.inputs ?? [], inj.source_node!)))
-          once(warnings, `本任务的 LoRA 配置改变了 #${inj.source_node} 实际加载的 LoRA：TriggerWord Toggle #${inj.node} 会绕过工作流中保存的开关状态，输出这些 LoRA 的全部触发词（例如同一 LoRA 的多套服装），可能造成服装特征混合。如不需要，请在工作流检查中禁止它注入`)
-      }
-      // 任务的文件名前缀：写入工作流映射的输出文件名前缀（ComfyUI 在它自己的 output 目录下按前缀保存）
-      const prefix = data.output?.prefix?.trim()
-      if (prefix) {
-        if (!wf.mapping.some((m) => m.source === 'filename_prefix'))
-          once(warnings, `工作流「${wf.name}」没有映射「输出文件前缀」，任务中设置的文件名前缀不会生效（最终图片仍会复制到输出目录）。可在工作流映射中用「自动识别」添加`)
-        for (const u of units) u.inputs = u.inputs!.map((x) => (x.source === 'filename_prefix' ? { ...x, value: renderPrefix(prefix, u, dateStr) } : x))
-      }
-      // 动作的尺寸配置需要工作流映射「生成宽度 / 高度」才会生效
-      if (units.some((u) => u.width)) {
-        const missing = (['width', 'height'] as const).filter((s) => !wf.mapping.some((m) => m.source === s))
-        if (missing.length)
-          once(warnings, `工作流「${wf.name}」没有映射「${missing.map((s) => (s === 'width' ? '生成宽度' : '生成高度')).join('、')}」，动作中设置的尺寸不会生效（将使用工作流默认尺寸）。可在工作流管理中用「自动识别」添加`)
-      }
-      // 节点覆盖与绕过：最后接到每张图的写入值之后，随计划一起冻结。配置有问题时不构建（预览不会显示没有实际应用的内容）
-      if (ctlMsgs.some(([l]) => l === 'error')) for (const u of units) u.inputs = undefined
-      else {
-        const ctl = controlInputs(wf.api_json ?? {}, controls)
-        for (const u of units) {
-          const merged = mergeControlInputs(wf.api_json ?? {}, u.inputs!, ctl)
-          merged.conflicts.forEach((m) => once(errors, `工作流「${wf.name}」${m}`))
-          u.inputs = merged.conflicts.length ? undefined : merged.inputs
-        }
-      }
-    }
+    buildWorkflowInputs(store, wf, units, { savedCfg: data.lora_configs?.[String(wf.id)], name2, prefix: data.output?.prefix?.trim(), sizeHint: true, settings, dateStr, errors, warnings })
   }
   // 输出目录：完成后把最终图片从 ComfyUI 复制到这里（默认工作区 output/）；入队时随计划冻结
   const outDir = outputDirOf(store, data.output?.dir)

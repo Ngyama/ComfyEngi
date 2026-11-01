@@ -406,7 +406,7 @@ export function GlobalPicker({ open, onOpenChange, value, onPick }: { open: bool
 }
 
 // ---------------------------------------------------------------- 工作流
-/** 套图任务页面的工作流选择与导入（使用与设置页相同的工作流存储；节点映射在设置中编辑） */
+/** 套图任务页面的工作流选择与导入（使用与设置页相同的工作流存储；节点映射在工作流页面编辑） */
 export function WorkflowMenu({ value, none, onPick, onClear }: { value: number | null; none?: boolean; onPick: (id: number | null) => void; onClear?: () => void }) {
   const lib = useLib((s) => s.lib)
   const go = useNav((s) => s.go)
@@ -417,7 +417,7 @@ export function WorkflowMenu({ value, none, onPick, onClear }: { value: number |
   const problem = (w: (typeof wfs)[number]) => (!w.mapping ? '尚未配置节点映射' : w.errors ? `映射有 ${w.errors} 个错误` : '')
   const editMapping = (id: number) => {
     setOpen(false)
-    go('settings', { section: 'workflows', workflowId: id })
+    go('workflows', { workflowId: id, tab: 'advanced' })
   }
   const doImport = async () => {
     const r = await call(api['workflows.import']())
@@ -428,7 +428,7 @@ export function WorkflowMenu({ value, none, onPick, onClear }: { value: number |
     setOpen(false)
     toast.success('已导入并设为当前任务的工作流', {
       description: '下一步：配置节点映射（Prompt、Seed、LoRA 写入哪些节点）。',
-      action: { label: '配置映射', onClick: () => go('settings', { section: 'workflows', workflowId: r.id }) },
+      action: { label: '配置映射', onClick: () => go('workflows', { workflowId: r.id, tab: 'advanced' }) },
       duration: 10000,
     })
   }

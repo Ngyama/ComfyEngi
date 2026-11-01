@@ -7,7 +7,7 @@
 // - 生成尺寸：创建空 latent 的节点的 width / height；连接自上游整数节点时映射到上游节点（放大、分块等参数不会被当作尺寸）
 // 所有建议都只是候选，由用户确认后才写入映射。
 
-import { activeLoraNames, DEFAULT_PREFIX_TEMPLATE, findLoraLoaders, isLink, LM_TRIGGER_TOGGLE, newEntry, NODE_BYPASS, nodeTitle, PROMPT_SOURCES, sortNodeIds, toggleStructure, TRIGGER_DISABLE, type LoraLoaderInfo } from './mapping'
+import { activeLoraNames, DEFAULT_PREFIX_TEMPLATE, findLoraLoaders, isLink, LM_TRIGGER_TOGGLE, newEntry, NODE_BYPASS, nodeTitle, parseStack, PROMPT_SOURCES, sortNodeIds, toggleStructure, TRIGGER_DISABLE, type LoraLoaderInfo } from './mapping'
 import type { ApiNode, ApiWorkflow, InputChange, InputValue, MappingEntry, PromptInjector } from './types'
 
 export type SuggestionGroup = 'prompt' | 'seed' | 'lora' | 'output' | 'size'
@@ -242,6 +242,55 @@ export function diffWorkflow(orig: ApiWorkflow, graph: ApiWorkflow, inputs: Inpu
     if (changes.length === before) unchanged.push({ node: nid, class_type: n.class_type, title: nodeTitle(n), inputs: b })
   }
   return { changes, unchanged }
+}
+
+const PARAM_NAMES: Record<string, string> = { steps: 'Steps', cfg: 'CFG', denoise: 'Denoise', seed: 'Seed', noise_seed: 'Seed', sampler_name: 'Sampler', scheduler: 'Scheduler', width: 'Width', height: 'Height', text: 'Prompt', populated_text: 'Prompt', wildcard_text: 'Prompt 模板', filename_prefix: '文件名前缀', lora_name: 'LoRA', strength_model: 'LoRA 权重', strength_clip: 'CLIP 权重', strength: '权重' }
+
+export interface ChangeLine {
+  node: string
+  class_type: string
+  title: string
+  /** 显示名称，例如 Steps；禁止注入、绕过时为空 */
+  label: string
+  before: string
+  after: string
+  /** 值很长或是结构：只有展开才能看清 */
+  long: boolean
+  kind: 'value' | 'bypass' | 'trigger' | 'lora' | 'rewire'
+  source?: string
+  change: InputChange
+}
+
+const lineValue = (v: unknown) => (v === null || v === undefined ? '—' : typeof v === 'string' ? v : JSON.stringify(v))
+const stackNames = (v: unknown) => {
+  const list = (v as { __value__?: unknown })?.__value__
+  return Array.isArray(list) ? parseStack(list as Record<string, unknown>[]).filter((e) => e.active).map((e) => (e.strength === 1 ? e.name : `${e.name} ${e.strength}`)) : null
+}
+
+/**
+ * 把比较结果（InputChange，来自实际构建的 JSON）整理成一行行容易读的变化：
+ * 同一节点的「禁止触发词注入」写入合并为一行；多 LoRA Loader 的 loras 显示启用的 LoRA，同步写入的 text 不单独列出。
+ */
+export function changeLines(changes: InputChange[]): ChangeLine[] {
+  const out: ChangeLine[] = []
+  const triggered = new Set<string>()
+  const hasStack = new Set(changes.filter((c) => c.input === 'loras' && stackNames(c.after)).map((c) => c.node))
+  for (const c of changes) {
+    const base = { node: c.node, class_type: c.class_type, title: c.title, source: c.source, change: c }
+    if (c.source === NODE_BYPASS) out.push({ ...base, label: '', before: '', after: '', long: false, kind: 'bypass' })
+    else if (c.source === TRIGGER_DISABLE) {
+      if (!triggered.has(c.node)) out.push({ ...base, label: '', before: '', after: '', long: false, kind: 'trigger' })
+      triggered.add(c.node)
+    } else if (c.input === 'text' && hasStack.has(c.node)) continue
+    else if (c.input === 'loras' && stackNames(c.after)) out.push({ ...base, label: 'LoRA', before: (stackNames(c.before) ?? []).join('、') || '无', after: stackNames(c.after)!.join('、') || '无', long: false, kind: 'lora' })
+    else if (isLink(c.before) && isLink(c.after)) out.push({ ...base, label: c.input, before: `#${c.before[0]}`, after: `#${c.after[0]}`, long: false, kind: 'rewire' })
+    else {
+      const before = lineValue(c.before)
+      const after = lineValue(c.after)
+      out.push({ ...base, label: PARAM_NAMES[c.input] ?? c.input, before, after, long: before.length > 48 || after.length > 48 || typeof c.after === 'object', kind: 'value' })
+    }
+  }
+  return out
 }
 
 /** 工作流实际使用的生成尺寸：第一个空 latent 节点（数值连接自整数节点时读取上游） */

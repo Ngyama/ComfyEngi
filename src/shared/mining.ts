@@ -9,6 +9,7 @@
 // 相同输入与参数总是得到相同结果：图片按路径排序，标签按比较键排序，所有排序都有完整的平局规则。
 
 import type { ExtractedPrompt } from './prompt-source'
+import type { ImageLora, RecoveredParams } from './replica'
 import { tokenizePrompt, type PromptToken, type TagDictionary } from './tags'
 import type { TemplateKind } from './types'
 
@@ -30,6 +31,9 @@ export interface ScannedImage extends ExtractedPrompt {
   /** 按文件内容识别的格式；无法读取时为 null */
   format: 'png' | 'jpeg' | 'webp' | null
   fields: MetaFieldInfo[]
+  /** 恢复的生成参数与原图使用的 LoRA（套图复刻使用） */
+  params?: RecoveredParams
+  loras?: ImageLora[]
 }
 
 /** 扫描范围统计 */

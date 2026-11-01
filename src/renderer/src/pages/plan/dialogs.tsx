@@ -15,6 +15,7 @@ import { ChangeList } from '../ExecutionDialog'
 import { randomSeed } from '@shared/planner'
 import { renderPrefix } from '@shared/mapping'
 import type { Plan } from '@shared/api'
+import type { ApiWorkflow, InputChange } from '@shared/types'
 
 export function TaskSettingsDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (o: boolean) => void }) {
   const lib = useLib((s) => s.lib)
@@ -297,68 +298,80 @@ export function PlanPreviewDialog({ open, onOpenChange, plan, onEnqueue, taskId 
             <Play /> 开始生成
           </Button>
         </DialogFooter>
-        {jsonAt !== null && taskId != null && <FinalWorkflowDialog taskId={taskId} index={jsonAt} count={units.length} onIndex={setJsonAt} onClose={() => setJsonAt(null)} />}
+        {jsonAt !== null && taskId != null && <FinalWorkflowDialog index={jsonAt} count={units.length} load={(i) => api['plan.finalWorkflow'](taskId, i)} exportJson={(i) => api['plan.exportWorkflow'](taskId, i)} onIndex={setJsonAt} onClose={() => setJsonAt(null)} />}
       </DialogContent>
     </Dialog>
   )
 }
 
-/** 入队前预览：某一张图将要提交的完整工作流 JSON（由主进程用与执行相同的逻辑构建） */
-export function FinalWorkflowDialog({ taskId, index, count, onIndex, onClose }: { taskId: number; index: number; count: number; onIndex: (i: number) => void; onClose: () => void }) {
-  const [res, setRes] = useState<Awaited<ReturnType<(typeof api)['plan.finalWorkflow']>> | null>(null)
+export interface FinalWorkflow {
+  json: ApiWorkflow
+  errors: string[]
+  changes: InputChange[]
+  unchanged: number
+  label?: string
+  seed?: number
+  workflow?: string
+}
+
+/** 入队前预览：默认显示参数变化（比较实际构建的 JSON 与原始工作流），可展开完整 JSON。由主进程用与执行相同的逻辑构建 */
+export function FinalWorkflowDialog({ index, count, load, exportJson, note, onIndex, onClose }: { index: number; count: number; load: (index: number) => Promise<FinalWorkflow>; exportJson?: (index: number) => Promise<string | null>; note?: string; onIndex: (i: number) => void; onClose: () => void }) {
+  const [res, setRes] = useState<FinalWorkflow | null>(null)
   const [err, setErr] = useState('')
+  const [showJson, setShowJson] = useState(false)
   useEffect(() => {
     let live = true
     setRes(null)
     setErr('')
-    api['plan.finalWorkflow'](taskId, index)
+    load(index)
       .then((r) => live && setRes(r))
       .catch((e) => live && setErr(String((e as Error).message ?? e)))
     return () => {
       live = false
     }
-  }, [taskId, index])
+  }, [index]) // eslint-disable-line react-hooks/exhaustive-deps
   const text = res ? JSON.stringify(res.json, null, 2) : ''
   return (
     <Dialog open onOpenChange={(o) => !o && onClose()}>
       <DialogContent className="flex h-[86vh] flex-col gap-3 sm:max-w-4xl" data-testid="final-workflow">
         <DialogHeader className="shrink-0">
-          <DialogTitle>最终工作流 JSON</DialogTitle>
+          <DialogTitle>最终工作流</DialogTitle>
           <DialogDescription>
-            第 {index + 1} / {count} 张{res ? ` · ${res.label} · Seed ${res.seed} · 工作流「${res.workflow}」` : ''}。这是应用 Prompt、Seed、LoRA 等配置后将要提交给 ComfyUI 的 API 工作流预览（与执行时使用同一构建逻辑，按当前素材计算）。入队后实际提交的内容见运行记录的「执行详情」。
+            {count > 1 ? `第 ${index + 1} / ${count} 张` : ''}{res?.label ? ` · ${res.label}` : ''}{res?.seed !== undefined ? ` · Seed ${res.seed}` : ''}{res?.workflow ? ` · ${res.workflow}` : ''}{note ? ` ${note}` : ''}
           </DialogDescription>
         </DialogHeader>
-        {res && res.errors.length > 0 && <div className="shrink-0 rounded-lg bg-destructive/10 px-3 py-2 text-[11.5px] text-destructive">计划还有 {res.errors.length} 个问题，修正前不能入队：{res.errors[0]}</div>}
-        <div className="grid min-h-0 flex-1 grid-cols-2 gap-3">
-          <div className="min-h-0 overflow-y-auto pr-1" data-testid="final-workflow-changes">
-            {res ? <ChangeList changes={res.changes} unchanged={res.unchanged} /> : <div className="text-xs text-muted-foreground">{err || '构建中…'}</div>}
-          </div>
-          <pre className="min-h-0 overflow-auto rounded-xl bg-inset p-3 font-mono text-[11.5px] leading-relaxed whitespace-pre select-text" data-testid="final-workflow-json">
-            {err || text || '构建中…'}
-          </pre>
+        {res && res.errors.length > 0 && <div className="shrink-0 rounded-lg bg-destructive/10 px-3 py-2 text-[11.5px] text-destructive">还有 {res.errors.length} 个问题，修正前不能入队：{res.errors[0]}</div>}
+        {err && <div className="shrink-0 rounded-lg bg-destructive/10 px-3 py-2 text-[11.5px] text-destructive" data-testid="final-workflow-error">{err}</div>}
+        <div className="min-h-0 flex-1 overflow-auto" data-testid="final-workflow-changes">
+          {res && !showJson && <ChangeList changes={res.changes} unchanged={res.unchanged} />}
+          {!res && !err && <div className="text-xs text-muted-foreground">构建中…</div>}
+          {showJson && <pre className="rounded-xl bg-inset p-3 font-mono text-[11.5px] leading-relaxed whitespace-pre select-text" data-testid="final-workflow-json">{text}</pre>}
         </div>
         <DialogFooter className="shrink-0 sm:justify-between">
           <div className="flex gap-1">
-            <Button variant="ghost" size="sm" disabled={index <= 0} onClick={() => onIndex(index - 1)}>
-              上一张
-            </Button>
-            <Button variant="ghost" size="sm" disabled={index >= count - 1} onClick={() => onIndex(index + 1)}>
-              下一张
-            </Button>
+            {count > 1 && (
+              <>
+                <Button variant="ghost" size="sm" disabled={index <= 0} onClick={() => onIndex(index - 1)}>上一张</Button>
+                <Button variant="ghost" size="sm" disabled={index >= count - 1} onClick={() => onIndex(index + 1)}>下一张</Button>
+              </>
+            )}
           </div>
           <div className="flex gap-2">
+            <Button variant="ghost" size="sm" disabled={!res} onClick={() => setShowJson(!showJson)} data-testid="final-workflow-show-json">{showJson ? '查看参数变化' : '查看完整 JSON'}</Button>
             {text && <CopyButton text={text} label="复制 JSON" />}
-            <Button
-              variant="secondary"
-              size="sm"
-              disabled={!res}
-              onClick={async () => {
-                const p = await call(api['plan.exportWorkflow'](taskId, index))
-                if (p) toast.success('已导出', { description: p })
-              }}
-            >
-              <Download /> 导出 JSON
-            </Button>
+            {exportJson && (
+              <Button
+                variant="secondary"
+                size="sm"
+                disabled={!res}
+                onClick={async () => {
+                  const p = await call(exportJson(index))
+                  if (p) toast.success('已导出', { description: p })
+                }}
+              >
+                <Download /> 导出 JSON
+              </Button>
+            )}
           </div>
         </DialogFooter>
       </DialogContent>

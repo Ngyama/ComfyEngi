@@ -1,25 +1,25 @@
-// 设置：常用（常规、生成默认值、工作流管理）与高级（Prompt 组合、运行与恢复、数据与维护）两组。
+// 设置：常用（常规、生成默认值）与高级（Prompt 组合、运行与恢复、数据与维护）两组。
 import { VaultPanel } from '@/components/VaultPanel'
 
 import { useState, type ReactNode } from 'react'
-import { Combine, Database, Download, FolderOpen, GripVertical, Moon, Plug, Plus, RefreshCw, SlidersHorizontal, Star, Workflow as WorkflowIcon } from 'lucide-react'
+import { Combine, Database, Download, FolderOpen, GripVertical, Moon, Plug, RefreshCw, SlidersHorizontal } from 'lucide-react'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { Switch } from '@/components/ui/switch'
-import { EmptyState, FieldLabel, NumberStepper, StatusDot, TextInput } from '@/components/common'
+import { FieldLabel, NumberStepper, StatusDot, TextInput } from '@/components/common'
 import { SortableArea, useSortableItem } from '@/components/sortable'
 import { api, call } from '@/lib/api'
 import { useAsync } from '@/lib/hooks'
-import { reloadLib, templatesOf, useLib, useNav } from '@/lib/stores'
+import { reloadLib, templatesOf, useLib } from '@/lib/stores'
 import { cn } from '@/lib/utils'
 import { renderPrefix } from '@shared/mapping'
 import { defaultItemCount, defaultSizes } from '@shared/planner'
 import { compose, MODULE_LABELS, normalizedOrder } from '@shared/prompt'
 import type { Settings } from '@shared/types'
 import type { UpdateCheck } from '@shared/update'
-import { ImportHint, Select, WorkflowEditor } from './WorkflowEditor'
+import { Select } from './WorkflowEditor'
 
-type Section = 'comfy' | 'defaults' | 'workflows' | 'compose' | 'run' | 'data'
+type Section = 'comfy' | 'defaults' | 'compose' | 'run' | 'data'
 /** 普通设置在上，高级技术配置单独一组 */
 const SECTION_GROUPS: [string, [Section, string, ReactNode][]][] = [
   [
@@ -27,7 +27,6 @@ const SECTION_GROUPS: [string, [Section, string, ReactNode][]][] = [
     [
       ['comfy', '常规', <Plug key="a" />],
       ['defaults', '生成默认值', <SlidersHorizontal key="f" />],
-      ['workflows', '工作流管理', <WorkflowIcon key="b" />],
     ],
   ],
   [
@@ -144,7 +143,7 @@ function DefaultsSection({ s }: { s: Settings }) {
         )}
         {row(
           '默认工作流',
-          '任务未单独选择工作流时使用；与「工作流管理」中的「设为默认」相同',
+          '任务未单独选择工作流时使用；与「工作流」页面的「设为默认」相同',
           <Select
             className="w-52"
             value={String(s.default_workflow_id ?? '')}
@@ -183,67 +182,6 @@ function DefaultsSection({ s }: { s: Settings }) {
           </div>
         </div>
       </Card>
-    </div>
-  )
-}
-
-function WorkflowsSection() {
-  const lib = useLib((s) => s.lib)
-  const wfs = lib?.workflows ?? []
-  const [sel, setSel] = useState<number | null>(() => useNav.getState().settingsTarget?.workflowId ?? wfs[0]?.id ?? null)
-  const cur = wfs.find((w) => w.id === sel) ?? wfs[0]
-  const doImport = async () => {
-    const r = await call(api['workflows.import']())
-    if (!r) return
-    if ('error' in r) return toast.error('无法导入', { description: r.error })
-    await reloadLib()
-    setSel(r.id)
-    toast.success('已导入工作流', {
-      description: '下一步：配置节点输入映射（可先试试「自动识别」）。',
-    })
-  }
-  return (
-    <div className="flex h-full min-h-0 flex-col gap-4">
-      <div className="flex flex-wrap items-center gap-2">
-        {wfs.map((w) => (
-          <button
-            key={w.id}
-            type="button"
-            onClick={() => setSel(w.id)}
-            data-active={cur?.id === w.id || undefined}
-            className="flex items-center gap-2 rounded-xl bg-card px-3 py-2 text-left ring-1 ring-tint/[0.08] hover:bg-accent data-[active]:ring-primary/60"
-          >
-            <StatusDot tone={w.errors ? 'error' : w.mapping ? 'ok' : 'warn'} />
-            <span className="text-[13px] font-medium">{w.name}</span>
-            {lib?.settings.default_workflow_id === w.id && <Star className="size-3 fill-current text-warning" />}
-          </button>
-        ))}
-        <Button variant={wfs.length ? 'ghost' : 'default'} size="sm" onClick={doImport}>
-          <Plus /> 导入 API 工作流
-        </Button>
-      </div>
-      {cur ? (
-        <div className="flex min-h-0 flex-1 flex-col rounded-2xl bg-card p-5 ring-1 ring-tint/[0.08]">
-          <WorkflowEditor key={cur.id} id={cur.id} onDeleted={() => setSel(null)} />
-        </div>
-      ) : (
-        <div className="rounded-2xl bg-card ring-1 ring-tint/[0.08]">
-          <EmptyState
-            icon={<WorkflowIcon />}
-            title="还没有导入工作流"
-            description="导入你在 ComfyUI 中使用的工作流（API 格式），然后指定哪些节点输入接收 Prompt、Seed、LoRA 等。软件不会改动工作流的其他部分。"
-            action={
-              <Button onClick={doImport}>
-                <Plus /> 导入 API 工作流
-              </Button>
-            }
-          />
-          <div className="px-6 pb-6">
-            <ImportHint />
-          </div>
-        </div>
-      )}
-      {cur && <ImportHint />}
     </div>
   )
 }
@@ -453,7 +391,7 @@ function DataSection() {
 
 export default function SettingsPage() {
   const lib = useLib((s) => s.lib)
-  const [sec, setSec] = useState<Section>(() => useNav.getState().settingsTarget?.section ?? 'comfy')
+  const [sec, setSec] = useState<Section>('comfy')
   if (!lib) return null
   const s = lib.settings
   return (
@@ -478,11 +416,10 @@ export default function SettingsPage() {
           </div>
         ))}
       </div>
-      <div className={cn('min-w-0 flex-1 px-6 py-5', sec === 'workflows' ? 'flex min-h-0 flex-col' : 'overflow-y-auto')}>
-        <div className={cn(sec === 'workflows' ? 'flex min-h-0 flex-1 flex-col' : 'max-w-3xl')}>
-          {sec === 'comfy' && <ComfySection key={s.comfy_url} s={s} />}
+      <div className="min-w-0 flex-1 overflow-y-auto px-6 py-5">
+        <div className="max-w-3xl">
+          {sec === 'comfy' &&<ComfySection key={s.comfy_url} s={s} />}
           {sec === 'defaults' && <DefaultsSection s={s} />}
-          {sec === 'workflows' && <WorkflowsSection />}
           {sec === 'compose' && <ComposeSection s={s} />}
           {sec === 'run' && <RunSection s={s} />}
           {sec === 'data' && <DataSection />}

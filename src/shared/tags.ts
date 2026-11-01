@@ -58,6 +58,48 @@ export function splitTopLevel(text: string): string[] {
   return out
 }
 
+export interface PromptSegment {
+  start: number
+  end: number
+  raw: string
+}
+
+/**
+ * 与 splitTopLevel 相同的切分，但保留每个标签在原文中的位置，用于逐字节保留其余文本的替换。
+ * 括号不配对（包括类型交错、多余的闭括号）时 balanced 为 false：调用方不应自动修改这样的文本。
+ */
+export function topLevelSegments(text: string): { segments: PromptSegment[]; balanced: boolean } {
+  const s = String(text ?? '')
+  const segments: PromptSegment[] = []
+  const stack: string[] = []
+  let balanced = true
+  let start = 0
+  const push = (end: number) => {
+    let a = start
+    let b = end
+    while (a < b && /\s/.test(s[a])) a++
+    while (b > a && /\s/.test(s[b - 1])) b--
+    if (a < b && s.slice(a, b) !== 'BREAK') segments.push({ start: a, end: b, raw: s.slice(a, b) })
+  }
+  for (let i = 0; i < s.length; i++) {
+    const c = s[i]
+    if (c === '\\') {
+      i++
+      continue
+    }
+    if (c in OPEN) stack.push(OPEN[c])
+    else if (CLOSE.has(c)) {
+      if (stack.pop() !== c) balanced = false
+    } else if (!stack.length && (c === ',' || c === '，' || c === '\n' || c === '\r')) {
+      push(i)
+      start = i + 1
+    }
+  }
+  if (stack.length) balanced = false
+  push(s.length)
+  return { segments, balanced }
+}
+
 /** s[0] 处括号对应的闭括号位置；没有时返回 -1 */
 function matchClose(s: string, from: number): number {
   const open = s[from]

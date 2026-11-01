@@ -1,16 +1,17 @@
-// 工作流节点输入映射编辑：只写入这里列出的输入，工作流其他部分保持原样。
+// 工作流页面的主体：左侧节点列表，右侧节点详情；映射管理放在「高级」。只修改 ComfyEngi 的配置，导入的 API JSON 保持原样。
 
 import { useEffect, useMemo, useState } from 'react'
-import { AlertCircle, CheckCircle2, ChevronDown, ChevronRight, Globe, Plus, RefreshCw, ShieldCheck, SlidersHorizontal, Sparkles, Star, Trash2, Wand2, X } from 'lucide-react'
+import { AlertCircle, Ban, Box, CheckCircle2, CircleDot, Eye, Globe, Image as ImageIcon, Pencil, Plus, RefreshCw, Save, ShieldCheck, Sparkles, Star, Trash2, Type, Wand2, X } from 'lucide-react'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { Switch } from '@/components/ui/switch'
+import { FinalWorkflowDialog } from '@/pages/plan/dialogs'
 import { FieldLabel, SearchBox, TextInput } from '@/components/common'
 import { api, call } from '@/lib/api'
-import { confirm, reloadLib, useLib } from '@/lib/stores'
+import { confirm, reloadLib, useLib, useNav } from '@/lib/stores'
 import { cn } from '@/lib/utils'
 import {
   DEFAULT_PREFIX_TEMPLATE,
@@ -32,10 +33,10 @@ import {
   validateMapping,
 } from '@shared/mapping'
 import { analyzeWorkflow, findPromptInjectors, mergeMapping, unsafeIntegers, type Suggestion, type WorkflowAnalysis } from '@shared/workflow-analysis'
-import { controlProblems, controlsOf, inputControl } from '@shared/node-controls'
+import { controlProblems, controlsOf, NODE_CATEGORIES, nodeCategory, problemNodes, type NodeCategory } from '@shared/node-controls'
 import { MODULES, MODULE_LABELS } from '@shared/prompt'
 import type { ApiWorkflow, InputValue, MappingEntry, Message, ObjectInfo, Workflow, WorkflowControls } from '@shared/types'
-import { NodeInspector } from './NodeInspector'
+import { NodePanel } from './NodeInspector'
 
 export function Select({ value, onChange, options, className }: { value: string; onChange: (v: string) => void; options: [string, string][]; className?: string }) {
   return (
@@ -106,7 +107,7 @@ function SuggestDialog({ open, onOpenChange, analysis, onApply }: { open: boolea
               </section>
             )
           })}
-          {!suggestions.length && <div className="py-6 text-center text-xs text-muted-foreground">没有找到可识别的节点，请在右侧节点列表中手动添加映射。</div>}
+          {!suggestions.length && <div className="py-6 text-center text-xs text-muted-foreground">没有找到可识别的节点，请在节点详情中手动添加映射。</div>}
         </div>
         <DialogFooter className="shrink-0">
           <Button variant="ghost" onClick={() => onOpenChange(false)}>
@@ -174,7 +175,7 @@ function CheckDialog({ open, onOpenChange, api: wfApi, mapping, onMapping, contr
           </section>
           <section data-testid="check-controls">
             <FieldLabel>节点覆盖与绕过</FieldLabel>
-            {!controls.overrides.length && !controls.bypass.length && <div className="text-xs text-muted-foreground">没有设置。可以在右侧节点列表中打开节点详情设置。</div>}
+            {!controls.overrides.length && !controls.bypass.length && <div className="text-xs text-muted-foreground">没有设置。</div>}
             <div className="space-y-1 text-xs">
               {controls.overrides.map((o) => (
                 <button key={`${o.node}.${o.input}`} type="button" className="block w-full truncate rounded-md px-1.5 py-1 text-left font-mono text-[11.5px] hover:bg-tint/[0.05]" onClick={() => onNode(o.node)} data-testid="check-override">
@@ -243,11 +244,16 @@ function ModulesPicker({ value, onChange }: { value: string[]; onChange: (v: str
   )
 }
 
-export function WorkflowEditor({ id, onDeleted }: { id: number; onDeleted: () => void }) {
+const CATEGORY_ICON: Record<NodeCategory, React.ComponentType<{ className?: string }>> = { prompt: Type, model: Box, sampler: Wand2, image: ImageIcon, output: Save, other: CircleDot }
+
+export function WorkflowEditor({ id, onDeleted, initialTab }: { id: number; onDeleted: () => void; initialTab?: 'node' | 'advanced' }) {
   const lib = useLib((s) => s.lib)
   const [wf, setWf] = useState<Workflow | null>(null)
   const [q, setQ] = useState('')
-  const [openNodes, setOpenNodes] = useState<Set<string>>(new Set())
+  const [category, setCategory] = useState<NodeCategory | 'all'>('all')
+  const [tab, setTab] = useState<'node' | 'advanced'>(initialTab ?? 'node')
+  const [preview, setPreview] = useState(false)
+  const go = useNav((s) => s.go)
   const [suggest, setSuggest] = useState<WorkflowAnalysis | null>(null)
   const [online, setOnline] = useState<Message[] | null>(null)
   const [checking, setChecking] = useState(false)
@@ -262,11 +268,12 @@ export function WorkflowEditor({ id, onDeleted }: { id: number; onDeleted: () =>
   }, [id])
   // 节点详情需要 ComfyUI 的节点定义（类型校验、可选值、能否绕过）；连接不上时仍可编辑简单字面值
   useEffect(() => {
-    if (detail === null || nodeInfo?.info) return
+    if (nodeInfo?.info) return
     void api['workflows.objectInfo'](id).then(setNodeInfo).catch((e) => setNodeInfo({ info: null, error: String((e as Error).message ?? e) }))
   }, [detail, id]) // eslint-disable-line react-hooks/exhaustive-deps
   const api_json = wf?.api_json ?? {}
   const ids = useMemo(() => sortNodeIds(Object.keys(api_json)), [api_json])
+  const categories = useMemo(() => Object.fromEntries(ids.map((nid) => [nid, nodeCategory(api_json, nid)])) as Record<string, NodeCategory>, [ids, api_json])
   if (!wf) return null
   const mapping = wf.mapping ?? []
   const controls = controlsOf(wf)
@@ -305,15 +312,20 @@ export function WorkflowEditor({ id, onDeleted }: { id: number; onDeleted: () =>
     if (src === 'positive' && mapping.some((e) => e.source === 'positive') && !mapping.some((e) => e.source === 'negative')) src = 'negative'
     void saveMapping([...mapping, newEntry(src, nid, inp, [], src === 'filename_prefix' ? DEFAULT_PREFIX_TEMPLATE : '')])
     toast.success(`已添加映射：${SOURCES.find(([k]) => k === src)?.[1]} → ${nid}.${inp}`)
+    setTab('advanced')
   }
   const nodeOptions: [string, string][] = [['', '选择节点'], ...ids.map((nid) => [nid, `${nid} · ${api_json[nid].class_type}${nodeTitle(api_json[nid]) !== api_json[nid].class_type ? ` · ${nodeTitle(api_json[nid])}` : ''}`] as [string, string])]
-  const shownIds = ids.filter((nid) => !q || `${nid} ${api_json[nid].class_type} ${nodeTitle(api_json[nid])} ${Object.keys(api_json[nid].inputs ?? {}).join(' ')}`.toLowerCase().includes(q.toLowerCase()))
+  const matched = ids.filter((nid) => !q || `${nid} ${api_json[nid].class_type} ${nodeTitle(api_json[nid])}`.toLowerCase().includes(q.toLowerCase()))
+  const shownIds = matched.filter((nid) => category === 'all' || categories[nid] === category)
+  const broken = problemNodes(msgs)
+  const selected = detail !== null && api_json[detail] ? detail : ids[0]
+  const errorCount = msgs.filter(([l]) => l === 'error').length
   const allMsgs = online ?? msgs
   const openInjectors = findPromptInjectors(api_json, mapping).filter((i) => i.polarity.length && !i.disabled && (i.controllable || i.kind !== 'unmapped_text') && !controls.bypass.some((b) => b.node === i.node))
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      <div className="flex items-center gap-2 pb-4">
+      <div className="flex items-center gap-1 pb-3">
         <input
           value={wf.name}
           onChange={(e) => setWf({ ...wf, name: e.target.value })}
@@ -337,6 +349,9 @@ export function WorkflowEditor({ id, onDeleted }: { id: number; onDeleted: () =>
         </Button>
         <Button variant="ghost" size="sm" onClick={() => setInspect(true)} data-testid="workflow-check-open">
           <ShieldCheck /> 检查
+        </Button>
+        <Button variant="ghost" size="sm" onClick={() => setPreview(true)} data-testid="workflow-preview-open">
+          <Eye /> 最终预览
         </Button>
         <Button
           variant="ghost"
@@ -376,9 +391,73 @@ export function WorkflowEditor({ id, onDeleted }: { id: number; onDeleted: () =>
           <span>Prompt 路径上有不受 ComfyEngi 控制的节点：{openInjectors.map((i) => `#${i.node} ${i.class_type}`).join('、')}。点击查看并处理。</span>
         </button>
       )}
+      {errorCount > 0 && tab === 'node' && (
+        <button type="button" onClick={() => setInspect(true)} className="mb-3 flex w-full items-center gap-1.5 rounded-lg bg-destructive/[0.07] px-2.5 py-1.5 text-left text-[11.5px] text-destructive hover:bg-destructive/[0.12]" data-testid="workflow-problems">
+          <AlertCircle className="size-3.5 shrink-0" />
+          <span className="truncate">{errorCount} 个问题会阻止入队：{msgs.find(([l]) => l === 'error')?.[1]}</span>
+        </button>
+      )}
       <div className="flex min-h-0 flex-1 gap-4">
-        {/* 映射 */}
+        {/* 节点列表 */}
+        <div className="flex w-[300px] shrink-0 flex-col">
+          <SearchBox value={q} onChange={setQ} placeholder="搜索 ID、名称或类型" className="mb-2" />
+          <div className="mb-2 flex flex-wrap gap-1" data-testid="node-categories">
+            {([['all', '全部'], ...NODE_CATEGORIES] as [NodeCategory | 'all', string][]).map(([k, label]) => {
+              const n = k === 'all' ? matched.length : matched.filter((x) => categories[x] === k).length
+              if (k !== 'all' && !n) return null
+              return (
+                <button key={k} type="button" onClick={() => setCategory(k)} data-active={category === k || undefined} data-category={k} className="rounded-md bg-tint/[0.04] px-1.5 py-0.5 text-[11px] text-muted-foreground hover:text-foreground data-[active]:bg-primary/15 data-[active]:text-primary">
+                  {label} {n}
+                </button>
+              )
+            })}
+          </div>
+          <div className="min-h-0 flex-1 space-y-2 overflow-y-auto rounded-xl bg-tint/[0.02] p-1 ring-1 ring-tint/[0.08]">
+            {NODE_CATEGORIES.map(([cat, label]) => {
+              const rows = shownIds.filter((nid) => categories[nid] === cat)
+              if (!rows.length) return null
+              const Icon = CATEGORY_ICON[cat]
+              return (
+                <div key={cat} data-testid="node-group" data-category={cat}>
+                  <div className="flex items-center gap-1.5 px-2 pt-1 pb-0.5 text-[10.5px] font-medium text-muted-foreground">
+                    <Icon className="size-3" /> {label}
+                  </div>
+                  {rows.map((nid) => {
+                    const n = api_json[nid]
+                    const mapped = mapping.some((e) => String(e.node) === nid)
+                    const overridden = controls.overrides.some((o) => o.node === nid)
+                    const bypassed = controls.bypass.some((b) => b.node === nid)
+                    const bad = broken.has(nid)
+                    return (
+                      <button key={nid} type="button" onClick={() => { setDetail(nid); setTab('node') }} data-testid="node-row" data-node={nid} data-active={selected === nid && tab === 'node' || undefined} className={cn('flex w-full items-center gap-1.5 rounded-md px-2 py-1.5 text-left text-xs hover:bg-tint/[0.04] data-[active]:bg-primary/10', bypassed && 'opacity-55')}>
+                        <span className="w-7 shrink-0 font-mono text-[11px] text-muted-foreground">{nid}</span>
+                        <span className={cn('min-w-0 flex-1 truncate', bypassed && 'line-through')} title={n.class_type}>{nodeTitle(n)}</span>
+                        {mapped && <span className="size-1.5 shrink-0 rounded-full bg-primary" title="有映射" />}
+                        {overridden && <Pencil className="size-3 shrink-0 text-warning" aria-label="已覆盖" data-testid="node-mark-override" />}
+                        {bypassed && <Ban className="size-3 shrink-0 text-warning" aria-label="已绕过" data-testid="node-mark-bypass" />}
+                        {bad && <AlertCircle className="size-3 shrink-0 text-destructive" aria-label="有问题" data-testid="node-mark-error" />}
+                      </button>
+                    )
+                  })}
+                </div>
+              )
+            })}
+            {!shownIds.length && <div className="py-6 text-center text-xs text-muted-foreground">没有匹配的节点</div>}
+          </div>
+        </div>
+
+        {/* 节点详情 / 高级 */}
         <div className="flex min-w-0 flex-1 flex-col">
+          <div className="mb-2 flex items-center gap-1">
+            <button type="button" onClick={() => setTab('node')} data-active={tab === 'node' || undefined} className="rounded-md px-2 py-1 text-xs text-muted-foreground data-[active]:bg-tint/[0.06] data-[active]:font-medium data-[active]:text-foreground" data-testid="tab-node">节点</button>
+            <button type="button" onClick={() => setTab('advanced')} data-active={tab === 'advanced' || undefined} className="rounded-md px-2 py-1 text-xs text-muted-foreground data-[active]:bg-tint/[0.06] data-[active]:font-medium data-[active]:text-foreground" data-testid="tab-advanced">高级：映射 {mapping.filter((e) => e.source !== TRIGGER_DISABLE).length}</button>
+          </div>
+          {tab === 'node' ? (
+            <div className="min-h-0 flex-1 overflow-y-auto pr-1">
+              {selected && <NodePanel nid={selected} api={api_json} mapping={mapping} controls={controls} info={nodeInfo?.info ?? null} infoError={nodeInfo?.error ?? null} onJump={setDetail} onControls={(c) => void saveControls(c)} onMapping={(m) => void saveMapping(m)} onAddMapping={(k) => addFromInput(selected, k)} onLora={() => go('plan')} />}
+            </div>
+          ) : (
+            <div className="flex min-h-0 flex-1 flex-col" data-testid="advanced-mapping">
           <div className="flex items-center gap-2 pb-2">
             <FieldLabel hint="只有这里列出的输入会被写入">节点输入映射</FieldLabel>
             <div className="flex-1" />
@@ -459,7 +538,7 @@ export function WorkflowEditor({ id, onDeleted }: { id: number; onDeleted: () =>
             })}
             {!mapping.some((e) => e.source !== TRIGGER_DISABLE) && (
               <div className="rounded-xl border border-dashed border-tint/[0.16] p-6 text-center text-xs leading-relaxed text-muted-foreground">
-                还没有映射。点击「自动识别」查看候选，或在右侧节点列表中点击某个输入添加。
+                还没有映射。点击「自动识别」查看候选，或在节点详情中添加。
               </div>
             )}
           </div>
@@ -477,63 +556,8 @@ export function WorkflowEditor({ id, onDeleted }: { id: number; onDeleted: () =>
               ))
             )}
           </div>
-        </div>
-
-        {/* 节点浏览 */}
-        <div className="flex w-[300px] shrink-0 flex-col">
-          <FieldLabel hint="点击输入添加为映射；右侧按钮查看节点详情、覆盖参数或绕过">工作流节点</FieldLabel>
-          <SearchBox value={q} onChange={setQ} placeholder="搜索节点 ID、类型或输入…" className="mb-2" />
-          <div className="min-h-0 flex-1 overflow-y-auto rounded-xl bg-tint/[0.02] p-1 ring-1 ring-tint/[0.08]">
-            {shownIds.map((nid) => {
-              const n = api_json[nid]
-              const open = openNodes.has(nid) || !!q
-              const mapped = mapping.filter((e) => e.node === nid).length
-              const overridden = controls.overrides.some((o) => o.node === nid)
-              const bypassed = controls.bypass.some((b) => b.node === nid)
-              return (
-                <div key={nid} data-testid="node-row" data-node={nid}>
-                  <div className="flex items-center">
-                    <button
-                      type="button"
-                      onClick={() => setOpenNodes((s) => (s.has(nid) ? new Set([...s].filter((x) => x !== nid)) : new Set([...s, nid])))}
-                      className={cn('flex min-w-0 flex-1 items-center gap-1.5 rounded-md px-2 py-1.5 text-left text-xs hover:bg-tint/[0.04]', bypassed && 'opacity-55')}
-                    >
-                      {open ? <ChevronDown className="size-3 text-muted-foreground" /> : <ChevronRight className="size-3 text-muted-foreground" />}
-                      <span className="w-7 shrink-0 font-mono text-muted-foreground">{nid}</span>
-                      <span className={cn('truncate', bypassed && 'line-through')}>{n.class_type}</span>
-                      {nodeTitle(n) !== n.class_type && <span className="truncate text-muted-foreground">· {nodeTitle(n)}</span>}
-                      {bypassed && <span className="ml-auto shrink-0 rounded bg-warning/10 px-1 text-[10px] text-warning">已绕过</span>}
-                      {overridden && <span className={cn('size-1.5 shrink-0 rounded-full bg-warning', !bypassed && 'ml-auto')} title="有参数覆盖" />}
-                      {mapped > 0 && <span className={cn('size-1.5 shrink-0 rounded-full bg-primary', !bypassed && !overridden && 'ml-auto')} title="有映射" />}
-                    </button>
-                    <button type="button" className="shrink-0 rounded-md p-1.5 text-muted-foreground hover:bg-tint/[0.06] hover:text-foreground" title="节点详情" aria-label={`节点 ${nid} 详情`} onClick={() => setDetail(nid)} data-testid="node-detail-open">
-                      <SlidersHorizontal className="size-3" />
-                    </button>
-                  </div>
-                  {open &&
-                    Object.entries(n.inputs ?? {}).map(([k, v]) => {
-                      const link = isLink(v)
-                      const st = inputControl(api_json, mapping, controls, nid, k)
-                      return (
-                        <button
-                          key={k}
-                          type="button"
-                          disabled={link}
-                          onClick={() => addFromInput(nid, k)}
-                          className="group flex w-full items-center gap-2 rounded-md py-1 pr-2 pl-11 text-left text-[11.5px] enabled:hover:bg-primary/10 disabled:opacity-45"
-                          title={link ? `连接自节点 ${(v as [string, number])[0]}` : '添加为映射'}
-                        >
-                          <span className="shrink-0 font-mono">{k}</span>
-                          <span className="min-w-0 flex-1 truncate text-muted-foreground">{describeValue(v)}</span>
-                          {st.state !== 'original' && st.state !== 'link' && <span className="shrink-0 rounded bg-tint/[0.06] px-1 text-[10px] text-muted-foreground" data-testid="input-tag">{st.state === 'override' ? '覆盖' : st.state === 'lora' ? 'LoRA' : st.state === 'trigger' ? '触发词' : '映射'}</span>}
-                          {!link && <Plus className="size-3 shrink-0 opacity-0 group-hover:opacity-100" />}
-                        </button>
-                      )
-                    })}
-                </div>
-              )
-            })}
-          </div>
+            </div>
+          )}
         </div>
       </div>
 
@@ -543,8 +567,8 @@ export function WorkflowEditor({ id, onDeleted }: { id: number; onDeleted: () =>
         analysis={suggest}
         onApply={(entries) => void saveMapping(mergeMapping(mapping, entries))}
       />
-      <CheckDialog open={inspect} onOpenChange={setInspect} api={api_json} mapping={mapping} onMapping={(m) => void saveMapping(m)} controls={controls} onNode={(nid) => { setInspect(false); setDetail(nid) }} />
-      {detail !== null && <NodeInspector nid={detail} api={api_json} mapping={mapping} controls={controls} info={nodeInfo?.info ?? null} infoError={nodeInfo?.error ?? null} onJump={setDetail} onClose={() => setDetail(null)} onControls={(c) => void saveControls(c)} />}
+      <CheckDialog open={inspect} onOpenChange={setInspect} api={api_json} mapping={mapping} onMapping={(m) => void saveMapping(m)} controls={controls} onNode={(nid) => { setInspect(false); setDetail(nid); setTab('node') }} />
+      {preview && <FinalWorkflowDialog count={1} index={0} load={() => api['workflows.preview'](wf.id)} note="这里只包含这个工作流的节点控制（覆盖、绕过、触发词），每张图的 Prompt、Seed 与任务 LoRA 在任务预览中查看。" onIndex={() => {}} onClose={() => setPreview(false)} />}
     </div>
   )
 }

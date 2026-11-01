@@ -6,20 +6,21 @@ import { byPriority, isStateKind, type Library, type RunnerStatus, type Task, ty
 import { toast } from 'sonner'
 import { api } from './api'
 
-export type Page = 'loras' | 'plan' | 'queue' | 'history' | 'library' | 'mining' | 'characters' | 'stories' | 'settings'
+export type Page = 'loras' | 'plan' | 'replica' | 'workflows' | 'queue' | 'history' | 'library' | 'mining' | 'characters' | 'stories' | 'settings'
 
 // ---------------------------------------------------------------- 导航
-/** 跳转到设置页的某个位置（例如从套图任务直接打开某个工作流的节点映射） */
-export interface SettingsTarget {
-  section: 'workflows'
+/** 跳转时的目标（例如从套图任务直接打开某个工作流） */
+export interface NavTarget {
   workflowId?: number
+  /** 打开工作流后显示的标签：节点详情或高级（映射） */
+  tab?: 'node' | 'advanced'
 }
 interface NavState {
   page: Page
-  settingsTarget: SettingsTarget | null
-  go(p: Page, settingsTarget?: SettingsTarget): void
+  target: NavTarget | null
+  go(p: Page, target?: NavTarget): void
 }
-export const useNav = create<NavState>((set) => ({ page: 'plan', settingsTarget: null, go: (page, settingsTarget) => set({ page, settingsTarget: settingsTarget ?? null }) }))
+export const useNav = create<NavState>((set) => ({ page: 'plan', target: null, go: (page, target) => set({ page, target: target ?? null }) }))
 
 // ---------------------------------------------------------------- 素材库缓存
 interface LibState {

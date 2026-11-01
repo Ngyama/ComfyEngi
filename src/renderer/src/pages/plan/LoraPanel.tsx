@@ -115,7 +115,7 @@ function BindingPopover({ prefix, title, wf, onChanged }: { prefix: string; titl
               return (
                 <div key={ld.node} className="rounded-lg px-2 py-1.5 opacity-70">
                   {head}
-                  <div className="text-[10.5px] text-muted-foreground">结构无法识别，需要在设置中手动映射</div>
+                  <div className="text-[10.5px] text-muted-foreground">结构无法识别，需要在工作流页面手动映射</div>
                 </div>
               )
             if (ld.support === 'stack') {
@@ -158,8 +158,8 @@ function BindingPopover({ prefix, title, wf, onChanged }: { prefix: string; titl
         </div>
         <div className="mt-2 border-t border-tint/[0.08] px-2 pt-2 text-[11px] text-muted-foreground">
           自定义节点无法识别时，可以
-          <button type="button" className="mx-1 text-primary hover:underline" onClick={() => wf && go('settings', { section: 'workflows', workflowId: wf.id })}>
-            在设置中手动映射
+          <button type="button" className="mx-1 text-primary hover:underline" onClick={() => wf && go('workflows', { workflowId: wf.id, tab: 'advanced' })}>
+            在工作流页面手动映射
           </button>
           （来源选择对应的「LoRA 名称 / 强度」）。
         </div>

@@ -1,3 +1,4 @@
+import type { ReplicaRecord } from '@shared/replica'
 import { FileLibrary, FILE_TABLES } from './file-library'
 import { normalizeCard } from '@shared/cards'
 import { isLegacyDefaultOrder } from '@shared/prompt'
@@ -29,6 +30,9 @@ import {
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT);
+CREATE TABLE IF NOT EXISTS replicas (
+    id INTEGER PRIMARY KEY, name TEXT NOT NULL DEFAULT '', data TEXT NOT NULL DEFAULT '{}',
+    sort INTEGER NOT NULL DEFAULT 0, created_at REAL, updated_at REAL);
 CREATE TABLE IF NOT EXISTS templates (
     id INTEGER PRIMARY KEY, kind TEXT NOT NULL, name TEXT NOT NULL DEFAULT '',
     positive TEXT NOT NULL DEFAULT '', negative TEXT NOT NULL DEFAULT '', category TEXT NOT NULL DEFAULT '',
@@ -85,7 +89,7 @@ BEGIN SELECT RAISE(ABORT, '提交快照不可修改'); END;
  * 0 = 旧版 Python 程序创建的数据库；1 = Electron 版（表结构相同，仅登记版本）。
  * 将来需要改表结构时在 MIGRATIONS 中追加步骤；每次迁移前都会先自动备份。
  */
-export const SCHEMA_VERSION = 6
+export const SCHEMA_VERSION = 7
 const MIGRATIONS: Record<number, (db: DatabaseSync) => void> = {
   1: () => {
     /* v0 → v1：结构不变 */
@@ -115,6 +119,8 @@ const MIGRATIONS: Record<number, (db: DatabaseSync) => void> = {
     const cols = (db.prepare('PRAGMA table_info(workflows)').all() as { name: string }[]).map((c) => c.name)
     if (!cols.includes('controls')) db.exec("ALTER TABLE workflows ADD COLUMN controls TEXT NOT NULL DEFAULT 'null'")
   },
+  // v6 → v7：套图复刻草稿 replicas（由 SCHEMA 建表；已有数据不变）
+  7: () => {},
 }
 
 export const TABLES = {
@@ -124,9 +130,10 @@ export const TABLES = {
   stories: { cols: ['genre', 'name', 'note', 'scenes', 'sort'], json: ['scenes'] },
   workflows: { cols: ['name', 'api_json', 'mapping', 'controls', 'note', 'sort'], json: ['api_json', 'mapping', 'controls'] },
   tasks: { cols: ['name', 'data', 'sort'], json: ['data'] },
+  replicas: { cols: ['name', 'data', 'sort'], json: ['data'] },
 } as const
 export type TableName = keyof typeof TABLES
-type RowOf = { templates: Template; characters: Character; outfits: Outfit; stories: Story; workflows: Workflow; tasks: Task }
+type RowOf = { templates: Template; characters: Character; outfits: Outfit; stories: Story; workflows: Workflow; tasks: Task; replicas: ReplicaRecord }
 
 const UNIT_JSON = ['meta', 'modules', 'inputs', 'outputs'] as const
 type SqlValue = string | number | null
