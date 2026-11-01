@@ -5,9 +5,10 @@ import { isAbsolute, join } from 'node:path'
 import { applyInputs, findLoraLoaders, renderPrefix, isStackBinding, loraStem, mappingValues, parseLoraSource, slotLora, slotState, SOURCE_LABELS, stackReplaceTarget, validateMapping } from '@shared/mapping'
 import { expandTask, normalizeTaskData, PlanLibrary } from '@shared/planner'
 import { MODULE_LABELS } from '@shared/prompt'
-import type { ApiWorkflow, Lora, MappingEntry, PlanUnit, Settings, Task, TaskData, Workflow } from '@shared/types'
-import { effectiveLoraConfig, loraConfigInputs, loraConfigProblems, type CharRole, type RoleState } from '@shared/lora-config'
-import { findPromptInjectors, loaderChangedBy } from '@shared/workflow-analysis'
+import type { ApiWorkflow, InputChange, Lora, MappingEntry, PlanUnit, Settings, Task, TaskData, Workflow } from '@shared/types'
+import { controllableLoaders, effectiveLoraConfig, loraConfigInputs, loraConfigProblems, rolePlacement, type CharRole, type RoleState } from '@shared/lora-config'
+import { controlInputs, controlProblems, controlsOf, mergeControlInputs } from '@shared/node-controls'
+import { diffWorkflow, findPromptInjectors, loaderChangedBy } from '@shared/workflow-analysis'
 import type { Store } from './store'
 
 export function loadPlanLibrary(store: Store): PlanLibrary {
@@ -174,11 +175,25 @@ export function planForTask(store: Store, task: Task, settings?: Settings, dateS
     }
     const msgs = validateMapping(wf.api_json ?? {}, wf.mapping ?? [])
     for (const [lvl, msg] of msgs) (lvl === 'error' ? errors : warnings).push(`工作流「${wf.name}」${msg}`)
+    // 节点控制：配置失效（节点 ID 或结构变化）、类型错误、与映射或 LoRA 配置冲突都阻止入队，不会静默跳过
+    const controls = controlsOf(wf)
+    const ctlMsgs = controlProblems(wf.api_json ?? {}, wf.mapping ?? [], controls)
+    for (const [lvl, msg] of ctlMsgs) (lvl === 'error' ? errors : warnings).push(`工作流「${wf.name}」${msg}`)
+    const gone = new Set(controls.bypass.map((b) => b.node))
+    if (gone.size) {
+      const loaders = controllableLoaders(wf.api_json ?? {}, wf.mapping ?? [])
+      for (const u of units)
+        for (const [role, r] of Object.entries(rolesOf(u))) {
+          if (!r.load) continue
+          const p = rolePlacement(cfg, loaders, role as CharRole, r.name)
+          if (p.kind !== 'none' && gone.has(p.node)) once(errors, `工作流「${wf.name}」节点绕过：${r.label}「${loraStem(r.name)}」要由 Loader #${p.node} 加载，但这个节点已绕过，LoRA 不会生效。请恢复节点，或在本任务中停用这个 LoRA`)
+        }
+    }
     if (!msgs.some(([l]) => l === 'error')) {
       for (const u of units) u.inputs = [...mappingValues(u, wf.mapping, settings, dateStr, wf.api_json), ...loraConfigInputs(wf.api_json ?? {}, wf.mapping ?? [], cfg, rolesOf(u))]
       // Prompt 路径上不受控制的节点：明确提示（用户可能有意使用触发词节点，只提示不阻止）
       for (const inj of findPromptInjectors(wf.api_json ?? {}, wf.mapping ?? [])) {
-        if (!inj.polarity.length || inj.disabled) continue
+        if (!inj.polarity.length || inj.disabled || gone.has(inj.node)) continue
         once(warnings, `工作流「${wf.name}」${inj.message}`)
         if (inj.source_node && units.some((u) => loaderChangedBy(wf.api_json, u.inputs ?? [], inj.source_node!)))
           once(warnings, `本任务的 LoRA 配置改变了 #${inj.source_node} 实际加载的 LoRA：TriggerWord Toggle #${inj.node} 会绕过工作流中保存的开关状态，输出这些 LoRA 的全部触发词（例如同一 LoRA 的多套服装），可能造成服装特征混合。如不需要，请在工作流检查中禁止它注入`)
@@ -195,6 +210,16 @@ export function planForTask(store: Store, task: Task, settings?: Settings, dateS
         const missing = (['width', 'height'] as const).filter((s) => !wf.mapping.some((m) => m.source === s))
         if (missing.length)
           once(warnings, `工作流「${wf.name}」没有映射「${missing.map((s) => (s === 'width' ? '生成宽度' : '生成高度')).join('、')}」，动作中设置的尺寸不会生效（将使用工作流默认尺寸）。可在工作流管理中用「自动识别」添加`)
+      }
+      // 节点覆盖与绕过：最后接到每张图的写入值之后，随计划一起冻结。配置有问题时不构建（预览不会显示没有实际应用的内容）
+      if (ctlMsgs.some(([l]) => l === 'error')) for (const u of units) u.inputs = undefined
+      else {
+        const ctl = controlInputs(wf.api_json ?? {}, controls)
+        for (const u of units) {
+          const merged = mergeControlInputs(wf.api_json ?? {}, u.inputs!, ctl)
+          merged.conflicts.forEach((m) => once(errors, `工作流「${wf.name}」${m}`))
+          u.inputs = merged.conflicts.length ? undefined : merged.inputs
+        }
       }
     }
   }
@@ -225,11 +250,14 @@ export function enqueueTask(store: Store, task: Task, settings?: Settings): { ru
  * 入队前预览：按当前素材与工作流计算某一张图将要提交的工作流 JSON（构建方式与执行相同：applyInputs(工作流, inputs)）。
  * 入队后实际提交的内容以提交快照为准（运行记录的「执行详情」），不要用这个函数查看历史。
  */
-export function finalWorkflow(store: Store, task: Task, index: number): { json: ApiWorkflow; index: number; count: number; label: string; seed: number; errors: string[]; workflow: string } {
+export function finalWorkflow(store: Store, task: Task, index: number): { json: ApiWorkflow; index: number; count: number; label: string; seed: number; errors: string[]; workflow: string; changes: InputChange[]; unchanged: number } {
   const plan = planForTask(store, task)
   if (!plan.workflow) throw new Error('尚未选择 ComfyUI 工作流')
   const u = plan.units[index]
   if (!u) throw new Error(plan.units.length ? `没有第 ${index + 1} 张` : '计划为空')
-  if (!u.inputs) throw new Error(`工作流映射有错误，无法生成最终 JSON：${plan.errors.slice(0, 3).join('；')}`)
-  return { json: applyInputs(plan.workflow.api_json, u.inputs), index, count: plan.units.length, label: `${u.meta.section}「${u.item_label}」`, seed: u.seed, errors: plan.errors, workflow: plan.workflow.name }
+  if (!u.inputs) throw new Error(`工作流映射或节点控制有错误，无法生成最终 JSON：${plan.errors.slice(0, 3).join('；')}`)
+  const json = applyInputs(plan.workflow.api_json, u.inputs)
+  // 变更列表由实际构建结果与原始工作流比较得到，不是根据表单推算
+  const { changes, unchanged } = diffWorkflow(plan.workflow.api_json, json, u.inputs)
+  return { json, index, count: plan.units.length, label: `${u.meta.section}「${u.item_label}」`, seed: u.seed, errors: plan.errors, workflow: plan.workflow.name, changes, unchanged: unchanged.length }
 }

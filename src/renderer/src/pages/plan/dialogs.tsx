@@ -10,7 +10,8 @@ import { Chip, CopyButton, FieldLabel, TextInput } from '@/components/common'
 import { PickSources } from '@/components/card-pools'
 import { templatesOf, useLib, usePlan } from '@/lib/stores'
 import { cn } from '@/lib/utils'
-import { SOURCE_LABELS } from '@shared/mapping'
+import { NODE_BYPASS, sourceLabel } from '@shared/mapping'
+import { ChangeList } from '../ExecutionDialog'
 import { randomSeed } from '@shared/planner'
 import { renderPrefix } from '@shared/mapping'
 import type { Plan } from '@shared/api'
@@ -270,9 +271,9 @@ export function PlanPreviewDialog({ open, onOpenChange, plan, onEnqueue, taskId 
                           <span className="w-32 shrink-0 font-mono text-muted-foreground">
                             {x.node}.{x.input}
                           </span>
-                          <span className="w-28 shrink-0 text-muted-foreground">{SOURCE_LABELS[x.source] ?? x.source}</span>
+                          <span className="w-28 shrink-0 text-muted-foreground">{sourceLabel(x.source)}</span>
                           <span className="min-w-0 flex-1 truncate font-mono select-text" title={String(x.value ?? '')}>
-                            {x.value === null ? '（保持工作流原值）' : String(x.value)}
+                            {x.value === null ? '（保持工作流原值）' : x.source === NODE_BYPASS ? '从提交的工作流中移除，下游改接上游' : typeof x.value === 'object' ? JSON.stringify(x.value) : String(x.value)}
                           </span>
                         </div>
                       ))}
@@ -328,9 +329,14 @@ export function FinalWorkflowDialog({ taskId, index, count, onIndex, onClose }: 
           </DialogDescription>
         </DialogHeader>
         {res && res.errors.length > 0 && <div className="shrink-0 rounded-lg bg-destructive/10 px-3 py-2 text-[11.5px] text-destructive">计划还有 {res.errors.length} 个问题，修正前不能入队：{res.errors[0]}</div>}
-        <pre className="min-h-0 flex-1 overflow-auto rounded-xl bg-inset p-3 font-mono text-[11.5px] leading-relaxed whitespace-pre select-text" data-testid="final-workflow-json">
-          {err || text || '构建中…'}
-        </pre>
+        <div className="grid min-h-0 flex-1 grid-cols-2 gap-3">
+          <div className="min-h-0 overflow-y-auto pr-1" data-testid="final-workflow-changes">
+            {res ? <ChangeList changes={res.changes} unchanged={res.unchanged} /> : <div className="text-xs text-muted-foreground">{err || '构建中…'}</div>}
+          </div>
+          <pre className="min-h-0 overflow-auto rounded-xl bg-inset p-3 font-mono text-[11.5px] leading-relaxed whitespace-pre select-text" data-testid="final-workflow-json">
+            {err || text || '构建中…'}
+          </pre>
+        </div>
         <DialogFooter className="shrink-0 sm:justify-between">
           <div className="flex gap-1">
             <Button variant="ghost" size="sm" disabled={index <= 0} onClick={() => onIndex(index - 1)}>

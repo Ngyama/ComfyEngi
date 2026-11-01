@@ -195,9 +195,39 @@ export interface Workflow extends Timestamps {
   name: string
   api_json: ApiWorkflow
   mapping: MappingEntry[]
+  /** 工作流级节点控制（参数覆盖、节点绕过）；旧工作流没有。不修改 api_json，提交时写入副本 */
+  controls?: WorkflowControls | null
   note: string
   sort: number
 }
+
+/** 工作流级节点参数覆盖。class_type 用于发现节点 ID 对应的节点已变化 */
+export interface NodeOverride {
+  node: string
+  input: string
+  class_type: string
+  value: unknown
+}
+/** 节点绕过：每个被下游使用的输出对应的输入（设置时由 /object_info 确认类型，之后不需要联网也能构建） */
+export interface NodeBypass {
+  node: string
+  class_type: string
+  routes: { output: number; input: string; type: string }[]
+  output_node?: boolean
+}
+export interface WorkflowControls {
+  overrides: NodeOverride[]
+  bypass: NodeBypass[]
+}
+/** ComfyUI /object_info 中用到的字段 */
+export interface ObjectInfoNode {
+  input?: { required?: Record<string, unknown>; optional?: Record<string, unknown> }
+  output?: unknown[]
+  output_is_list?: boolean[]
+  is_input_list?: boolean
+  output_node?: boolean
+}
+export type ObjectInfo = Record<string, ObjectInfoNode>
 
 export interface TaskItem {
   /** 主角色的状态（可多选，按选择顺序拼接到同一张图）。旧任务的 pose_id 读取时转换为一个元素的数组 */
@@ -540,6 +570,10 @@ export interface ExecutionInspection {
   attempt: ExecutionAttempt
   /** 实际提交的 API 工作流（格式化的 JSON 文本） */
   graph_json: string | null
+  /** 入队时冻结的原始工作流（读取队列项中已有的副本，不另外保存） */
+  original_json: string | null
+  /** 这次提交冻结的节点覆盖与绕过（来自入队时的写入值，不读取当前工作流配置） */
+  controls: InputValue[]
   /** 快照内容与记录的 SHA-256 一致 */
   intact: boolean
   changes: InputChange[]

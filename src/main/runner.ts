@@ -9,7 +9,7 @@
 import { createHash, randomUUID } from 'node:crypto'
 import { mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
-import { applyInputs, ComfyError, extractOutputs, finalOutputNodes, historyError, historyInterrupted } from '@shared/mapping'
+import { applyInputs, ComfyError, extractOutputs, finalOutputNodes, historyError, historyInterrupted, NODE_BYPASS } from '@shared/mapping'
 import type { AttemptState, ExecutionAttempt, OutputFile, RunnerEvent, RunnerState, RunnerStatus, RunUnit, Settings } from '@shared/types'
 import { ComfyClient, ComfyHTTPError, EventStream, promptBody, type ComfyApi, type EventSource, type HistoryEntry } from './comfy-client'
 import type { Store } from './store'
@@ -516,7 +516,9 @@ export class Runner {
    * - 不同节点报告同一个文件（subfolder 与文件名都相同）时只复制一次，两条记录都关联到它，并记下这一点
    */
   private async saveOutputs(unit: RunUnit, outputs: OutputFile[], client: ComfyApi) {
-    const finals = finalOutputNodes(unit.inputs, this.store.getRun(unit.run_id)?.workflow_json)
+    const wf = this.store.getRun(unit.run_id)?.workflow_json
+    // 有绕过时按实际提交的结构判断（被绕过的节点不算输出，也不再算使用者）
+    const finals = finalOutputNodes(unit.inputs, wf && unit.inputs?.some((x) => x.source === NODE_BYPASS) ? applyInputs(wf, unit.inputs) : wf)
     for (const o of outputs) o.role = o.type !== 'output' ? 'preview' : finals.size && !finals.has(o.node) ? 'intermediate' : 'final'
     const dir = unit.meta?.output_dir
     if (!dir) return

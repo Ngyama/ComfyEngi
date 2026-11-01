@@ -1,7 +1,7 @@
 // 工作流节点输入映射编辑：只写入这里列出的输入，工作流其他部分保持原样。
 
 import { useEffect, useMemo, useState } from 'react'
-import { AlertCircle, CheckCircle2, ChevronDown, ChevronRight, Globe, Plus, RefreshCw, ShieldCheck, Sparkles, Star, Trash2, Wand2, X } from 'lucide-react'
+import { AlertCircle, CheckCircle2, ChevronDown, ChevronRight, Globe, Plus, RefreshCw, ShieldCheck, SlidersHorizontal, Sparkles, Star, Trash2, Wand2, X } from 'lucide-react'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
@@ -32,8 +32,10 @@ import {
   validateMapping,
 } from '@shared/mapping'
 import { analyzeWorkflow, findPromptInjectors, mergeMapping, unsafeIntegers, type Suggestion, type WorkflowAnalysis } from '@shared/workflow-analysis'
+import { controlProblems, controlsOf, inputControl } from '@shared/node-controls'
 import { MODULES, MODULE_LABELS } from '@shared/prompt'
-import type { ApiWorkflow, InputValue, MappingEntry, Message, Workflow } from '@shared/types'
+import type { ApiWorkflow, InputValue, MappingEntry, Message, ObjectInfo, Workflow, WorkflowControls } from '@shared/types'
+import { NodeInspector } from './NodeInspector'
 
 export function Select({ value, onChange, options, className }: { value: string; onChange: (v: string) => void; options: [string, string][]; className?: string }) {
   return (
@@ -126,8 +128,9 @@ function SuggestDialog({ open, onOpenChange, analysis, onApply }: { open: boolea
 }
 
 /** 工作流检查：哪些节点不受 ComfyEngi 的 Prompt 控制、最终输出来自哪里。不修改原始工作流，禁用只写入提交时的副本 */
-function CheckDialog({ open, onOpenChange, api: wfApi, mapping, onMapping }: { open: boolean; onOpenChange: (o: boolean) => void; api: ApiWorkflow; mapping: MappingEntry[]; onMapping: (m: MappingEntry[]) => void }) {
+function CheckDialog({ open, onOpenChange, api: wfApi, mapping, onMapping, controls, onNode }: { open: boolean; onOpenChange: (o: boolean) => void; api: ApiWorkflow; mapping: MappingEntry[]; onMapping: (m: MappingEntry[]) => void; controls: WorkflowControls; onNode: (nid: string) => void }) {
   const injectors = findPromptInjectors(wfApi, mapping)
+  const ctlMsgs = controlProblems(wfApi, mapping, controls)
   const finals = finalOutputNodes(mapping.filter((m) => m.source === 'filename_prefix') as unknown as InputValue[], wfApi)
   const saves = sortNodeIds(Object.keys(wfApi)).filter((n) => typeof wfApi[n].inputs?.filename_prefix === 'string')
   const unsafe = unsafeIntegers(wfApi)
@@ -165,6 +168,28 @@ function CheckDialog({ open, onOpenChange, api: wfApi, mapping, onMapping }: { o
                     </label>
                   )}
                   {!inj.controllable && (inj.kind === 'trigger_unknown' || inj.kind === 'loader_text' || inj.kind === 'unknown_text') && <div className="mt-2 text-[11px] text-muted-foreground">ComfyEngi 不会修改这个节点。如需排除影响，请在 ComfyUI 中调整后导出 API 工作流，再用「更新 JSON」导入。</div>}
+                </div>
+              ))}
+            </div>
+          </section>
+          <section data-testid="check-controls">
+            <FieldLabel>节点覆盖与绕过</FieldLabel>
+            {!controls.overrides.length && !controls.bypass.length && <div className="text-xs text-muted-foreground">没有设置。可以在右侧节点列表中打开节点详情设置。</div>}
+            <div className="space-y-1 text-xs">
+              {controls.overrides.map((o) => (
+                <button key={`${o.node}.${o.input}`} type="button" className="block w-full truncate rounded-md px-1.5 py-1 text-left font-mono text-[11.5px] hover:bg-tint/[0.05]" onClick={() => onNode(o.node)} data-testid="check-override">
+                  #{o.node} {o.class_type}.{o.input} = {describeValue(o.value)}
+                </button>
+              ))}
+              {controls.bypass.map((b) => (
+                <button key={b.node} type="button" className="block w-full truncate rounded-md px-1.5 py-1 text-left font-mono text-[11.5px] hover:bg-tint/[0.05]" onClick={() => onNode(b.node)} data-testid="check-bypass">
+                  #{b.node} {b.class_type}：已绕过
+                </button>
+              ))}
+              {ctlMsgs.map(([lvl, m], i) => (
+                <div key={i} className={cn('flex gap-1.5', lvl === 'error' ? 'text-destructive' : 'text-warning')}>
+                  <AlertCircle className="mt-0.5 size-3.5 shrink-0" />
+                  <span>{m}</span>
                 </div>
               ))}
             </div>
@@ -227,21 +252,37 @@ export function WorkflowEditor({ id, onDeleted }: { id: number; onDeleted: () =>
   const [online, setOnline] = useState<Message[] | null>(null)
   const [checking, setChecking] = useState(false)
   const [inspect, setInspect] = useState(false)
+  const [detail, setDetail] = useState<string | null>(null)
+  const [nodeInfo, setNodeInfo] = useState<{ info: ObjectInfo | null; error: string | null } | null>(null)
   useEffect(() => {
     setOnline(null)
+    setDetail(null)
+    setNodeInfo(null)
     void api['workflows.get'](id).then(setWf)
   }, [id])
+  // 节点详情需要 ComfyUI 的节点定义（类型校验、可选值、能否绕过）；连接不上时仍可编辑简单字面值
+  useEffect(() => {
+    if (detail === null || nodeInfo?.info) return
+    void api['workflows.objectInfo'](id).then(setNodeInfo).catch((e) => setNodeInfo({ info: null, error: String((e as Error).message ?? e) }))
+  }, [detail, id]) // eslint-disable-line react-hooks/exhaustive-deps
   const api_json = wf?.api_json ?? {}
   const ids = useMemo(() => sortNodeIds(Object.keys(api_json)), [api_json])
   if (!wf) return null
   const mapping = wf.mapping ?? []
-  const msgs = validateMapping(api_json, mapping)
+  const controls = controlsOf(wf)
+  const msgs = [...validateMapping(api_json, mapping), ...controlProblems(api_json, mapping, controls)]
   const isDefault = lib?.settings.default_workflow_id === wf.id
 
   const saveMapping = async (m: MappingEntry[]) => {
     setWf({ ...wf, mapping: m })
     setOnline(null)
     await call(api['workflows.save']({ id: wf.id, _revision: wf._revision, mapping: m }))
+    await reloadLib()
+  }
+  const saveControls = async (c: WorkflowControls) => {
+    setWf({ ...wf, controls: c })
+    setOnline(null)
+    await call(api['workflows.save']({ id: wf.id, _revision: wf._revision, controls: c }))
     await reloadLib()
   }
   const setEntry = (i: number, p: Partial<MappingEntry>) => {
@@ -268,7 +309,7 @@ export function WorkflowEditor({ id, onDeleted }: { id: number; onDeleted: () =>
   const nodeOptions: [string, string][] = [['', '选择节点'], ...ids.map((nid) => [nid, `${nid} · ${api_json[nid].class_type}${nodeTitle(api_json[nid]) !== api_json[nid].class_type ? ` · ${nodeTitle(api_json[nid])}` : ''}`] as [string, string])]
   const shownIds = ids.filter((nid) => !q || `${nid} ${api_json[nid].class_type} ${nodeTitle(api_json[nid])} ${Object.keys(api_json[nid].inputs ?? {}).join(' ')}`.toLowerCase().includes(q.toLowerCase()))
   const allMsgs = online ?? msgs
-  const openInjectors = findPromptInjectors(api_json, mapping).filter((i) => i.polarity.length && !i.disabled && (i.controllable || i.kind !== 'unmapped_text'))
+  const openInjectors = findPromptInjectors(api_json, mapping).filter((i) => i.polarity.length && !i.disabled && (i.controllable || i.kind !== 'unmapped_text') && !controls.bypass.some((b) => b.node === i.node))
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
@@ -307,7 +348,7 @@ export function WorkflowEditor({ id, onDeleted }: { id: number; onDeleted: () =>
             const nw = await api['workflows.get'](wf.id)
             setWf(nw)
             await reloadLib()
-            if (nw && validateMapping(nw.api_json, nw.mapping).some(([l]) => l === 'error')) toast.warning('新的工作流与现有映射不匹配（节点 ID 或输入字段可能已变化），请检查下方提示')
+            if (nw && [...validateMapping(nw.api_json, nw.mapping), ...controlProblems(nw.api_json, nw.mapping, controlsOf(nw))].some(([l]) => l === 'error')) toast.warning('新的工作流与现有映射或节点控制不匹配（节点 ID 或输入字段可能已变化），请检查下方提示')
             else toast.success('已更新工作流 JSON，映射保持不变')
           }}
         >
@@ -440,29 +481,39 @@ export function WorkflowEditor({ id, onDeleted }: { id: number; onDeleted: () =>
 
         {/* 节点浏览 */}
         <div className="flex w-[300px] shrink-0 flex-col">
-          <FieldLabel hint="点击输入添加为映射">工作流节点</FieldLabel>
+          <FieldLabel hint="点击输入添加为映射；右侧按钮查看节点详情、覆盖参数或绕过">工作流节点</FieldLabel>
           <SearchBox value={q} onChange={setQ} placeholder="搜索节点 ID、类型或输入…" className="mb-2" />
           <div className="min-h-0 flex-1 overflow-y-auto rounded-xl bg-tint/[0.02] p-1 ring-1 ring-tint/[0.08]">
             {shownIds.map((nid) => {
               const n = api_json[nid]
               const open = openNodes.has(nid) || !!q
               const mapped = mapping.filter((e) => e.node === nid).length
+              const overridden = controls.overrides.some((o) => o.node === nid)
+              const bypassed = controls.bypass.some((b) => b.node === nid)
               return (
-                <div key={nid}>
-                  <button
-                    type="button"
-                    onClick={() => setOpenNodes((s) => (s.has(nid) ? new Set([...s].filter((x) => x !== nid)) : new Set([...s, nid])))}
-                    className="flex w-full items-center gap-1.5 rounded-md px-2 py-1.5 text-left text-xs hover:bg-tint/[0.04]"
-                  >
-                    {open ? <ChevronDown className="size-3 text-muted-foreground" /> : <ChevronRight className="size-3 text-muted-foreground" />}
-                    <span className="w-7 shrink-0 font-mono text-muted-foreground">{nid}</span>
-                    <span className="truncate">{n.class_type}</span>
-                    {nodeTitle(n) !== n.class_type && <span className="truncate text-muted-foreground">· {nodeTitle(n)}</span>}
-                    {mapped > 0 && <span className="ml-auto size-1.5 shrink-0 rounded-full bg-primary" />}
-                  </button>
+                <div key={nid} data-testid="node-row" data-node={nid}>
+                  <div className="flex items-center">
+                    <button
+                      type="button"
+                      onClick={() => setOpenNodes((s) => (s.has(nid) ? new Set([...s].filter((x) => x !== nid)) : new Set([...s, nid])))}
+                      className={cn('flex min-w-0 flex-1 items-center gap-1.5 rounded-md px-2 py-1.5 text-left text-xs hover:bg-tint/[0.04]', bypassed && 'opacity-55')}
+                    >
+                      {open ? <ChevronDown className="size-3 text-muted-foreground" /> : <ChevronRight className="size-3 text-muted-foreground" />}
+                      <span className="w-7 shrink-0 font-mono text-muted-foreground">{nid}</span>
+                      <span className={cn('truncate', bypassed && 'line-through')}>{n.class_type}</span>
+                      {nodeTitle(n) !== n.class_type && <span className="truncate text-muted-foreground">· {nodeTitle(n)}</span>}
+                      {bypassed && <span className="ml-auto shrink-0 rounded bg-warning/10 px-1 text-[10px] text-warning">已绕过</span>}
+                      {overridden && <span className={cn('size-1.5 shrink-0 rounded-full bg-warning', !bypassed && 'ml-auto')} title="有参数覆盖" />}
+                      {mapped > 0 && <span className={cn('size-1.5 shrink-0 rounded-full bg-primary', !bypassed && !overridden && 'ml-auto')} title="有映射" />}
+                    </button>
+                    <button type="button" className="shrink-0 rounded-md p-1.5 text-muted-foreground hover:bg-tint/[0.06] hover:text-foreground" title="节点详情" aria-label={`节点 ${nid} 详情`} onClick={() => setDetail(nid)} data-testid="node-detail-open">
+                      <SlidersHorizontal className="size-3" />
+                    </button>
+                  </div>
                   {open &&
                     Object.entries(n.inputs ?? {}).map(([k, v]) => {
                       const link = isLink(v)
+                      const st = inputControl(api_json, mapping, controls, nid, k)
                       return (
                         <button
                           key={k}
@@ -474,6 +525,7 @@ export function WorkflowEditor({ id, onDeleted }: { id: number; onDeleted: () =>
                         >
                           <span className="shrink-0 font-mono">{k}</span>
                           <span className="min-w-0 flex-1 truncate text-muted-foreground">{describeValue(v)}</span>
+                          {st.state !== 'original' && st.state !== 'link' && <span className="shrink-0 rounded bg-tint/[0.06] px-1 text-[10px] text-muted-foreground" data-testid="input-tag">{st.state === 'override' ? '覆盖' : st.state === 'lora' ? 'LoRA' : st.state === 'trigger' ? '触发词' : '映射'}</span>}
                           {!link && <Plus className="size-3 shrink-0 opacity-0 group-hover:opacity-100" />}
                         </button>
                       )
@@ -491,7 +543,8 @@ export function WorkflowEditor({ id, onDeleted }: { id: number; onDeleted: () =>
         analysis={suggest}
         onApply={(entries) => void saveMapping(mergeMapping(mapping, entries))}
       />
-      <CheckDialog open={inspect} onOpenChange={setInspect} api={api_json} mapping={mapping} onMapping={(m) => void saveMapping(m)} />
+      <CheckDialog open={inspect} onOpenChange={setInspect} api={api_json} mapping={mapping} onMapping={(m) => void saveMapping(m)} controls={controls} onNode={(nid) => { setInspect(false); setDetail(nid) }} />
+      {detail !== null && <NodeInspector nid={detail} api={api_json} mapping={mapping} controls={controls} info={nodeInfo?.info ?? null} infoError={nodeInfo?.error ?? null} onJump={setDetail} onClose={() => setDetail(null)} onControls={(c) => void saveControls(c)} />}
     </div>
   )
 }

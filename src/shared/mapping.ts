@@ -520,15 +520,32 @@ export function mappingValues(
   return values
 }
 
-/** 复制工作流并只写入映射的输入值 */
+/** 节点控制写入值的来源（不是映射来源，不能出现在映射中） */
+export const NODE_OVERRIDE = 'node_override'
+export const BYPASS_REWIRE = 'bypass_rewire'
+export const NODE_BYPASS = 'node_bypass'
+const CONTROL_LABELS: Record<string, string> = { [NODE_OVERRIDE]: '节点参数覆盖', [BYPASS_REWIRE]: '绕过节点后改接', [NODE_BYPASS]: '节点已绕过', lora_config: '任务 LoRA 配置', lora_stack: 'LoRA 列表' }
+export const sourceLabel = (s: string) => SOURCE_LABELS[s] ?? CONTROL_LABELS[s] ?? s
+
+/**
+ * 最终工作流的唯一构建入口（预览、导出、提交都调用它）：复制工作流，写入冻结的输入值。
+ * NODE_BYPASS 记录的节点在写入后移除（下游已由 BYPASS_REWIRE 改接），此时检查不留下指向不存在节点的连接。
+ */
 export function applyInputs(api: ApiWorkflow, inputs: InputValue[]): ApiWorkflow {
   const graph: ApiWorkflow = structuredClone(api)
+  const removed = inputs.filter((x) => x.source === NODE_BYPASS).map((x) => String(x.node))
   for (const x of inputs) {
-    if (x.value === null || x.value === undefined) continue
+    if (x.value === null || x.value === undefined || x.source === NODE_BYPASS) continue
     const node = graph[String(x.node)]
     if (!node || !(x.input in (node.inputs ?? {})))
       throw new ComfyError(`工作流中找不到节点 ${x.node} 的输入「${x.input}」，映射已失效`)
     node.inputs[x.input] = x.value
+  }
+  if (removed.length) {
+    for (const nid of removed) delete graph[nid]
+    for (const [nid, n] of Object.entries(graph))
+      for (const [k, v] of Object.entries(n.inputs ?? {}))
+        if (isLink(v) && !graph[v[0]]) throw new ComfyError(`绕过节点后，节点 ${nid} 的输入「${k}」仍然连接到不存在的节点 ${v[0]}`)
   }
   return graph
 }

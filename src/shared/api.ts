@@ -3,29 +3,7 @@
 import type { UpdateCheck } from './update'
 import type { DictionaryInfo, MiningImage, MiningParams, MiningResult, MiningSaveItem, MiningSaveOutcome, RawMeta, ScanResult } from './mining'
 import type { SavedSourceRule } from './prompt-source'
-import type {
-  ApiWorkflow,
-  ExecutionDetail,
-  ExecutionInspection,
-  LoraResource,
-  Character,
-  Library,
-  Message,
-  Outfit,
-  PlanResult,
-  PlanUnit,
-  Run,
-  RunnerEvent,
-  RunnerStatus,
-  RunUnit,
-  Settings,
-  Story,
-  Task,
-  TaskData,
-  Template,
-  TemplateKind,
-  Workflow,
-} from './types'
+import type { ApiWorkflow, ExecutionDetail, ExecutionInspection, LoraResource, Character, Library, Message, Outfit, PlanResult, PlanUnit, Run, RunnerEvent, RunnerStatus, RunUnit, Settings, Story, Task, TaskData, Template, TemplateKind, Workflow, InputChange, ObjectInfo } from './types'
 
 export type SaveResult = { id: number }
 export type Plan = PlanResult & { units: PlanUnit[] }
@@ -76,6 +54,8 @@ export interface Api {
   'workflows.save'(rec: Partial<Workflow>): SaveResult
   'workflows.remove'(id: number): void
   'workflows.onlineCheck'(id: number): Message[]
+  /** 工作流用到的节点类型在当前 ComfyUI 中的定义；连接失败时 info 为 null 并给出原因 */
+  'workflows.objectInfo'(id: number): { info: ObjectInfo | null; error: string | null }
 
   'tasks.get'(id: number): Task | null
   'tasks.create'(name: string, data: TaskData): SaveResult
@@ -85,7 +65,7 @@ export interface Api {
 
   'plan.forTask'(taskId: number): Plan
   /** 入队前预览：某一张图将要提交的完整工作流 JSON（与执行时的构建逻辑相同，按当前素材计算） */
-  'plan.finalWorkflow'(taskId: number, index: number): { json: ApiWorkflow; index: number; count: number; label: string; seed: number; errors: string[]; workflow: string }
+  'plan.finalWorkflow'(taskId: number, index: number): { json: ApiWorkflow; index: number; count: number; label: string; seed: number; errors: string[]; workflow: string; changes: InputChange[]; unchanged: number }
   'plan.exportWorkflow'(taskId: number, index: number): string | null
   'queue.enqueue'(taskIds: number[]): { ok: { name: string; runId: number; count: number }[]; failed: { name: string; errors: string[] }[] }
   'queue.list'(includeFinished: boolean): Run[]
@@ -158,7 +138,7 @@ export const API_METHODS: ApiMethod[] = [
   'characters.save', 'characters.remove', 'characters.duplicate', 'characters.create', 'characters.move', 'folders.create', 'folders.rename', 'folders.remove',
   'outfits.save', 'outfits.remove', 'outfits.duplicate', 'outfits.reorder',
   'stories.save', 'stories.remove', 'stories.duplicate', 'references',
-  'workflows.get', 'workflows.import', 'workflows.reimport', 'workflows.save', 'workflows.remove', 'workflows.onlineCheck',
+  'workflows.get', 'workflows.import', 'workflows.reimport', 'workflows.save', 'workflows.remove', 'workflows.onlineCheck', 'workflows.objectInfo',
   'tasks.get', 'tasks.create', 'tasks.save', 'tasks.remove', 'tasks.duplicate',
   'plan.forTask', 'plan.finalWorkflow', 'plan.exportWorkflow',
   'queue.enqueue', 'queue.list', 'queue.units', 'queue.reorder', 'queue.remove', 'queue.delete', 'queue.retry', 'queue.retrySave', 'queue.pendingSummary',

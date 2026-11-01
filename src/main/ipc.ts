@@ -6,10 +6,11 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { dirname, extname, join } from 'node:path'
 import { BrowserWindow, clipboard, dialog, ipcMain, nativeImage, shell, app } from 'electron'
 import { API_METHODS, INVOKE_CHANNEL, RUNNER_EVENT_CHANNEL, type Api, type ApiMethod } from '@shared/api'
-import { checkAgainstObjectInfo, ComfyError, findLoraLoaders, loadApiWorkflow, mappingValues, primaryOutputIndex, sortNodeIds, validateMapping } from '@shared/mapping'
+import { BYPASS_REWIRE, checkAgainstObjectInfo, ComfyError, NODE_BYPASS, NODE_OVERRIDE, findLoraLoaders, loadApiWorkflow, mappingValues, primaryOutputIndex, sortNodeIds, validateMapping } from '@shared/mapping'
 import { normalizeCard } from '@shared/cards'
 import { normalizeTaskData } from '@shared/planner'
 import { diffWorkflow, findPromptInjectors, generationSize } from '@shared/workflow-analysis'
+import { checkFrozenControls, controlProblems, controlsOf, normalizeControls } from '@shared/node-controls'
 import { DEFAULT_SETTINGS, TEMPLATE_KINDS, type ApiWorkflow, type ExecutionInspection, type Library, type MappingEntry, type OutputFile, type RunUnit, type Settings } from '@shared/types'
 import { ComfyClient } from './comfy-client'
 import { checkForUpdate } from './update'
@@ -79,6 +80,12 @@ function record(table: TableName, v: unknown): Record<string, unknown> {
         const e = plain(x, '映射')
         return { source: str(e.source), node: String(e.node ?? ''), input: str(e.input ?? ''), modules: Array.isArray(e.modules) ? e.modules.map((m) => str(m)) : [], template: str(e.template ?? '') }
       })
+    } else if (c === 'controls') {
+      try {
+        out[c] = normalizeControls(val)
+      } catch (e) {
+        throw new BadArg((e as Error).message)
+      }
     } else if (c === 'api_json' || c === 'data') {
       out[c] = c === 'data' ? normalizeTaskData(plain(val, 'data') as never) : plain(val, c)
     }
@@ -130,7 +137,7 @@ function libraryOf(store: Store): Library {
       note: w.note,
       nodes: Object.keys(w.api_json ?? {}).length,
       mapping: (w.mapping ?? []).length,
-      errors: validateMapping(w.api_json ?? {}, w.mapping ?? []).filter(([l]) => l === 'error').length,
+      errors: [...validateMapping(w.api_json ?? {}, w.mapping ?? []), ...controlProblems(w.api_json ?? {}, w.mapping ?? [], controlsOf(w))].filter(([l]) => l === 'error').length,
     })),
     tasks: store.list('tasks').map((t) => ({ id: t.id, name: t.name })),
     characterFolders: store.files?.folders() ?? [],
@@ -158,13 +165,16 @@ function inspectAttempt(store: Store, id: number): ExecutionInspection {
   if (!attempt) throw new BadArg('提交记录不存在')
   const stored = store.attemptBody(id)
   const run = store.getRun(attempt.run_id)
-  if (!stored || !run) return { attempt, graph_json: null, intact: !!stored?.intact, changes: [], unchanged: [], injectors: [], loras: [], seeds: [], size: null }
+  if (!stored || !run) return { attempt, graph_json: null, original_json: run ? JSON.stringify(run.workflow_json, null, 2) : null, controls: [], intact: !!stored?.intact, changes: [], unchanged: [], injectors: [], loras: [], seeds: [], size: null }
   const graph = (JSON.parse(stored.body) as { prompt: ApiWorkflow }).prompt
   const orig = run.workflow_json as unknown as ApiWorkflow
-  const { changes, unchanged } = diffWorkflow(orig, graph, store.getUnit(attempt.unit_id)?.inputs ?? [])
+  const inputs = store.getUnit(attempt.unit_id)?.inputs ?? []
+  const { changes, unchanged } = diffWorkflow(orig, graph, inputs)
   return {
     attempt,
     graph_json: JSON.stringify(graph, null, 2),
+    original_json: JSON.stringify(orig, null, 2),
+    controls: inputs.filter((x) => x.source === NODE_OVERRIDE || x.source === NODE_BYPASS || x.source === BYPASS_REWIRE),
     intact: stored.intact,
     changes,
     unchanged,
@@ -310,9 +320,20 @@ export function registerIpc(ctx: IpcContext) {
         const inputsList = store.list('characters').map((c) =>
           mappingValues({ loras: (c.loras ?? []).filter((l) => l.name), modules: {}, positive: '', negative: '', seed: 0, meta: {}, index: 0 }, wf.mapping, s, undefined, wf.api_json),
         )
-        return [...validateMapping(wf.api_json, wf.mapping), ...checkAgainstObjectInfo(wf.api_json, inputsList, obj as never)]
+        return [...validateMapping(wf.api_json, wf.mapping), ...checkAgainstObjectInfo(wf.api_json, inputsList, obj as never), ...controlProblems(wf.api_json, wf.mapping, controlsOf(wf), obj as never)]
       } catch (e) {
         return [['error', (e as Error).message]]
+      }
+    },
+    'workflows.objectInfo': async (id) => {
+      const wf = store.get('workflows', int(id))
+      if (!wf) throw new BadArg('工作流不存在')
+      try {
+        const obj = await new ComfyClient(store.settings().comfy_url).objectInfo()
+        const classes = new Set(Object.values(wf.api_json ?? {}).map((n) => n.class_type))
+        return { info: Object.fromEntries(Object.entries(obj).filter(([k]) => classes.has(k))) as never, error: null }
+      } catch (e) {
+        return { info: null, error: (e as Error).message }
       }
     },
 
@@ -392,6 +413,7 @@ export function registerIpc(ctx: IpcContext) {
           const units = store.listUnits(r.id).filter((u) => u.status === 'pending')
           if (!units.length) continue
           for (const [, m] of checkAgainstObjectInfo(run.workflow_json, units.map((u) => u.inputs ?? []), obj as never)) msgs.add(`[${r.name}] ${m}`)
+          for (const u of units) for (const [, m] of checkFrozenControls(run.workflow_json, u.inputs ?? [], obj as never)) msgs.add(`[${r.name}] ${m}`)
         }
         return { error: null, messages: [...msgs] }
       } catch (e) {

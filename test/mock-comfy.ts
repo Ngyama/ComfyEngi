@@ -17,8 +17,12 @@ export const OBJECT_INFO: Record<string, unknown> = {
   KSampler: { input: { required: { seed: ['INT', {}] } } },
   EmptyLatentImage: { input: { required: {} } },
   VAEDecode: { input: { required: {} } },
-  SaveImage: { input: { required: { filename_prefix: ['STRING', {}] } } },
+  SaveImage: { input: { required: { filename_prefix: ['STRING', {}] } }, output: [], output_node: true },
   LoraLoader: { input: { required: { lora_name: [['charA.safetensors', 'charB.safetensors']] } } },
+  // 绕过所需的声明（节点定义按 ComfyUI 内置节点的 RETURN_TYPES 填写）
+  DifferentialDiffusion: { input: { required: { model: ['MODEL'], strength: ['FLOAT', { min: 0, max: 1 }] } }, output: ['MODEL'] },
+  'Lora Loader (LoraManager)': { input: { required: { model: ['MODEL'], text: ['STRING', {}] }, optional: { clip: ['CLIP'] } }, output: ['MODEL', 'CLIP', 'STRING', 'STRING'] },
+  PreviewImage: { input: { required: { images: ['IMAGE'] } }, output: [], output_node: true },
 }
 
 function crc32(buf: Buffer): number {

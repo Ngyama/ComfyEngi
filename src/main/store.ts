@@ -50,7 +50,7 @@ CREATE TABLE IF NOT EXISTS stories (
     created_at REAL, updated_at REAL);
 CREATE TABLE IF NOT EXISTS workflows (
     id INTEGER PRIMARY KEY, name TEXT NOT NULL DEFAULT '', api_json TEXT NOT NULL DEFAULT '{}',
-    mapping TEXT NOT NULL DEFAULT '[]', note TEXT NOT NULL DEFAULT '', sort INTEGER NOT NULL DEFAULT 0,
+    mapping TEXT NOT NULL DEFAULT '[]', controls TEXT NOT NULL DEFAULT 'null', note TEXT NOT NULL DEFAULT '', sort INTEGER NOT NULL DEFAULT 0,
     created_at REAL, updated_at REAL);
 CREATE TABLE IF NOT EXISTS tasks (
     id INTEGER PRIMARY KEY, name TEXT NOT NULL DEFAULT '', data TEXT NOT NULL DEFAULT '{}',
@@ -85,7 +85,7 @@ BEGIN SELECT RAISE(ABORT, '提交快照不可修改'); END;
  * 0 = 旧版 Python 程序创建的数据库；1 = Electron 版（表结构相同，仅登记版本）。
  * 将来需要改表结构时在 MIGRATIONS 中追加步骤；每次迁移前都会先自动备份。
  */
-export const SCHEMA_VERSION = 5
+export const SCHEMA_VERSION = 6
 const MIGRATIONS: Record<number, (db: DatabaseSync) => void> = {
   1: () => {
     /* v0 → v1：结构不变 */
@@ -110,6 +110,11 @@ const MIGRATIONS: Record<number, (db: DatabaseSync) => void> = {
   },
   // v4 → v5：逐次提交快照 run_attempts（由 SCHEMA 建表；已有记录不变，升级前的图片没有快照）
   5: () => {},
+  // v5 → v6：工作流级节点控制（只新增列，默认没有配置，已有工作流的行为不变）
+  6: (db) => {
+    const cols = (db.prepare('PRAGMA table_info(workflows)').all() as { name: string }[]).map((c) => c.name)
+    if (!cols.includes('controls')) db.exec("ALTER TABLE workflows ADD COLUMN controls TEXT NOT NULL DEFAULT 'null'")
+  },
 }
 
 export const TABLES = {
@@ -117,7 +122,7 @@ export const TABLES = {
   characters: { cols: ['name', 'tag', 'positive', 'negative', 'loras', 'note', 'sort'], json: ['loras'] },
   outfits: { cols: ['character_id', 'name', 'positive', 'negative', 'note', 'sort'], json: [] as string[] },
   stories: { cols: ['genre', 'name', 'note', 'scenes', 'sort'], json: ['scenes'] },
-  workflows: { cols: ['name', 'api_json', 'mapping', 'note', 'sort'], json: ['api_json', 'mapping'] },
+  workflows: { cols: ['name', 'api_json', 'mapping', 'controls', 'note', 'sort'], json: ['api_json', 'mapping', 'controls'] },
   tasks: { cols: ['name', 'data', 'sort'], json: ['data'] },
 } as const
 export type TableName = keyof typeof TABLES

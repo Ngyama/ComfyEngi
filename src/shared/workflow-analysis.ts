@@ -7,7 +7,7 @@
 // - 生成尺寸：创建空 latent 的节点的 width / height；连接自上游整数节点时映射到上游节点（放大、分块等参数不会被当作尺寸）
 // 所有建议都只是候选，由用户确认后才写入映射。
 
-import { activeLoraNames, DEFAULT_PREFIX_TEMPLATE, findLoraLoaders, isLink, LM_TRIGGER_TOGGLE, newEntry, nodeTitle, PROMPT_SOURCES, sortNodeIds, toggleStructure, TRIGGER_DISABLE, type LoraLoaderInfo } from './mapping'
+import { activeLoraNames, DEFAULT_PREFIX_TEMPLATE, findLoraLoaders, isLink, LM_TRIGGER_TOGGLE, newEntry, NODE_BYPASS, nodeTitle, PROMPT_SOURCES, sortNodeIds, toggleStructure, TRIGGER_DISABLE, type LoraLoaderInfo } from './mapping'
 import type { ApiNode, ApiWorkflow, InputChange, InputValue, MappingEntry, PromptInjector } from './types'
 
 export type SuggestionGroup = 'prompt' | 'seed' | 'lora' | 'output' | 'size'
@@ -229,6 +229,11 @@ export function diffWorkflow(orig: ApiWorkflow, graph: ApiWorkflow, inputs: Inpu
     const a = orig[nid]?.inputs ?? {}
     const b = graph[nid]?.inputs ?? {}
     const n = graph[nid] ?? orig[nid]
+    // 提交的工作流中没有这个节点：只有绕过会移除节点。不逐个列出它的输入（它们没有被修改）
+    if (orig[nid] && !graph[nid]) {
+      changes.push({ node: nid, class_type: n.class_type, title: nodeTitle(n), input: '*', before: a, after: null, source: inputs.find((x) => String(x.node) === nid && x.source === NODE_BYPASS)?.source })
+      continue
+    }
     const before = changes.length
     for (const k of new Set([...Object.keys(a), ...Object.keys(b)])) {
       if (eq(a[k], b[k])) continue

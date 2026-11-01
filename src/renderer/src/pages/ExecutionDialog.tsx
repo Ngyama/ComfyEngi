@@ -10,8 +10,8 @@ import { CopyButton, FieldLabel } from '@/components/common'
 import { PickSources } from '@/components/card-pools'
 import { api, call } from '@/lib/api'
 import { cn } from '@/lib/utils'
-import { SOURCE_LABELS } from '@shared/mapping'
-import type { AttemptState, ExecutionDetail, ExecutionInspection, OutputFile } from '@shared/types'
+import { NODE_BYPASS, sourceLabel, TRIGGER_DISABLE } from '@shared/mapping'
+import type { AttemptState, ExecutionDetail, ExecutionInspection, InputChange, OutputFile } from '@shared/types'
 
 const STATES: Record<AttemptState, [string, 'ok' | 'warn' | 'bad' | 'muted']> = {
   built: ['已构建，尚未确认提交', 'muted'],
@@ -50,7 +50,7 @@ function Value({ label, v }: { label: string; v: unknown }) {
   const [open, setOpen] = useState(false)
   return (
     <div className="min-w-0">
-      <div className="flex items-center gap-2 text-[10.5px] text-muted-foreground">
+      <div className="flex flex-wrap items-center gap-x-2 text-[10.5px] whitespace-nowrap text-muted-foreground">
         {label}
         {long && (
           <button type="button" className="inline-flex items-center hover:text-foreground" onClick={() => setOpen(!open)}>
@@ -186,25 +186,32 @@ function PromptTab({ d }: { d: ExecutionDetail }) {
   )
 }
 
-function ChangesTab({ x }: { x: ExecutionInspection }) {
-  const nodes = [...new Set(x.changes.map((c) => c.node))]
+/** 按节点列出原始工作流与最终工作流的差异：任务预览和执行详情共用，内容来自实际构建结果的比较 */
+export function ChangeList({ changes, unchanged }: { changes: InputChange[]; unchanged: number }) {
+  const nodes = [...new Set(changes.map((c) => c.node))]
   return (
     <div className="space-y-4">
-      <div className="text-xs text-muted-foreground">比较入队时冻结的原始 API 工作流与这次实际提交的工作流：{nodes.length} 个节点的 {x.changes.length} 个字段不同，其余 {x.unchanged.length} 个节点完全沿用原值。</div>
+      <div className="text-xs text-muted-foreground">比较原始 API 工作流与最终工作流：{nodes.length} 个节点有变化，其余 {unchanged} 个节点完全沿用原值。</div>
       {nodes.map((nid) => {
-        const list = x.changes.filter((c) => c.node === nid)
+        const list = changes.filter((c) => c.node === nid)
         return (
           <div key={nid} className="rounded-xl bg-tint/[0.03] p-3 ring-1 ring-tint/[0.08]" data-testid="exec-change-node" data-node={nid}>
             <div className="mb-2 text-xs font-medium select-text">
               节点 #{nid} {list[0].class_type}
               {list[0].title !== list[0].class_type && <span className="ml-1 font-normal text-muted-foreground">· {list[0].title}</span>}
+              {list.some((c) => c.source === TRIGGER_DISABLE) && <span className="ml-2 rounded bg-success/10 px-1 text-[10.5px] font-normal text-success" data-testid="change-trigger-disabled">触发词注入已禁用</span>}
             </div>
             <div className="space-y-3">
-              {list.map((c) => (
+              {list.map((c) => c.source === NODE_BYPASS ? (
+                <div key={c.input} className="text-xs" data-testid="change-bypassed">
+                  <span className="rounded bg-warning/10 px-1 text-warning">节点已绕过</span>
+                  <span className="ml-2 text-muted-foreground">不出现在提交的工作流中，使用它的节点已改接到它的上游。</span>
+                </div>
+              ) : (
                 <div key={c.input} className="space-y-1">
                   <div className="font-mono text-[11.5px] select-text">
                     {c.input}
-                    <span className="ml-2 font-sans text-[10.5px] text-muted-foreground">{c.source ? (SOURCE_LABELS[c.source] ?? (c.source === 'lora_stack' ? 'LoRA 列表' : c.source)) : '没有对应的写入记录'}</span>
+                    <span className="ml-2 font-sans text-[10.5px] text-muted-foreground">{c.source ? sourceLabel(c.source) : '没有对应的写入记录'}</span>
                   </div>
                   <div className="grid grid-cols-2 gap-2">
                     <Value label="原始值" v={c.before} />
@@ -216,6 +223,14 @@ function ChangesTab({ x }: { x: ExecutionInspection }) {
           </div>
         )
       })}
+    </div>
+  )
+}
+
+function ChangesTab({ x }: { x: ExecutionInspection }) {
+  return (
+    <div className="space-y-4">
+      <ChangeList changes={x.changes} unchanged={x.unchanged.length} />
       <Fold title={`未修改的节点（${x.unchanged.length}）`} testid="exec-unchanged">
         <div className="space-y-1">
           {x.unchanged.map((n) => (
@@ -252,6 +267,20 @@ function WorkflowTab({ x }: { x: ExecutionInspection }) {
         </Button>
       </div>
       {show && <pre className="max-h-[56vh] overflow-auto rounded-xl bg-inset p-3 font-mono text-[11.5px] leading-relaxed whitespace-pre select-text" data-testid="exec-json">{x.graph_json}</pre>}
+      <Fold title={`配置的参数覆盖与绕过（${x.controls.length}）`} testid="exec-controls">
+        {x.controls.length ? (
+          <div className="space-y-1 font-mono text-[11px] select-text">
+            {x.controls.map((c, i) => (
+              <div key={i}>#{c.node}{c.source === NODE_BYPASS ? '' : `.${c.input}`} <span className="font-sans text-muted-foreground">{sourceLabel(c.source)}</span>{c.source === NODE_BYPASS ? '' : ` = ${JSON.stringify(c.value)}`}</div>
+            ))}
+          </div>
+        ) : (
+          <div className="text-xs text-muted-foreground">这次提交没有节点覆盖或绕过。</div>
+        )}
+      </Fold>
+      <Fold title="原始工作流（入队时冻结，未经任何写入）" testid="exec-original">
+        <pre className="max-h-[56vh] overflow-auto rounded-xl bg-inset p-3 font-mono text-[11.5px] leading-relaxed whitespace-pre select-text" data-testid="exec-original-json">{x.original_json}</pre>
+      </Fold>
     </div>
   )
 }
