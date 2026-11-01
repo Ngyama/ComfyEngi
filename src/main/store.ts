@@ -4,12 +4,16 @@ import { isLegacyDefaultOrder } from '@shared/prompt'
 // SQLite 存储（Electron 内置 node:sqlite）。表结构与旧版 Python 程序完全相同，
 // 旧数据库可直接打开；所有 Prompt 文本以原始字符串写入 TEXT 列，读写不做转换。
 
+import { createHash } from 'node:crypto'
 import { existsSync, mkdirSync, readdirSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
+import { gunzipSync, gzipSync } from 'node:zlib'
 import {
   DEFAULT_SETTINGS,
+  type AttemptState,
   type Character,
+  type ExecutionAttempt,
   type InputValue,
   type Outfit,
   type Run,
@@ -65,6 +69,15 @@ CREATE TABLE IF NOT EXISTS run_units (
     outputs TEXT NOT NULL DEFAULT '[]', attempts INTEGER NOT NULL DEFAULT 0, submitted_at REAL, finished_at REAL);
 CREATE INDEX IF NOT EXISTS idx_units_run ON run_units(run_id, idx);
 CREATE INDEX IF NOT EXISTS idx_units_status ON run_units(status);
+CREATE TABLE IF NOT EXISTS run_attempts (
+    id INTEGER PRIMARY KEY, unit_id INTEGER NOT NULL REFERENCES run_units(id) ON DELETE CASCADE,
+    run_id INTEGER NOT NULL REFERENCES runs(id) ON DELETE CASCADE, attempt INTEGER NOT NULL,
+    state TEXT NOT NULL, prompt_id TEXT, client_id TEXT, body BLOB, body_sha256 TEXT NOT NULL DEFAULT '',
+    response TEXT NOT NULL DEFAULT '', error TEXT NOT NULL DEFAULT '', comfy_match INTEGER,
+    built_at REAL, submitted_at REAL, finished_at REAL);
+CREATE INDEX IF NOT EXISTS idx_attempts_unit ON run_attempts(unit_id, attempt);
+CREATE TRIGGER IF NOT EXISTS run_attempts_frozen BEFORE UPDATE OF body, body_sha256 ON run_attempts
+BEGIN SELECT RAISE(ABORT, '提交快照不可修改'); END;
 `
 
 /**
@@ -72,7 +85,7 @@ CREATE INDEX IF NOT EXISTS idx_units_status ON run_units(status);
  * 0 = 旧版 Python 程序创建的数据库；1 = Electron 版（表结构相同，仅登记版本）。
  * 将来需要改表结构时在 MIGRATIONS 中追加步骤；每次迁移前都会先自动备份。
  */
-export const SCHEMA_VERSION = 4
+export const SCHEMA_VERSION = 5
 const MIGRATIONS: Record<number, (db: DatabaseSync) => void> = {
   1: () => {
     /* v0 → v1：结构不变 */
@@ -95,6 +108,8 @@ const MIGRATIONS: Record<number, (db: DatabaseSync) => void> = {
     if (!cols.includes('card')) db.exec('ALTER TABLE templates ADD COLUMN card TEXT')
     if (!cols.includes('exclusive')) db.exec("ALTER TABLE templates ADD COLUMN exclusive TEXT NOT NULL DEFAULT ''")
   },
+  // v4 → v5：逐次提交快照 run_attempts（由 SCHEMA 建表；已有记录不变，升级前的图片没有快照）
+  5: () => {},
 }
 
 export const TABLES = {
@@ -497,6 +512,48 @@ export class Store {
     const entries = Object.entries(fields).map(([k, v]) => [k, (UNIT_JSON as readonly string[]).includes(k) ? JSON.stringify(v) : toSql(v)] as [string, SqlValue])
     if (!entries.length) return
     this.run(`UPDATE run_units SET ${entries.map(([k]) => `${k}=?`).join(', ')} WHERE id=?`, ...entries.map((e) => e[1]), unitId)
+  }
+
+  // ---------- 提交快照 ----------
+  // 每次提交前写入一条不可变记录，body 是真正发送给 /prompt 的请求（gzip 压缩）；列表查询不读取 body。
+  /** 写入快照并同时把单元标记为提交中：要么都成功，要么都不发生 */
+  createAttempt(unit: RunUnit, body: string | null, state: AttemptState, fields: { prompt_id?: string | null; client_id?: string | null; error?: string; unit?: Partial<Record<keyof RunUnit, unknown>> }): number {
+    return this.tx(() => {
+      const n = Number((this.one('SELECT COALESCE(MAX(attempt),0)+1 AS n FROM run_attempts WHERE unit_id=?', unit.id) as Row).n)
+      const r = this.db
+        .prepare('INSERT INTO run_attempts(unit_id, run_id, attempt, state, prompt_id, client_id, body, body_sha256, error, built_at) VALUES(?,?,?,?,?,?,?,?,?,?)')
+        .run(unit.id, unit.run_id, n, state, fields.prompt_id ?? null, fields.client_id ?? null, body === null ? null : gzipSync(body), body === null ? '' : createHash('sha256').update(body).digest('hex'), fields.error ?? '', now())
+      if (fields.unit) this.updateUnit(unit.id, fields.unit)
+      return Number(r.lastInsertRowid)
+    })
+  }
+
+  /** 更新尝试的状态（请求内容由触发器保护，不能修改） */
+  updateAttempt(id: number, fields: Partial<Pick<ExecutionAttempt, 'state' | 'prompt_id' | 'response' | 'error' | 'comfy_match' | 'submitted_at' | 'finished_at'>>) {
+    const entries = Object.entries(fields)
+    if (entries.length) this.run(`UPDATE run_attempts SET ${entries.map(([k]) => `${k}=?`).join(', ')} WHERE id=?`, ...entries.map(([, v]) => toSql(v)), id)
+  }
+
+  private static ATTEMPT_COLS = 'id, unit_id, run_id, attempt, state, prompt_id, client_id, body_sha256, response, error, comfy_match, built_at, submitted_at, finished_at'
+
+  attempts(unitId: number): ExecutionAttempt[] {
+    return this.all(`SELECT ${Store.ATTEMPT_COLS} FROM run_attempts WHERE unit_id=? ORDER BY attempt`, unitId) as unknown as ExecutionAttempt[]
+  }
+
+  latestAttempt(unitId: number): ExecutionAttempt | null {
+    return (this.one(`SELECT ${Store.ATTEMPT_COLS} FROM run_attempts WHERE unit_id=? ORDER BY attempt DESC LIMIT 1`, unitId) as unknown as ExecutionAttempt | undefined) ?? null
+  }
+
+  getAttempt(id: number): ExecutionAttempt | null {
+    return (this.one(`SELECT ${Store.ATTEMPT_COLS} FROM run_attempts WHERE id=?`, id) as unknown as ExecutionAttempt | undefined) ?? null
+  }
+
+  /** 一次提交的请求原文；没有快照（无法构建）时为 null */
+  attemptBody(id: number): { body: string; intact: boolean } | null {
+    const r = this.one('SELECT body, body_sha256 FROM run_attempts WHERE id=?', id)
+    if (!r?.body) return null
+    const body = gunzipSync(r.body as Uint8Array).toString('utf8')
+    return { body, intact: createHash('sha256').update(body).digest('hex') === r.body_sha256 }
   }
 
   finishRunIfComplete(runId: number): boolean {

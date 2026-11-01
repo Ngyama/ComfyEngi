@@ -6,10 +6,11 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { dirname, extname, join } from 'node:path'
 import { BrowserWindow, clipboard, dialog, ipcMain, nativeImage, shell, app } from 'electron'
 import { API_METHODS, INVOKE_CHANNEL, RUNNER_EVENT_CHANNEL, type Api, type ApiMethod } from '@shared/api'
-import { checkAgainstObjectInfo, ComfyError, loadApiWorkflow, mappingValues, validateMapping } from '@shared/mapping'
+import { checkAgainstObjectInfo, ComfyError, findLoraLoaders, loadApiWorkflow, mappingValues, primaryOutputIndex, sortNodeIds, validateMapping } from '@shared/mapping'
 import { normalizeCard } from '@shared/cards'
 import { normalizeTaskData } from '@shared/planner'
-import { DEFAULT_SETTINGS, TEMPLATE_KINDS, type Library, type OutputFile, type RunUnit, type Settings } from '@shared/types'
+import { diffWorkflow, findPromptInjectors, generationSize } from '@shared/workflow-analysis'
+import { DEFAULT_SETTINGS, TEMPLATE_KINDS, type ApiWorkflow, type ExecutionInspection, type Library, type MappingEntry, type OutputFile, type RunUnit, type Settings } from '@shared/types'
 import { ComfyClient } from './comfy-client'
 import { checkForUpdate } from './update'
 import { INSTALL_DIR_ERROR, insideInstallDir } from './install-dir'
@@ -18,7 +19,7 @@ import { enqueueTask, finalWorkflow, planForTask } from './plan'
 import { dictionaryInfo, dictionaryPath, importDictionary, loadSourceRules, MiningScanner, rawField, rawMeta, saveMined, saveSourceRules, sourceRulesPath } from './mining'
 import { analyzeInWorker } from './mining-run'
 import { MINING_LIMITS, MINING_SAVE_KINDS } from '@shared/mining'
-import type { Runner } from './runner'
+import { sha256, type Runner } from './runner'
 import { TABLES, type Store, type TableName } from './store'
 
 class BadArg extends Error {}
@@ -149,9 +150,35 @@ function localOutput(store: Store, o: OutputFile | undefined): string {
   return ''
 }
 
-const firstOutput = (u: RunUnit | null) => {
-  const outs = u?.outputs ?? []
-  return outs.find((o) => o.saved) ?? outs.find((o) => o.type === 'output') ?? outs[0]
+const firstOutput = (u: RunUnit | null) => u?.outputs?.[primaryOutputIndex(u)]
+
+/** 一次提交的说明：只读取提交快照与入队时冻结的工作流、映射，不重新计算，也不读取当前素材库 */
+function inspectAttempt(store: Store, id: number): ExecutionInspection {
+  const attempt = store.getAttempt(id)
+  if (!attempt) throw new BadArg('提交记录不存在')
+  const stored = store.attemptBody(id)
+  const run = store.getRun(attempt.run_id)
+  if (!stored || !run) return { attempt, graph_json: null, intact: !!stored?.intact, changes: [], unchanged: [], injectors: [], loras: [], seeds: [], size: null }
+  const graph = (JSON.parse(stored.body) as { prompt: ApiWorkflow }).prompt
+  const orig = run.workflow_json as unknown as ApiWorkflow
+  const { changes, unchanged } = diffWorkflow(orig, graph, store.getUnit(attempt.unit_id)?.inputs ?? [])
+  return {
+    attempt,
+    graph_json: JSON.stringify(graph, null, 2),
+    intact: stored.intact,
+    changes,
+    unchanged,
+    injectors: findPromptInjectors(graph, run.mapping_json as MappingEntry[], orig),
+    loras: findLoraLoaders(graph).map((l) => ({
+      node: l.node,
+      class_type: l.class_type,
+      items: l.entries?.map((e) => ({ name: e.name, strength: e.strength, clip: e.clipStrength, active: e.active })) ?? [{ name: l.lora_name, strength: graph[l.node].inputs.strength_model ?? graph[l.node].inputs.strength, clip: graph[l.node].inputs.strength_clip, active: true }],
+    })),
+    seeds: sortNodeIds(Object.keys(graph)).flatMap((nid) =>
+      ['seed', 'noise_seed'].filter((k) => Number.isInteger(graph[nid].inputs?.[k])).map((k) => ({ node: nid, class_type: graph[nid].class_type, input: k, value: graph[nid].inputs[k] as number, changed: orig[nid]?.inputs?.[k] !== graph[nid].inputs[k] })),
+    ),
+    size: generationSize(graph),
+  }
 }
 
 export function registerIpc(ctx: IpcContext) {
@@ -413,6 +440,37 @@ export function registerIpc(ctx: IpcContext) {
       if (!local) return '找不到本地文件：请在设置中填写 ComfyUI 输出目录（ComfyUI/output）'
       shell.showItemInFolder(local)
       return null
+    },
+    'history.execution': (unitId) => {
+      const unit = store.getUnit(int(unitId))
+      if (!unit) return null
+      const run = store.getRun(unit.run_id)
+      const preview_index = primaryOutputIndex(unit)
+      return {
+        unit,
+        run: run && { id: run.id, task_id: run.task_id, name: run.name, workflow_name: run.workflow_name, created_at: run.created_at },
+        attempts: store.attempts(unit.id),
+        preview_index,
+        preview_path: localOutput(store, unit.outputs?.[preview_index]),
+        file_checks: (unit.outputs ?? []).map((o) => {
+          if (!o.saved || !o.saved_sha256) return null
+          try {
+            return sha256(readFileSync(o.saved)) === o.saved_sha256
+          } catch {
+            return false
+          }
+        }),
+      }
+    },
+    'history.attempt': (attemptId) => inspectAttempt(store, int(attemptId)),
+    'history.exportAttempt': async (attemptId) => {
+      const a = store.getAttempt(int(attemptId))
+      const stored = a && store.attemptBody(a.id)
+      if (!stored) throw new BadArg('这次提交没有快照')
+      const r = await dialog.showSaveDialog(ctx.window()!, { title: '导出实际提交的工作流 JSON（API 格式）', defaultPath: `comfyengi_unit${a.unit_id}_attempt${a.attempt}_api.json`, filters: [{ name: 'JSON', extensions: ['json'] }] })
+      if (r.canceled || !r.filePath) return null
+      await writeFile(r.filePath, JSON.stringify((JSON.parse(stored.body) as { prompt: unknown }).prompt, null, 2), 'utf8')
+      return r.filePath
     },
 
     'comfy.test': async (url) => {

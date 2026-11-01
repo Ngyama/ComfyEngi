@@ -1,7 +1,7 @@
 // 运行记录：以缩略图浏览历史结果，点开查看 Prompt、Seed、prompt_id 与输出位置。
 
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { AlertTriangle, FolderOpen, History, ImageIcon, ImageOff, RefreshCw, Save, X } from 'lucide-react'
+import { AlertTriangle, FileSearch, FolderOpen, History, ImageIcon, ImageOff, RefreshCw, Save, X } from 'lucide-react'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { Chip, CopyButton, EmptyState, FieldLabel, PageHeader, SearchBox } from '@/components/common'
@@ -10,6 +10,7 @@ import { api, call } from '@/lib/api'
 import { useRunner } from '@/lib/stores'
 import { cn } from '@/lib/utils'
 import type { RunUnit } from '@shared/types'
+import { ExecutionDialog } from './ExecutionDialog'
 
 const thumbCache = new Map<string, string | null>()
 
@@ -92,6 +93,7 @@ function Detail({ u, onClose }: { u: RunUnit; onClose: () => void }) {
   }
   const saveFailed = u.status === 'done' && !!u.outputs?.some((o) => o.save_error)
   const [retrying, setRetrying] = useState(false)
+  const [inspect, setInspect] = useState(false)
   const retrySave = async () => {
     setRetrying(true)
     const r = await call(api['queue.retrySave'](null, [u.id]))
@@ -137,6 +139,9 @@ function Detail({ u, onClose }: { u: RunUnit; onClose: () => void }) {
           <Button size="sm" variant="secondary" onClick={() => open('history.showInFolder')} disabled={!u.outputs?.length}>
             <FolderOpen /> 所在文件夹
           </Button>
+          <Button size="sm" variant="secondary" onClick={() => setInspect(true)} data-testid="open-execution">
+            <FileSearch /> 执行详情
+          </Button>
           <CopyButton text={String(u.seed)} label={`复制 Seed ${u.seed}`} />
         </div>
         {saveFailed && (
@@ -179,14 +184,15 @@ function Detail({ u, onClose }: { u: RunUnit; onClose: () => void }) {
           </div>
         )}
         <div>
-          <FieldLabel right={<CopyButton text={u.positive} />}>最终正面 Prompt</FieldLabel>
+          <FieldLabel right={<CopyButton text={u.positive} />}>写入工作流的正面 Prompt</FieldLabel>
           <pre className="rounded-xl bg-inset p-3 font-mono text-[11.5px] leading-relaxed whitespace-pre-wrap select-text">{u.positive || '（空）'}</pre>
         </div>
         <div>
-          <FieldLabel right={<CopyButton text={u.negative} />}>最终负面 Prompt</FieldLabel>
+          <FieldLabel right={<CopyButton text={u.negative} />}>写入工作流的负面 Prompt</FieldLabel>
           <pre className="rounded-xl bg-inset p-3 font-mono text-[11.5px] leading-relaxed whitespace-pre-wrap select-text">{u.negative || '（空）'}</pre>
         </div>
       </div>
+      {inspect && <ExecutionDialog unitId={u.id} onClose={() => setInspect(false)} />}
     </div>
   )
 }
@@ -208,7 +214,7 @@ export default function HistoryPage() {
       <div className="flex min-w-0 flex-1 flex-col">
         <PageHeader
           title="运行记录"
-          description="每张图的实际 Prompt、Seed 与输出文件；图片仍由 ComfyUI 按原工作流保存。"
+          description="每张图的 Prompt、Seed 与输出文件；「执行详情」可以查看实际提交的工作流与输出来源。"
           actions={
             <Button variant="ghost" size="sm" onClick={load}>
               <RefreshCw /> 刷新

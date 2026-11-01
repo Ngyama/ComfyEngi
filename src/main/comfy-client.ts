@@ -18,12 +18,21 @@ export class ComfyHTTPError extends ComfyError {
 export interface HistoryEntry {
   status?: { status_str?: string; completed?: boolean; messages?: unknown[] }
   outputs?: Record<string, unknown>
+  /** ComfyUI 保存的执行信息：[序号, prompt_id, 工作流, extra_data, 输出节点] */
+  prompt?: unknown[]
+}
+
+/** POST /prompt 的请求内容 */
+export function promptBody(graph: ApiWorkflow, clientId: string, promptId?: string): string {
+  const body: Record<string, unknown> = { prompt: graph, client_id: clientId }
+  if (promptId) body.prompt_id = promptId // 新版 ComfyUI 会使用这个 ID，旧版忽略
+  return JSON.stringify(body)
 }
 
 export interface ComfyApi {
   systemStats(): Promise<unknown>
   objectInfo(): Promise<Record<string, unknown>>
-  queuePrompt(graph: ApiWorkflow, clientId: string, promptId?: string): Promise<{ prompt_id: string }>
+  postPrompt(body: string): Promise<{ prompt_id: string }>
   history(promptId: string): Promise<HistoryEntry | null>
   queueIds(): Promise<[string[], string[]]>
   deleteFromQueue(ids: string[]): Promise<void>
@@ -47,7 +56,7 @@ export class ComfyClient implements ComfyApi {
       res = await fetch(this.base + path, {
         method,
         headers: body !== undefined ? { 'Content-Type': 'application/json' } : undefined,
-        body: body !== undefined ? JSON.stringify(body) : undefined,
+        body: body === undefined ? undefined : typeof body === 'string' ? body : JSON.stringify(body),
         signal: AbortSignal.timeout(timeoutMs ?? this.timeoutMs),
       })
     } catch (e) {
@@ -84,9 +93,8 @@ export class ComfyClient implements ComfyApi {
     return ((await this.request('GET', '/object_info', undefined, 60000)) ?? {}) as Record<string, unknown>
   }
 
-  async queuePrompt(graph: ApiWorkflow, clientId: string, promptId?: string) {
-    const body: Record<string, unknown> = { prompt: graph, client_id: clientId }
-    if (promptId) body.prompt_id = promptId // 新版 ComfyUI 会使用这个 ID，旧版忽略
+  /** 把已序列化的请求原样发送：提交的字节就是快照记录的字节 */
+  async postPrompt(body: string) {
     const resp = (await this.request('POST', '/prompt', body)) as Record<string, unknown> | null
     if (resp && resp.node_errors && Object.keys(resp.node_errors as object).length)
       throw new ComfyHTTPError(200, resp, formatPromptError(resp))

@@ -5,7 +5,7 @@
 // 也可单独运行，配合界面演示完整流程（Node 22.18+ 可直接运行 .ts）：
 //   node test/mock-comfy.ts --port 8189 --delay 2 --output-dir %TEMP%\mock_comfy_out
 
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { createServer, type Server } from 'node:http'
 import { join } from 'node:path'
@@ -66,6 +66,7 @@ export class MockComfy {
   counter = 0
   number = 0
   rejectWith: unknown = null
+  deterministic = false
   failIds = new Set<string>()
   failAll = false
   paused = false
@@ -119,7 +120,9 @@ export class MockComfy {
           if (this.outputDir) {
             const d = join(this.outputDir, sub)
             mkdirSync(d, { recursive: true })
-            writeFileSync(join(d, fname), tinyPng([(this.counter * 37) % 255, 90, 150], 256))
+            // 确定性模式：图片只由工作流参数决定（输出前缀除外），相当于确定性节点
+            const color = this.deterministic ? [...createHash('sha256').update(JSON.stringify(graph, (k, v) => (k === 'filename_prefix' ? undefined : v))).digest()].slice(0, 3) : [(this.counter * 37) % 255, 90, 150]
+            writeFileSync(join(d, fname), tinyPng(color as [number, number, number], 256))
           }
           outputs[nid] = { images: [{ filename: fname, subfolder: sub, type: 'output' }] }
         }

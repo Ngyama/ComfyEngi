@@ -7,8 +7,8 @@
 // - 生成尺寸：创建空 latent 的节点的 width / height；连接自上游整数节点时映射到上游节点（放大、分块等参数不会被当作尺寸）
 // 所有建议都只是候选，由用户确认后才写入映射。
 
-import { DEFAULT_PREFIX_TEMPLATE, findLoraLoaders, isLink, newEntry, nodeTitle, sortNodeIds, type LoraLoaderInfo } from './mapping'
-import type { ApiNode, ApiWorkflow, MappingEntry } from './types'
+import { activeLoraNames, DEFAULT_PREFIX_TEMPLATE, findLoraLoaders, isLink, LM_TRIGGER_TOGGLE, newEntry, nodeTitle, PROMPT_SOURCES, sortNodeIds, toggleStructure, TRIGGER_DISABLE, type LoraLoaderInfo } from './mapping'
+import type { ApiNode, ApiWorkflow, InputChange, InputValue, MappingEntry, PromptInjector } from './types'
 
 export type SuggestionGroup = 'prompt' | 'seed' | 'lora' | 'output' | 'size'
 export interface Suggestion {
@@ -133,6 +133,134 @@ export function loaderStages(api: ApiWorkflow, node: string): string[] {
   return samplersFed(api, node, new Set(findSamplers(api)), consumers(api))
 }
 
+const nodeLabel = (nid: string, n: ApiNode) => `#${nid}（${n.class_type}）`
+
+function injectorMessage(nid: string, n: ApiNode, inj: Omit<PromptInjector, 'message'>): string {
+  const where = inj.polarity.length ? `，位于${inj.polarity.map((p) => (p === 'positive' ? '正面' : '负面')).join('、')} Prompt 路径上` : ''
+  if (inj.kind === 'trigger_toggle') {
+    const groups = inj.groups ?? []
+    const on = groups.filter((g) => g.active).length
+    if (inj.disabled) return `TriggerWord Toggle 节点 ${nodeLabel(nid, n)}${where}：已设置由 ComfyEngi 禁止注入，提交时写入工作流副本，节点输出空文本；触发词由角色和服装 Prompt 负责。`
+    if (!inj.polarity.length) return `TriggerWord Toggle 节点 ${nodeLabel(nid, n)} 没有连接到 Prompt 路径，不影响 Prompt。`
+    return `检测到 TriggerWord Toggle 节点 ${nodeLabel(nid, n)}${where}。该节点可能额外添加 LoRA metadata 中的触发词，当前 ComfyEngi 的角色和服装 Prompt 不一定包含此节点的实际输出；如果同时启用了多套服装触发词，可能造成服装特征混合。工作流保存的开关状态：${on} / ${groups.length} 组启用${inj.source_node ? `；另外，只要 LoRA #${inj.source_node} 实际加载的 LoRA 与保存工作流时不同，节点会绕过开关，输出这些 LoRA 的全部触发词` : ''}。可以在工作流检查中禁止它注入。`
+  }
+  if (inj.kind === 'trigger_unknown') return `检测到未受控制的 Prompt 注入节点 ${nodeLabel(nid, n)}${where}：看起来是触发词节点，但结构未经验证，ComfyEngi 不会修改它，也无法知道它的实际输出。如需排除它的影响，请在 ComfyUI 中调整后重新导出工作流。`
+  if (inj.kind === 'loader_text') return `节点 ${nodeLabel(nid, n)} 的文本输出接入了 Prompt${where}：未受控制的 Prompt 注入，它的内容不包含在 ComfyEngi 拼接的 Prompt 中。`
+  if (inj.kind === 'unmapped_text') return `节点 ${nodeLabel(nid, n)}${where}，它的文本没有映射，会保持工作流原值并进入 Prompt。`
+  return `节点 ${nodeLabel(nid, n)}${where}，无法确定它输出的文本：未受控制的 Prompt 注入节点，请在 ComfyUI 中确认。`
+}
+
+/**
+ * 找出 Prompt 中不受 ComfyEngi 控制的文本来源：从采样器的 positive / negative 沿实际连接回溯（字符串拼接等中间节点会被穿过），
+ * 再加上工作流中其他触发词节点（标记为不在路径上）。originalApi：工作流保存时的结构，用于判断本次 LoRA 配置是否让插件绕过开关。
+ */
+export function findPromptInjectors(api: ApiWorkflow, mapping: MappingEntry[], originalApi?: ApiWorkflow): PromptInjector[] {
+  const mapped = new Set(mapping.filter((m) => PROMPT_SOURCES.includes(m.source)).map((m) => String(m.node)))
+  const disabled = new Set(mapping.filter((m) => m.source === TRIGGER_DISABLE).map((m) => String(m.node)))
+  const hits = new Map<string, { kind: PromptInjector['kind']; polarity: Set<'positive' | 'negative'> }>()
+  const hit = (nid: string, kind: PromptInjector['kind'], pol?: 'positive' | 'negative') => {
+    const h = hits.get(nid) ?? { kind, polarity: new Set<'positive' | 'negative'>() }
+    if (pol) h.polarity.add(pol)
+    hits.set(nid, h)
+  }
+  const isTrigger = (n: ApiNode) => n.class_type === LM_TRIGGER_TOGGLE || /trigger/i.test(n.class_type)
+  const triggerKind = (n: ApiNode): PromptInjector['kind'] => (toggleStructure(n) ? 'trigger_toggle' : 'trigger_unknown')
+  const walk = (nid: string, pol: 'positive' | 'negative', seen: Set<string>) => {
+    if (seen.has(nid)) return
+    seen.add(nid)
+    const n = api[nid]
+    if (!n) return
+    const i = n.inputs ?? {}
+    if (isTrigger(n)) return hit(nid, triggerKind(n), pol)
+    if (isLink(i.model) || isLink(i.clip)) return hit(nid, 'loader_text', pol)
+    const links = Object.entries(i).filter(([k, v]) => isLink(v) && !NON_TEXT_LINKS.test(k))
+    const texts = TEXT_FIELDS.filter((f) => typeof i[f] === 'string')
+    if (!mapped.has(nid)) {
+      if (texts.some((f) => String(i[f]).trim())) hit(nid, 'unmapped_text', pol)
+      else if (!links.length && !texts.length) hit(nid, 'unknown_text', pol)
+    }
+    for (const [, v] of links) walk((v as [string, number])[0], pol, seen)
+  }
+  for (const s of findSamplers(api)) {
+    for (const pol of ['positive', 'negative'] as const) {
+      for (const enc of encodersOf(api, api[s].inputs[pol] as [string, number])) {
+        const ei = api[enc].inputs
+        const field = TEXT_FIELDS.find((f) => f in ei)!
+        if (isLink(ei[field])) walk(ei[field][0], pol, new Set())
+        else if (!mapped.has(enc) && String(ei[field] ?? '').trim()) hit(enc, 'unmapped_text', pol)
+      }
+    }
+  }
+  for (const [nid, n] of Object.entries(api)) if (isTrigger(n) && !hits.has(nid)) hit(nid, triggerKind(n))
+  return sortNodeIds([...hits.keys()]).map((nid) => {
+    const n = api[nid]
+    const h = hits.get(nid)!
+    const st = toggleStructure(n)
+    const inj: Omit<PromptInjector, 'message'> = {
+      node: nid,
+      class_type: n.class_type,
+      title: nodeTitle(n),
+      kind: h.kind,
+      polarity: [...h.polarity],
+      controllable: !!st,
+      disabled: !!st && disabled.has(nid),
+      ...(st ? { groups: st.groups, source_node: st.source_node } : {}),
+    }
+    if (st?.source_node && originalApi && !inj.disabled) inj.bypass = activeLoraNames(api[st.source_node]).join('\n') !== activeLoraNames(originalApi[st.source_node]).join('\n')
+    return { ...inj, message: injectorMessage(nid, n, inj) }
+  })
+}
+
+/** 这些写入值是否改变了 LoRA Loader 实际加载的 LoRA（插件的 TriggerWord Toggle 会因此绕过开关状态） */
+export function loaderChangedBy(api: ApiWorkflow, inputs: InputValue[], loader: string): boolean {
+  const orig = api[loader]
+  if (!orig) return false
+  const next: ApiNode = { ...orig, inputs: { ...orig.inputs } }
+  for (const x of inputs) if (String(x.node) === loader && x.value !== null && x.value !== undefined) next.inputs[x.input] = x.value
+  return activeLoraNames(next).join('\n') !== activeLoraNames(orig).join('\n')
+}
+
+/** 比较入队时冻结的工作流与实际提交的工作流：列出所有不同的输入（不只是常见字段），其余节点原样列出 */
+export function diffWorkflow(orig: ApiWorkflow, graph: ApiWorkflow, inputs: InputValue[] = []): { changes: InputChange[]; unchanged: { node: string; class_type: string; title: string; inputs: Record<string, unknown> }[] } {
+  const changes: InputChange[] = []
+  const unchanged: { node: string; class_type: string; title: string; inputs: Record<string, unknown> }[] = []
+  const eq = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b)
+  for (const nid of sortNodeIds([...new Set([...Object.keys(orig), ...Object.keys(graph)])])) {
+    const a = orig[nid]?.inputs ?? {}
+    const b = graph[nid]?.inputs ?? {}
+    const n = graph[nid] ?? orig[nid]
+    const before = changes.length
+    for (const k of new Set([...Object.keys(a), ...Object.keys(b)])) {
+      if (eq(a[k], b[k])) continue
+      changes.push({ node: nid, class_type: n.class_type, title: nodeTitle(n), input: k, before: a[k] ?? null, after: b[k] ?? null, source: inputs.find((x) => String(x.node) === nid && x.input === k && x.value !== null && x.value !== undefined)?.source })
+    }
+    if (changes.length === before) unchanged.push({ node: nid, class_type: n.class_type, title: nodeTitle(n), inputs: b })
+  }
+  return { changes, unchanged }
+}
+
+/** 工作流实际使用的生成尺寸：第一个空 latent 节点（数值连接自整数节点时读取上游） */
+export function generationSize(api: ApiWorkflow): { node: string; class_type: string; width: unknown; height: unknown } | null {
+  const g = findLatentGenerators(api)[0]
+  if (!g) return null
+  const read = (v: unknown) => {
+    if (!isLink(v)) return v
+    const ui = api[v[0]]?.inputs ?? {}
+    const f = INT_FIELDS.find((x) => Number.isInteger(ui[x]))
+    return f ? ui[f] : `← 连接自节点 ${v[0]}`
+  }
+  return { node: g, class_type: api[g].class_type, width: read(api[g].inputs.width), height: read(api[g].inputs.height) }
+}
+
+/** 超过 JavaScript 安全整数范围的输入：导入时 JSON 解析已经丢失精度，提交的值会与原文件不同 */
+export function unsafeIntegers(api: ApiWorkflow): { node: string; class_type: string; input: string; value: number }[] {
+  return sortNodeIds(Object.keys(api)).flatMap((nid) =>
+    Object.entries(api[nid].inputs ?? {})
+      .filter(([, v]) => Number.isInteger(v) && !Number.isSafeInteger(v))
+      .map(([input, v]) => ({ node: nid, class_type: api[nid].class_type, input, value: v as number })),
+  )
+}
+
 export function analyzeWorkflow(api: ApiWorkflow): WorkflowAnalysis {
   const suggestions: Suggestion[] = []
   const notes: string[] = []
@@ -181,8 +309,7 @@ export function analyzeWorkflow(api: ApiWorkflow): WorkflowAnalysis {
       })
     }
   }
-  for (const t of triggers)
-    notes.push(`检测到触发词节点 ${label(api, t)}：它会把 LoRA 的触发词拼入正面 Prompt。本软件不会修改它；如果角色基础 Prompt 中也写了触发词，可能会重复。`)
+  for (const inj of findPromptInjectors(api, [])) if (inj.kind === 'trigger_toggle' || inj.kind === 'trigger_unknown' || inj.kind === 'loader_text') notes.push(inj.message)
   if (Object.values(api).some((n) => KNOWN_TEXT_SOURCES[n.class_type]))
     notes.push('ImpactWildcardProcessor 通过 API 运行时执行 populated_text（populate 模式只在网页界面中生效），因此会同时写入 populated_text 与 wildcard_text；Prompt 中的通配符语法仍会由该节点按其 Seed 处理。')
 
@@ -247,6 +374,7 @@ export function analyzeWorkflow(api: ApiWorkflow): WorkflowAnalysis {
     })
   }
   analyzeSizes(api, cons, suggestions, notes)
+  for (const u of unsafeIntegers(api)) notes.push(`节点 #${u.node}（${u.class_type}）的 ${u.input} = ${u.value} 超过了 ComfyEngi 能精确保存的整数范围，提交的值可能与原文件不同；如果是 Seed，请映射它或改用较小的值。`)
   return { suggestions, notes }
 }
 

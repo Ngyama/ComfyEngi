@@ -173,7 +173,7 @@ export function PlanPreviewDialog({ open, onOpenChange, plan, onEnqueue, taskId 
           <DialogTitle>生成计划预览</DialogTitle>
           <DialogDescription>
             共 {units.length} 张{nStory ? `（剧情 ${nStory} → 动作 ${units.length - nStory}）` : ''}
-            {plan?.workflow ? ` · 工作流：${plan.workflow.name}` : ''}。这里显示的 Prompt、Seed 与写入节点的值就是实际提交给 ComfyUI 的内容。
+            {plan?.workflow ? ` · 工作流：${plan.workflow.name}` : ''}。这里按当前素材计算，入队时冻结；入队后实际提交的内容可在运行记录的「执行详情」中查看。
           </DialogDescription>
         </DialogHeader>
         {plan && (plan.errors.length > 0 || plan.warnings.length > 0) && (
@@ -254,11 +254,11 @@ export function PlanPreviewDialog({ open, onOpenChange, plan, onEnqueue, taskId 
                   </div>
                 )}
                 <div>
-                  <FieldLabel right={<CopyButton text={u.positive} label="复制正面" />}>最终正面 Prompt</FieldLabel>
+                  <FieldLabel right={<CopyButton text={u.positive} label="复制正面" />}>写入工作流的正面 Prompt</FieldLabel>
                   <pre className="rounded-xl bg-inset p-3 font-mono text-[12px] leading-relaxed whitespace-pre-wrap select-text">{u.positive || '（空）'}</pre>
                 </div>
                 <div>
-                  <FieldLabel right={<CopyButton text={u.negative} label="复制负面" />}>最终负面 Prompt</FieldLabel>
+                  <FieldLabel right={<CopyButton text={u.negative} label="复制负面" />}>写入工作流的负面 Prompt</FieldLabel>
                   <pre className="rounded-xl bg-inset p-3 font-mono text-[12px] leading-relaxed whitespace-pre-wrap select-text">{u.negative || '（空）'}</pre>
                 </div>
                 {u.inputs && (
@@ -302,7 +302,7 @@ export function PlanPreviewDialog({ open, onOpenChange, plan, onEnqueue, taskId 
   )
 }
 
-/** 某一张图实际要提交给 ComfyUI 的完整工作流 JSON（由主进程用与执行相同的逻辑构建） */
+/** 入队前预览：某一张图将要提交的完整工作流 JSON（由主进程用与执行相同的逻辑构建） */
 export function FinalWorkflowDialog({ taskId, index, count, onIndex, onClose }: { taskId: number; index: number; count: number; onIndex: (i: number) => void; onClose: () => void }) {
   const [res, setRes] = useState<Awaited<ReturnType<(typeof api)['plan.finalWorkflow']>> | null>(null)
   const [err, setErr] = useState('')
@@ -324,7 +324,7 @@ export function FinalWorkflowDialog({ taskId, index, count, onIndex, onClose }: 
         <DialogHeader className="shrink-0">
           <DialogTitle>最终工作流 JSON</DialogTitle>
           <DialogDescription>
-            第 {index + 1} / {count} 张{res ? ` · ${res.label} · Seed ${res.seed} · 工作流「${res.workflow}」` : ''}。这是应用 Prompt、Seed、LoRA 等配置后实际提交给 ComfyUI 的 API 工作流（与执行时使用同一构建逻辑）。
+            第 {index + 1} / {count} 张{res ? ` · ${res.label} · Seed ${res.seed} · 工作流「${res.workflow}」` : ''}。这是应用 Prompt、Seed、LoRA 等配置后将要提交给 ComfyUI 的 API 工作流预览（与执行时使用同一构建逻辑，按当前素材计算）。入队后实际提交的内容见运行记录的「执行详情」。
           </DialogDescription>
         </DialogHeader>
         {res && res.errors.length > 0 && <div className="shrink-0 rounded-lg bg-destructive/10 px-3 py-2 text-[11.5px] text-destructive">计划还有 {res.errors.length} 个问题，修正前不能入队：{res.errors[0]}</div>}

@@ -460,6 +460,105 @@ export interface OutputFile {
   saved?: string
   /** 复制到任务输出目录失败的原因 */
   save_error?: string
+  /** 产生这个文件的 ComfyUI Prompt ID */
+  prompt_id?: string
+  /** final：最终输出（复制到任务目录）；intermediate：其他保存节点，不复制；preview：临时预览（temp） */
+  role?: 'final' | 'intermediate' | 'preview'
+  /** 从 ComfyUI 下载的原始字节与本地保存文件的 SHA-256 */
+  source_sha256?: string
+  saved_sha256?: string
+  /** 输出目录中已有内容完全相同的文件，直接关联它，没有另存一份（例如程序重启后继续复制） */
+  reused?: boolean
+  /** 另一个输出节点报告了相同的 subfolder 与文件名：两条记录指向同一个文件 */
+  same_file_as_node?: string
+  /** 从 PNG 文件头读到的实际宽高 */
+  image_width?: number
+  image_height?: number
+}
+
+/**
+ * 一次提交尝试的状态。构建、提交、执行是不同阶段：
+ * built 已构建未确认提交；build_failed 无法构建；rejected ComfyUI 拒绝（参数校验失败）；submit_unknown 提交时连接异常，不确定是否收到；
+ * submitted 已被 ComfyUI 接受；success / failed / interrupted 执行结果；withdrawn 从队列撤回；lost 在 ComfyUI 中找不到；timeout 等待超时
+ */
+export type AttemptState = 'built' | 'build_failed' | 'rejected' | 'submit_unknown' | 'submitted' | 'success' | 'failed' | 'interrupted' | 'withdrawn' | 'lost' | 'timeout'
+
+/** 一次提交尝试的记录（不含请求内容；完整 JSON 单独读取，列表不加载） */
+export interface ExecutionAttempt {
+  id: number
+  unit_id: number
+  run_id: number
+  attempt: number
+  state: AttemptState
+  prompt_id: string | null
+  client_id: string | null
+  body_sha256: string
+  /** ComfyUI 的响应（接受时的 number、拒绝时的错误详情） */
+  response: string
+  error: string
+  /** ComfyUI 历史记录中保存的工作流与提交快照是否相同（null：没有历史记录或历史中没有工作流） */
+  comfy_match: number | null
+  built_at: number | null
+  submitted_at: number | null
+  finished_at: number | null
+}
+
+/** 实际提交的工作流与入队时冻结的原始工作流之间的一处差异 */
+export interface InputChange {
+  node: string
+  class_type: string
+  title: string
+  input: string
+  before: unknown
+  after: unknown
+  /** 写入来源（映射来源名）；没有时表示没有对应的冻结写入值 */
+  source?: string
+}
+
+export interface PromptInjector {
+  node: string
+  class_type: string
+  title: string
+  /** trigger_toggle：已验证结构的 LoraManager 节点；trigger_unknown：无法确定结构的触发词节点；loader_text：LoRA Loader 的文本输出接入 Prompt；unmapped_text：路径上没有映射的文本；unknown_text：无法确定内容的文本来源 */
+  kind: 'trigger_toggle' | 'trigger_unknown' | 'loader_text' | 'unmapped_text' | 'unknown_text'
+  polarity: ('positive' | 'negative')[]
+  /** 可以由 ComfyEngi 安全禁用（只有已验证结构的节点） */
+  controllable: boolean
+  /** 工作流已设置由 ComfyEngi 禁用，提交时写入 */
+  disabled: boolean
+  /** 节点的开关状态（触发词组） */
+  groups?: { text: string; active: boolean }[]
+  /** trigger_words 输入连接自的节点 */
+  source_node?: string
+  /** 本次 LoRA 配置与保存工作流时不同：插件会绕过开关，输出全部触发词 */
+  bypass?: boolean
+  message: string
+}
+
+/** 一次提交的说明：全部来自提交快照与入队时冻结的工作流，不读取当前素材库 */
+export interface ExecutionInspection {
+  attempt: ExecutionAttempt
+  /** 实际提交的 API 工作流（格式化的 JSON 文本） */
+  graph_json: string | null
+  /** 快照内容与记录的 SHA-256 一致 */
+  intact: boolean
+  changes: InputChange[]
+  unchanged: { node: string; class_type: string; title: string; inputs: Record<string, unknown> }[]
+  injectors: PromptInjector[]
+  loras: { node: string; class_type: string; items: { name: string; strength: unknown; clip?: unknown; active: boolean }[] }[]
+  seeds: { node: string; class_type: string; input: string; value: number; changed: boolean }[]
+  size: { node: string; class_type: string; width: unknown; height: unknown } | null
+}
+
+export interface ExecutionDetail {
+  unit: RunUnit
+  run: { id: number; task_id: number | null; name: string; workflow_name: string; created_at: number | null } | null
+  attempts: ExecutionAttempt[]
+  /** 预览显示的输出在 outputs 中的序号，以及实际读取的文件 */
+  preview_index: number
+  preview_path: string
+  /** 本地文件现在的内容是否仍与保存时的 SHA-256 相同（与 outputs 对应；null：没有可比较的文件） */
+  file_checks: (boolean | null)[]
 }
 
 export interface RunUnit {

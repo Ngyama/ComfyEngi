@@ -7,6 +7,7 @@ import { expandTask, normalizeTaskData, PlanLibrary } from '@shared/planner'
 import { MODULE_LABELS } from '@shared/prompt'
 import type { ApiWorkflow, Lora, MappingEntry, PlanUnit, Settings, Task, TaskData, Workflow } from '@shared/types'
 import { effectiveLoraConfig, loraConfigInputs, loraConfigProblems, type CharRole, type RoleState } from '@shared/lora-config'
+import { findPromptInjectors, loaderChangedBy } from '@shared/workflow-analysis'
 import type { Store } from './store'
 
 export function loadPlanLibrary(store: Store): PlanLibrary {
@@ -175,6 +176,13 @@ export function planForTask(store: Store, task: Task, settings?: Settings, dateS
     for (const [lvl, msg] of msgs) (lvl === 'error' ? errors : warnings).push(`工作流「${wf.name}」${msg}`)
     if (!msgs.some(([l]) => l === 'error')) {
       for (const u of units) u.inputs = [...mappingValues(u, wf.mapping, settings, dateStr, wf.api_json), ...loraConfigInputs(wf.api_json ?? {}, wf.mapping ?? [], cfg, rolesOf(u))]
+      // Prompt 路径上不受控制的节点：明确提示（用户可能有意使用触发词节点，只提示不阻止）
+      for (const inj of findPromptInjectors(wf.api_json ?? {}, wf.mapping ?? [])) {
+        if (!inj.polarity.length || inj.disabled) continue
+        once(warnings, `工作流「${wf.name}」${inj.message}`)
+        if (inj.source_node && units.some((u) => loaderChangedBy(wf.api_json, u.inputs ?? [], inj.source_node!)))
+          once(warnings, `本任务的 LoRA 配置改变了 #${inj.source_node} 实际加载的 LoRA：TriggerWord Toggle #${inj.node} 会绕过工作流中保存的开关状态，输出这些 LoRA 的全部触发词（例如同一 LoRA 的多套服装），可能造成服装特征混合。如不需要，请在工作流检查中禁止它注入`)
+      }
       // 任务的文件名前缀：写入工作流映射的输出文件名前缀（ComfyUI 在它自己的 output 目录下按前缀保存）
       const prefix = data.output?.prefix?.trim()
       if (prefix) {
@@ -214,8 +222,8 @@ export function enqueueTask(store: Store, task: Task, settings?: Settings): { ru
 }
 
 /**
- * 某一张图实际要提交给 ComfyUI 的完整工作流 JSON（查看 / 导出用）。
- * 与执行完全相同：入队时冻结 planForTask 的 inputs，执行时 applyInputs(工作流, inputs)。
+ * 入队前预览：按当前素材与工作流计算某一张图将要提交的工作流 JSON（构建方式与执行相同：applyInputs(工作流, inputs)）。
+ * 入队后实际提交的内容以提交快照为准（运行记录的「执行详情」），不要用这个函数查看历史。
  */
 export function finalWorkflow(store: Store, task: Task, index: number): { json: ApiWorkflow; index: number; count: number; label: string; seed: number; errors: string[]; workflow: string } {
   const plan = planForTask(store, task)

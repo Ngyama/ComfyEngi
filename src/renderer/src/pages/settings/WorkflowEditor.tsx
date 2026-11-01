@@ -1,12 +1,13 @@
 // 工作流节点输入映射编辑：只写入这里列出的输入，工作流其他部分保持原样。
 
 import { useEffect, useMemo, useState } from 'react'
-import { AlertCircle, CheckCircle2, ChevronDown, ChevronRight, Globe, Plus, RefreshCw, Sparkles, Star, Trash2, Wand2, X } from 'lucide-react'
+import { AlertCircle, CheckCircle2, ChevronDown, ChevronRight, Globe, Plus, RefreshCw, ShieldCheck, Sparkles, Star, Trash2, Wand2, X } from 'lucide-react'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
+import { Switch } from '@/components/ui/switch'
 import { FieldLabel, SearchBox, TextInput } from '@/components/common'
 import { api, call } from '@/lib/api'
 import { confirm, reloadLib, useLib } from '@/lib/stores'
@@ -14,6 +15,7 @@ import { cn } from '@/lib/utils'
 import {
   DEFAULT_PREFIX_TEMPLATE,
   describeValue,
+  finalOutputNodes,
   guessInput,
   isLink,
   newEntry,
@@ -26,11 +28,12 @@ import {
   parseLoraSource,
   parseStack,
   sortNodeIds,
+  TRIGGER_DISABLE,
   validateMapping,
 } from '@shared/mapping'
-import { analyzeWorkflow, mergeMapping, type Suggestion, type WorkflowAnalysis } from '@shared/workflow-analysis'
+import { analyzeWorkflow, findPromptInjectors, mergeMapping, unsafeIntegers, type Suggestion, type WorkflowAnalysis } from '@shared/workflow-analysis'
 import { MODULES, MODULE_LABELS } from '@shared/prompt'
-import type { MappingEntry, Message, Workflow } from '@shared/types'
+import type { ApiWorkflow, InputValue, MappingEntry, Message, Workflow } from '@shared/types'
 
 export function Select({ value, onChange, options, className }: { value: string; onChange: (v: string) => void; options: [string, string][]; className?: string }) {
   return (
@@ -122,6 +125,78 @@ function SuggestDialog({ open, onOpenChange, analysis, onApply }: { open: boolea
   )
 }
 
+/** 工作流检查：哪些节点不受 ComfyEngi 的 Prompt 控制、最终输出来自哪里。不修改原始工作流，禁用只写入提交时的副本 */
+function CheckDialog({ open, onOpenChange, api: wfApi, mapping, onMapping }: { open: boolean; onOpenChange: (o: boolean) => void; api: ApiWorkflow; mapping: MappingEntry[]; onMapping: (m: MappingEntry[]) => void }) {
+  const injectors = findPromptInjectors(wfApi, mapping)
+  const finals = finalOutputNodes(mapping.filter((m) => m.source === 'filename_prefix') as unknown as InputValue[], wfApi)
+  const saves = sortNodeIds(Object.keys(wfApi)).filter((n) => typeof wfApi[n].inputs?.filename_prefix === 'string')
+  const unsafe = unsafeIntegers(wfApi)
+  const setDisabled = (node: string, on: boolean) => onMapping(on ? [...mapping, newEntry(TRIGGER_DISABLE, node, 'toggle_trigger_words')] : mapping.filter((m) => !(m.source === TRIGGER_DISABLE && m.node === node)))
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="flex max-h-[calc(100dvh-2rem)] flex-col sm:max-w-2xl" data-testid="workflow-check">
+        <DialogHeader className="shrink-0">
+          <DialogTitle>工作流检查</DialogTitle>
+          <DialogDescription>ComfyEngi 只控制映射的输入。下面的节点不受角色、服装 Prompt 控制；导入的工作流文件不会被修改。</DialogDescription>
+        </DialogHeader>
+        <div className="min-h-0 flex-1 space-y-4 overflow-y-auto pr-1">
+          <section>
+            <FieldLabel>Prompt 注入节点</FieldLabel>
+            {!injectors.length && <div className="text-xs text-muted-foreground">Prompt 路径上没有发现未受控制的文本来源。</div>}
+            <div className="space-y-2">
+              {injectors.map((inj) => (
+                <div key={inj.node} className="rounded-xl bg-tint/[0.03] p-3 ring-1 ring-tint/[0.08]" data-testid="injector" data-node={inj.node} data-kind={inj.kind}>
+                  <div className="text-xs leading-relaxed">{inj.message}</div>
+                  {inj.groups && inj.groups.length > 0 && (
+                    <div className="mt-2 space-y-0.5 font-mono text-[10.5px] text-muted-foreground select-text">
+                      {inj.groups.map((g, i) => (
+                        <div key={i}>{g.active ? '● 启用' : '○ 关闭'} {g.text}</div>
+                      ))}
+                    </div>
+                  )}
+                  {inj.controllable && inj.polarity.length > 0 && (
+                    <label className="mt-2.5 flex cursor-pointer items-start gap-2.5 rounded-lg bg-tint/[0.03] p-2.5 text-xs">
+                      <Switch className="mt-0.5" checked={inj.disabled} onCheckedChange={(v) => setDisabled(inj.node, !!v)} data-testid="disable-injector" />
+                      <span className="leading-relaxed">
+                        <span className="font-medium">禁止该节点自动注入触发词，由 ComfyEngi 的角色和服装 Prompt 负责触发词管理</span>
+                        <br />
+                        <span className="text-muted-foreground">提交时在工作流副本中把所有组设为关闭，orinalMessage 写空文本{inj.source_node ? `，并把这个节点的 trigger_words 输入（原本连接自 #${inj.source_node}）写为空文本：否则 LoRA 变化时插件会绕过开关。#${inj.source_node} 仍正常加载 LoRA` : ''}。这个节点的输出连接和其他节点不变，写入内容可在执行详情中查看。</span>
+                      </span>
+                    </label>
+                  )}
+                  {!inj.controllable && (inj.kind === 'trigger_unknown' || inj.kind === 'loader_text' || inj.kind === 'unknown_text') && <div className="mt-2 text-[11px] text-muted-foreground">ComfyEngi 不会修改这个节点。如需排除影响，请在 ComfyUI 中调整后导出 API 工作流，再用「更新 JSON」导入。</div>}
+                </div>
+              ))}
+            </div>
+          </section>
+          <section>
+            <FieldLabel>保存节点</FieldLabel>
+            <div className="space-y-1 text-xs">
+              {saves.map((n) => (
+                <div key={n} className="select-text" data-testid="check-save" data-node={n}>
+                  #{n} {wfApi[n].class_type}：<span className={finals.has(n) ? 'text-success' : 'text-muted-foreground'}>{finals.has(n) ? '最终输出，完成后复制到任务输出目录' : '不复制'}</span>
+                </div>
+              ))}
+              {!saves.length && <div className="text-muted-foreground">没有识别到带 filename_prefix 的保存节点：ComfyUI 返回的所有 output 文件都会复制。</div>}
+              {finals.size > 1 && <div className="text-warning">有 {finals.size} 个最终输出，每个都会复制并分别记录，预览显示其中第一个。可以在映射中只为需要的节点设置「输出文件前缀」。</div>}
+            </div>
+          </section>
+          {unsafe.length > 0 && (
+            <section>
+              <FieldLabel>无法精确保存的数值</FieldLabel>
+              <div className="space-y-1 text-xs text-warning">
+                {unsafe.map((u) => (
+                  <div key={`${u.node}.${u.input}`}>#{u.node} {u.class_type}.{u.input} = {u.value}：超过安全整数范围，提交的值可能与原文件不同。</div>
+                ))}
+              </div>
+            </section>
+          )}
+        </div>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
 function ModulesPicker({ value, onChange }: { value: string[]; onChange: (v: string[]) => void }) {
   return (
     <Popover>
@@ -151,6 +226,7 @@ export function WorkflowEditor({ id, onDeleted }: { id: number; onDeleted: () =>
   const [suggest, setSuggest] = useState<WorkflowAnalysis | null>(null)
   const [online, setOnline] = useState<Message[] | null>(null)
   const [checking, setChecking] = useState(false)
+  const [inspect, setInspect] = useState(false)
   useEffect(() => {
     setOnline(null)
     void api['workflows.get'](id).then(setWf)
@@ -192,6 +268,7 @@ export function WorkflowEditor({ id, onDeleted }: { id: number; onDeleted: () =>
   const nodeOptions: [string, string][] = [['', '选择节点'], ...ids.map((nid) => [nid, `${nid} · ${api_json[nid].class_type}${nodeTitle(api_json[nid]) !== api_json[nid].class_type ? ` · ${nodeTitle(api_json[nid])}` : ''}`] as [string, string])]
   const shownIds = ids.filter((nid) => !q || `${nid} ${api_json[nid].class_type} ${nodeTitle(api_json[nid])} ${Object.keys(api_json[nid].inputs ?? {}).join(' ')}`.toLowerCase().includes(q.toLowerCase()))
   const allMsgs = online ?? msgs
+  const openInjectors = findPromptInjectors(api_json, mapping).filter((i) => i.polarity.length && !i.disabled && (i.controllable || i.kind !== 'unmapped_text'))
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
@@ -216,6 +293,9 @@ export function WorkflowEditor({ id, onDeleted }: { id: number; onDeleted: () =>
           }}
         >
           <Star className={cn(isDefault && 'fill-current')} /> {isDefault ? '默认工作流' : '设为默认'}
+        </Button>
+        <Button variant="ghost" size="sm" onClick={() => setInspect(true)} data-testid="workflow-check-open">
+          <ShieldCheck /> 检查
         </Button>
         <Button
           variant="ghost"
@@ -249,6 +329,12 @@ export function WorkflowEditor({ id, onDeleted }: { id: number; onDeleted: () =>
         </Button>
       </div>
 
+      {openInjectors.length > 0 && (
+        <button type="button" onClick={() => setInspect(true)} className="mb-3 flex w-full items-start gap-1.5 rounded-lg bg-warning/[0.07] p-2.5 text-left text-[11.5px] leading-relaxed text-warning hover:bg-warning/[0.12]" data-testid="injector-banner">
+          <AlertCircle className="mt-0.5 size-3.5 shrink-0" />
+          <span>Prompt 路径上有不受 ComfyEngi 控制的节点：{openInjectors.map((i) => `#${i.node} ${i.class_type}`).join('、')}。点击查看并处理。</span>
+        </button>
+      )}
       <div className="flex min-h-0 flex-1 gap-4">
         {/* 映射 */}
         <div className="flex min-w-0 flex-1 flex-col">
@@ -278,6 +364,7 @@ export function WorkflowEditor({ id, onDeleted }: { id: number; onDeleted: () =>
           </div>
           <div className="min-h-0 flex-1 space-y-2 overflow-y-auto pr-1">
             {mapping.map((e, i) => {
+              if (e.source === TRIGGER_DISABLE) return null // 在工作流检查中设置
               const node = api_json[e.node]
               const inputs: [string, string][] = Object.entries(node?.inputs ?? {})
                 .filter(([, v]) => !isLink(v))
@@ -329,7 +416,7 @@ export function WorkflowEditor({ id, onDeleted }: { id: number; onDeleted: () =>
                 </div>
               )
             })}
-            {!mapping.length && (
+            {!mapping.some((e) => e.source !== TRIGGER_DISABLE) && (
               <div className="rounded-xl border border-dashed border-tint/[0.16] p-6 text-center text-xs leading-relaxed text-muted-foreground">
                 还没有映射。点击「自动识别」查看候选，或在右侧节点列表中点击某个输入添加。
               </div>
@@ -404,6 +491,7 @@ export function WorkflowEditor({ id, onDeleted }: { id: number; onDeleted: () =>
         analysis={suggest}
         onApply={(entries) => void saveMapping(mergeMapping(mapping, entries))}
       />
+      <CheckDialog open={inspect} onOpenChange={setInspect} api={api_json} mapping={mapping} onMapping={(m) => void saveMapping(m)} />
     </div>
   )
 }

@@ -3,17 +3,57 @@
 // - 停止：撤回本软件尚在 ComfyUI 排队中的任务；正在生成的那张完成并记录后停止
 // - 强制中断：只中断本软件提交且正在执行的那一张；被中断的图片继续时重新生成
 // - 重启核对：提交前先写入 prompt_id，重启后向 ComfyUI 核对，已完成的补记录，丢失的才重新提交
+// - 提交快照：发送前把序列化好的请求写入 run_attempts，发送的就是这个字符串；重试、恢复都从冻结的工作流与写入值构建，内容不变
 // 扩展点：将来的「自动筛图」可在 record() 标记 done 之前插入检查步骤。
 
-import { randomUUID } from 'node:crypto'
-import { mkdir, writeFile } from 'node:fs/promises'
+import { createHash, randomUUID } from 'node:crypto'
+import { mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
-import { applyInputs, ComfyError, extractOutputs, historyError, historyInterrupted } from '@shared/mapping'
-import type { OutputFile, RunnerEvent, RunnerState, RunnerStatus, RunUnit, Settings } from '@shared/types'
-import { ComfyClient, ComfyHTTPError, EventStream, type ComfyApi, type EventSource, type HistoryEntry } from './comfy-client'
+import { applyInputs, ComfyError, extractOutputs, finalOutputNodes, historyError, historyInterrupted } from '@shared/mapping'
+import type { AttemptState, ExecutionAttempt, OutputFile, RunnerEvent, RunnerState, RunnerStatus, RunUnit, Settings } from '@shared/types'
+import { ComfyClient, ComfyHTTPError, EventStream, promptBody, type ComfyApi, type EventSource, type HistoryEntry } from './comfy-client'
 import type { Store } from './store'
 
 type Result = 'done' | 'failed' | 'withdrawn' | 'requeued' | 'interrupted' | 'uncertain'
+
+export const sha256 = (data: Uint8Array | string) => createHash('sha256').update(data).digest('hex')
+
+/**
+ * 把下载到的字节保存为新文件并校验：不覆盖已有文件（同名时追加 (2)、(3)…）；已有文件内容完全相同时直接关联它（程序重启后继续复制不会多出一份）；
+ * 写入后读回文件计算 SHA-256，与下载内容不一致时删除这个新文件并报错。
+ */
+export async function saveVerified(dir: string, name: string, data: Uint8Array, readBack: (p: string) => Promise<Uint8Array> = readFile): Promise<{ path: string; source_sha256: string; saved_sha256: string; reused: boolean }> {
+  const source = sha256(data)
+  const dot = name.lastIndexOf('.')
+  const stem = dot > 0 ? name.slice(0, dot) : name
+  const ext = dot > 0 ? name.slice(dot) : ''
+  for (let n = 1; ; n++) {
+    const p = join(dir, n > 1 ? `${stem} (${n})${ext}` : name)
+    try {
+      await writeFile(p, data, { flag: 'wx' })
+    } catch (e) {
+      if ((e as NodeJS.ErrnoException).code !== 'EEXIST' || n > 9999) throw e
+      if (sha256(await readFile(p)) === source) return { path: p, source_sha256: source, saved_sha256: source, reused: true }
+      continue
+    }
+    const saved = sha256(await readBack(p))
+    if (saved !== source) {
+      await rm(p, { force: true })
+      throw new Error(`保存后的文件与下载内容不一致（下载 ${source.slice(0, 12)}…，保存 ${saved.slice(0, 12)}…）`)
+    }
+    return { path: p, source_sha256: source, saved_sha256: saved, reused: false }
+  }
+}
+
+/** 从 PNG 文件头读取宽高；不是 PNG 时返回 null */
+export function pngSize(b: Uint8Array): { width: number; height: number } | null {
+  if (b.length < 24 || b[0] !== 0x89 || b[1] !== 0x50 || b[2] !== 0x4e || b[3] !== 0x47) return null
+  const v = new DataView(b.buffer, b.byteOffset, b.byteLength)
+  return { width: v.getUint32(16), height: v.getUint32(20) }
+}
+
+/** 键排序后序列化：比较两份工作流时不受字段顺序影响 */
+const canonical = (v: unknown): string => JSON.stringify(v, (_, x) => (x && typeof x === 'object' && !Array.isArray(x) ? Object.fromEntries(Object.entries(x as object).sort(([a], [b]) => (a < b ? -1 : 1))) : x))
 
 const num = (s: Settings, key: keyof Settings, def: number) => {
   const v = s[key]
@@ -255,6 +295,7 @@ export class Runner {
     for (const u of this.store.inFlightUnits()) {
       const pid = u.prompt_id
       if (!pid) {
+        this.markAttempt(u, 'lost')
         this.store.updateUnit(u.id, { status: 'pending' })
         continue
       }
@@ -272,9 +313,11 @@ export class Runner {
       } else if (running.includes(pid) || pending.includes(pid)) {
         this.log(`第 ${u.idx + 1} 张仍在 ComfyUI 队列中，继续等待结果`)
         this.store.updateUnit(u.id, { status: 'submitted' })
+        this.markAttempt(u, 'submitted', { submitted_at: Date.now() / 1000 })
         await this.waitUnit(client, u, pid)
       } else {
         this.log(`第 ${u.idx + 1} 张在 ComfyUI 中找不到（可能 ComfyUI 已重启），将重新提交`)
+        this.markAttempt(u, 'lost')
         this.store.updateUnit(u.id, { status: 'pending', prompt_id: null })
       }
       this.onEvent({ kind: 'unit', unitId: u.id, runId: u.run_id })
@@ -289,23 +332,31 @@ export class Runner {
       return 'failed'
     }
     this.sessionRuns.add(unit.run_id)
-    let graph
+    const pid = randomUUID()
+    let body: string
     try {
-      graph = applyInputs(run.workflow_json, unit.inputs ?? [])
+      body = promptBody(applyInputs(run.workflow_json, unit.inputs ?? []), this.clientId, pid)
     } catch (e) {
-      this.store.updateUnit(unit.id, { status: 'failed', error: (e as Error).message, finished_at: Date.now() / 1000 })
+      const error = (e as Error).message
+      this.store.createAttempt(unit, null, 'build_failed', { error, unit: { status: 'failed', error, finished_at: Date.now() / 1000 } })
       this.afterUnit(unit)
       return 'failed'
     }
-    const pid = randomUUID()
-    // 先写入 prompt_id 再提交：即使提交后程序崩溃，重启时也能在 ComfyUI 历史中找到它
-    this.store.updateUnit(unit.id, {
-      status: 'submitting',
+    // 先写入提交快照与 prompt_id 再提交：即使提交后程序崩溃，重启时也能在 ComfyUI 历史中找到它，快照也已保留。
+    // 发送的就是快照中的这个字符串，之后不再有任何修改
+    const attemptId = this.store.createAttempt(unit, body, 'built', {
       prompt_id: pid,
       client_id: this.clientId,
-      submitted_at: Date.now() / 1000,
-      attempts: (unit.attempts ?? 0) + 1,
-      error: '',
+      unit: {
+        status: 'submitting',
+        prompt_id: pid,
+        client_id: this.clientId,
+        submitted_at: Date.now() / 1000,
+        finished_at: null,
+        attempts: (unit.attempts ?? 0) + 1,
+        error: '',
+        outputs: [],
+      },
     })
     this.current = { ...unit, run_name: run.name }
     this.progress = { value: 0, max: 0 }
@@ -315,9 +366,10 @@ export class Runner {
     if (m?.expression) desc += ` · 表情「${m.expression}」`
     let resp: { prompt_id: string }
     try {
-      resp = await client.queuePrompt(graph, this.clientId, pid)
+      resp = await client.postPrompt(body)
     } catch (e) {
       if (e instanceof ComfyHTTPError) {
+        this.store.updateAttempt(attemptId, { state: 'rejected', error: e.message, response: JSON.stringify(e.body ?? null), finished_at: Date.now() / 1000 })
         this.store.updateUnit(unit.id, { status: 'failed', error: e.message, finished_at: Date.now() / 1000 })
         this.log(`${desc} 提交失败：${e.message}`)
         this.afterUnit(unit)
@@ -325,17 +377,34 @@ export class Runner {
       }
       // 网络异常：不确定 ComfyUI 是否已收到，交给核对逻辑处理
       this.log(`${desc} 提交时连接异常：${(e as Error).message}`)
+      this.store.updateAttempt(attemptId, { state: 'submit_unknown', error: (e as Error).message })
       this.store.updateUnit(unit.id, { status: 'submitted' })
       if (await this.ensureComfy(client)) await this.reconcile(client)
       this.afterUnit(unit)
       return 'uncertain'
     }
     const real = resp.prompt_id || pid
+    this.store.updateAttempt(attemptId, { state: 'submitted', prompt_id: real, submitted_at: Date.now() / 1000, response: JSON.stringify(resp) })
     this.store.updateUnit(unit.id, { status: 'submitted', prompt_id: real })
     this.log(`${desc} 已提交（seed ${unit.seed}）`)
     const result = await this.waitUnit(client, unit, real)
     this.afterUnit(unit)
     return result
+  }
+
+  /** 更新这张图最新一次提交的状态（更新前的记录没有快照时不做任何事） */
+  private markAttempt(unit: RunUnit, state: AttemptState, fields: Partial<ExecutionAttempt> = {}) {
+    const a = this.store.latestAttempt(unit.id)
+    if (a) this.store.updateAttempt(a.id, { state, ...(state === 'submitted' ? {} : { finished_at: Date.now() / 1000 }), ...fields })
+  }
+
+  /** 核对 ComfyUI 历史中保存的工作流是否就是提交快照中的工作流 */
+  private comfyMatch(unit: RunUnit, entry: HistoryEntry): number | null {
+    const received = entry.prompt?.[2]
+    const a = this.store.latestAttempt(unit.id)
+    const stored = a && this.store.attemptBody(a.id)
+    if (!received || !stored) return null
+    return canonical(received) === canonical((JSON.parse(stored.body) as { prompt: unknown }).prompt) ? 1 : 0
   }
 
   private afterUnit(unit: RunUnit) {
@@ -365,6 +434,7 @@ export class Runner {
           const [running, pending] = await client.queueIds()
           if (pending.includes(pid)) {
             await client.deleteFromQueue([pid])
+            this.markAttempt(unit, 'withdrawn')
             this.store.updateUnit(unit.id, { status: 'pending', prompt_id: null })
             this.log(`已从 ComfyUI 队列撤回第 ${unit.idx + 1} 张（尚未开始生成）`)
             return 'withdrawn'
@@ -412,6 +482,7 @@ export class Runner {
             if (entry) return await this.record(unit, pid, entry, client)
             if (++lost >= 2) {
               this.log(`第 ${unit.idx + 1} 张在 ComfyUI 中消失（可能 ComfyUI 重启），将重新提交`)
+              this.markAttempt(unit, 'lost')
               this.store.updateUnit(unit.id, { status: 'pending', prompt_id: null })
               return 'requeued'
             }
@@ -428,6 +499,7 @@ export class Runner {
       }
       if (Date.now() > deadline) {
         const msg = `等待超过 ${Math.round(timeout / 60000)} 分钟仍未完成，已标记为失败（ComfyUI 中的任务未被取消）`
+        this.markAttempt(unit, 'timeout', { error: msg })
         this.store.updateUnit(unit.id, { status: 'failed', error: msg, finished_at: Date.now() / 1000 })
         this.log(`第 ${unit.idx + 1} 张：${msg}`)
         return 'failed'
@@ -440,23 +512,27 @@ export class Runner {
    * - ComfyUI 的 filename_prefix 只能指定它自己 output 目录下的子路径，因此由本软件通过 /view 下载后保存，
    *   ComfyUI 本机或远程运行都适用；ComfyUI 中的原文件不删除、不移动
    * - 只复制最终输出：映射了「输出文件前缀」的保存节点；没有该映射时为工作流中没有被其他节点使用的保存节点；预览图（temp）不复制
-   * - 不覆盖已有文件（同名时追加 (2)、(3)…）；保存路径与失败原因记录在输出信息中
+   * - 不覆盖已有文件；保存路径、失败原因与校验结果记录在输出信息中
+   * - 不同节点报告同一个文件（subfolder 与文件名都相同）时只复制一次，两条记录都关联到它，并记下这一点
    */
   private async saveOutputs(unit: RunUnit, outputs: OutputFile[], client: ComfyApi) {
+    const finals = finalOutputNodes(unit.inputs, this.store.getRun(unit.run_id)?.workflow_json)
+    for (const o of outputs) o.role = o.type !== 'output' ? 'preview' : finals.size && !finals.has(o.node) ? 'intermediate' : 'final'
     const dir = unit.meta?.output_dir
     if (!dir) return
-    let finals = new Set((unit.inputs ?? []).filter((x) => x.source === 'filename_prefix').map((x) => String(x.node)))
-    if (!finals.size) {
-      const wf = (this.store.getRun(unit.run_id)?.workflow_json ?? {}) as Record<string, { inputs?: Record<string, unknown> }>
-      const used = new Set(Object.values(wf).flatMap((n) => Object.values(n.inputs ?? {}).filter((v): v is [string, number] => Array.isArray(v) && typeof v[0] === 'string').map((v) => v[0])))
-      finals = new Set(Object.keys(wf).filter((id) => typeof wf[id].inputs?.filename_prefix === 'string' && !used.has(id)))
-    }
-    const seen = new Set<string>()
+    const seen = new Map<string, OutputFile>()
     for (const o of outputs) {
-      if (o.type !== 'output' || (finals.size && !finals.has(o.node))) continue
+      if (o.role !== 'final') continue
       const k = `${o.subfolder}/${o.filename}`
-      if (seen.has(k)) continue
-      seen.add(k)
+      const first = seen.get(k)
+      if (first) {
+        if (first.node !== o.node) o.same_file_as_node = first.node
+        delete o.save_error
+        if (first.saved) Object.assign(o, { saved: first.saved, source_sha256: first.source_sha256, saved_sha256: first.saved_sha256, image_width: first.image_width, image_height: first.image_height })
+        else if (first.save_error) o.save_error = first.save_error
+        continue
+      }
+      seen.set(k, o)
       if (o.saved) continue // 重试保存时跳过已成功的文件
       delete o.save_error
       try {
@@ -466,19 +542,10 @@ export class Runner {
         const target = join(dir, ...sub)
         await mkdir(target, { recursive: true })
         const data = await client.fetchImage(o)
-        const dot = name.lastIndexOf('.')
-        const stem = dot > 0 ? name.slice(0, dot) : name
-        const ext = dot > 0 ? name.slice(dot) : ''
-        for (let n = 1; ; n++) {
-          const p = join(target, n > 1 ? `${stem} (${n})${ext}` : name)
-          try {
-            await writeFile(p, data, { flag: 'wx' }) // 不覆盖已有文件
-            o.saved = p
-            break
-          } catch (e) {
-            if ((e as NodeJS.ErrnoException).code !== 'EEXIST' || n > 9999) throw e
-          }
-        }
+        const r = await saveVerified(target, name, data)
+        Object.assign(o, { saved: r.path, source_sha256: r.source_sha256, saved_sha256: r.saved_sha256, ...(r.reused ? { reused: true } : {}) })
+        const size = pngSize(data)
+        if (size) Object.assign(o, { image_width: size.width, image_height: size.height })
       } catch (e) {
         o.save_error = `复制到 ${dir} 失败：${(e as Error).message}`
       }
@@ -488,8 +555,10 @@ export class Runner {
   private async record(unit: RunUnit, pid: string, entry: HistoryEntry, client: ComfyApi): Promise<Result> {
     const s = this.store.settings()
     const now = Date.now() / 1000
-    const outputs = extractOutputs(entry, s.comfy_output_dir || '', (...p) => join(...p))
+    const outputs = extractOutputs(entry, s.comfy_output_dir || '', (...p) => join(...p)).map((o) => ({ ...o, prompt_id: pid }))
+    const comfy_match = this.comfyMatch(unit, entry)
     if (historyInterrupted(entry)) {
+      this.markAttempt(unit, 'interrupted', { comfy_match })
       if (this.interruptSent === pid) {
         this.store.updateUnit(unit.id, { status: 'pending', prompt_id: null, error: '已强制中断，继续执行时会重新生成' })
         this.log(`第 ${unit.idx + 1} 张已中断，继续时将重新生成`)
@@ -501,12 +570,14 @@ export class Runner {
     }
     if (entry.status?.status_str === 'error') {
       const err = historyError(entry)
+      this.markAttempt(unit, 'failed', { comfy_match, error: err })
       this.store.updateUnit(unit.id, { status: 'failed', error: err, outputs, finished_at: now })
       this.log(`第 ${unit.idx + 1} 张失败：${err}`)
       return 'failed'
     }
     // 扩展点：将来在这里插入自动筛图（检查 outputs 后决定是否继续后续处理）
     await this.saveOutputs(unit, outputs, client)
+    this.markAttempt(unit, 'success', { comfy_match })
     this.store.updateUnit(unit.id, { status: 'done', outputs, finished_at: now, error: '' })
     const files = outputs.filter((o) => o.type === 'output').map((o) => o.saved || o.filename).join(', ') || '无输出文件信息'
     this.log(`第 ${unit.idx + 1} 张完成：${files}`)

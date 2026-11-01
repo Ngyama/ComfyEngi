@@ -5,6 +5,8 @@ import type { DictionaryInfo, MiningImage, MiningParams, MiningResult, MiningSav
 import type { SavedSourceRule } from './prompt-source'
 import type {
   ApiWorkflow,
+  ExecutionDetail,
+  ExecutionInspection,
   LoraResource,
   Character,
   Library,
@@ -82,7 +84,7 @@ export interface Api {
   'tasks.duplicate'(id: number): SaveResult
 
   'plan.forTask'(taskId: number): Plan
-  /** 某一张图实际提交的完整工作流 JSON（与执行时的构建逻辑相同） */
+  /** 入队前预览：某一张图将要提交的完整工作流 JSON（与执行时的构建逻辑相同，按当前素材计算） */
   'plan.finalWorkflow'(taskId: number, index: number): { json: ApiWorkflow; index: number; count: number; label: string; seed: number; errors: string[]; workflow: string }
   'plan.exportWorkflow'(taskId: number, index: number): string | null
   'queue.enqueue'(taskIds: number[]): { ok: { name: string; runId: number; count: number }[]; failed: { name: string; errors: string[] }[] }
@@ -108,6 +110,11 @@ export interface Api {
   'history.image'(unitId: number, size: number): string | null
   'history.openImage'(unitId: number): string | null
   'history.showInFolder'(unitId: number): string | null
+  /** 执行详情：记录与提交列表（不含完整 JSON） */
+  'history.execution'(unitId: number): ExecutionDetail | null
+  /** 某次提交的完整内容（来自提交快照，不重新计算） */
+  'history.attempt'(attemptId: number): ExecutionInspection
+  'history.exportAttempt'(attemptId: number): string | null
 
   'comfy.test'(url: string): { ok: true; info: string } | { ok: false; error: string }
   'app.info'(): { version: string; dataDir: string; dbPath: string; backupDir: string; migratedFrom: number | null; backup: string | null }
@@ -156,7 +163,7 @@ export const API_METHODS: ApiMethod[] = [
   'plan.forTask', 'plan.finalWorkflow', 'plan.exportWorkflow',
   'queue.enqueue', 'queue.list', 'queue.units', 'queue.reorder', 'queue.remove', 'queue.delete', 'queue.retry', 'queue.retrySave', 'queue.pendingSummary',
   'runner.status', 'runner.precheck', 'runner.start', 'runner.pause', 'runner.stop', 'runner.interrupt', 'runner.logs',
-  'history.list', 'history.image', 'history.openImage', 'history.showInFolder',
+  'history.list', 'history.image', 'history.openImage', 'history.showInFolder', 'history.execution', 'history.attempt', 'history.exportAttempt',
   'comfy.test', 'app.info', 'app.openDataDir', 'app.backupNow', 'app.chooseOutputDir', 'app.checkUpdate', 'app.openReleasePage',
   'mining.addFiles', 'mining.addFolder', 'mining.cancelScan', 'mining.image', 'mining.showInFolder', 'mining.meta', 'mining.copyMeta', 'mining.analyze', 'mining.rules', 'mining.saveRules', 'mining.dictInfo', 'mining.dictImport', 'mining.dictRemove', 'mining.save',
 ]

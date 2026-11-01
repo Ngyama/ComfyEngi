@@ -32,7 +32,9 @@ export const SOURCES: [string, string][] = [
   ['height', '生成高度'],
 ]
 export const SIZE_SOURCES = ['width', 'height']
-export const SOURCE_LABELS: Record<string, string> = Object.fromEntries(SOURCES)
+/** 映射来源：禁止 TriggerWord Toggle 注入触发词（由工作流检查中的开关添加，不出现在手动映射列表） */
+export const TRIGGER_DISABLE = 'trigger_disable'
+export const SOURCE_LABELS: Record<string, string> = { ...Object.fromEntries(SOURCES), [TRIGGER_DISABLE]: '禁止触发词注入' }
 export const PROMPT_SOURCES = ['positive', 'negative']
 export const DEFAULT_PREFIX_TEMPLATE = 'ComfyEngi/{任务}/{序号}_{姿态}'
 export const PREFIX_HELP = '{任务} {角色名} {剧情} {姿态} {服装} {表情} {镜头} {序号} {种子} {日期}'
@@ -187,6 +189,56 @@ export function loraBindingEntries(prefix: string, loader: LoraLoaderInfo): Mapp
   ]
 }
 
+// ---------------------------------------------------------------- TriggerWord Toggle
+// 只适配已对照插件源码（ComfyUI-Lora-Manager，py/nodes/trigger_word_toggle.py）验证过的 TriggerWord Toggle (LoraManager)：
+// 1. trigger_words（连接自 LoRA Loader 的触发词输出）非空、且与 orinalMessage 的词集合不同时，直接输出 trigger_words，开关状态不起作用；
+// 2. 否则 toggle_trigger_words 非空时输出启用的组，全部未启用时输出空文本；
+// 3. toggle_trigger_words 为空或不存在时输出 orinalMessage。
+// 因此禁止注入要同时处理三个输入，只关闭开关不够（规则 1 会绕过它）。其他类型的节点一律不修改。
+
+export const LM_TRIGGER_TOGGLE = 'TriggerWord Toggle (LoraManager)'
+
+export interface ToggleStructure {
+  groups: { text: string; active: boolean }[]
+  /** trigger_words 输入连接自的节点 */
+  source_node?: string
+}
+const unwrap = (v: unknown) => (isObj(v) && '__value__' in v ? v.__value__ : v)
+
+/** 节点是已验证结构的 TriggerWord Toggle 时返回它的开关状态；否则为 null（不猜测未知结构） */
+export function toggleStructure(node: ApiNode | undefined): ToggleStructure | null {
+  if (node?.class_type !== LM_TRIGGER_TOGGLE) return null
+  const i = node.inputs ?? {}
+  if (typeof i.group_mode !== 'boolean' || !('toggle_trigger_words' in i)) return null
+  const list = unwrap(i.toggle_trigger_words)
+  if (!Array.isArray(list) || !list.every((x) => isObj(x) && typeof x.text === 'string' && typeof x.active === 'boolean')) return null
+  if ('orinalMessage' in i && typeof i.orinalMessage !== 'string') return null
+  if ('trigger_words' in i && typeof i.trigger_words !== 'string' && !isLink(i.trigger_words)) return null
+  return { groups: list.map((x) => ({ text: String(x.text), active: !!x.active })), source_node: isLink(i.trigger_words) ? i.trigger_words[0] : undefined }
+}
+
+/**
+ * 让节点输出空文本要写入的值：所有组设为未启用（其他字段不变）；orinalMessage 与 trigger_words 写空文本。
+ * trigger_words 只断开这个节点自己的这个输入，LoRA Loader 与它的其他连接、这个节点的输出连接都不变。结构未验证时不写入。
+ */
+export function toggleDisableInputs(nid: string, node: ApiNode | undefined): InputValue[] {
+  if (!toggleStructure(node)) return []
+  const i = node!.inputs
+  const raw = i.toggle_trigger_words
+  const off = (unwrap(raw) as Record<string, unknown>[]).map((x) => ({ ...x, active: false }))
+  const out: InputValue[] = [{ node: nid, input: 'toggle_trigger_words', source: TRIGGER_DISABLE, value: isObj(raw) ? { ...raw, __value__: off } : off }]
+  for (const k of ['orinalMessage', 'trigger_words']) if (k in i) out.push({ node: nid, input: k, source: TRIGGER_DISABLE, value: '' })
+  return out
+}
+
+/** LoRA Loader 中实际加载的 LoRA（触发词输出由它决定，与权重无关） */
+export function activeLoraNames(node: ApiNode | undefined): string[] {
+  const stack = loraStackOf(node)
+  if (stack) return parseStack(stack).filter((e) => e.active).map((e) => e.name.toLowerCase()).sort()
+  const name = node?.inputs?.lora_name
+  return typeof name === 'string' ? [loraStem(name).toLowerCase()] : []
+}
+
 // ---------------------------------------------------------------- 工作流导入
 
 export function isLink(v: unknown): v is [string, number] {
@@ -269,6 +321,10 @@ export function validateMapping(api: ApiWorkflow, mapping: MappingEntry[]): Mess
     const nid = String(e.node ?? '')
     const inp = e.input ?? ''
     const node = api[nid]
+    if (src === TRIGGER_DISABLE) {
+      if (!toggleStructure(node)) out.push(['warning', `节点 #${nid}${node ? `（${node.class_type}）` : ''} 不是已验证结构的 TriggerWord Toggle，「禁止触发词注入」不会写入：请在工作流检查中重新确认`])
+      return
+    }
     if (!node) {
       out.push(['error', `${tag}：工作流中不存在节点 ID「${nid}」`])
       return
@@ -426,7 +482,7 @@ export function mappingValues(
   /** 工作流 JSON：多 LoRA Loader 的列表绑定需要以工作流原列表为基础计算 */
   api?: ApiWorkflow,
 ): InputValue[] {
-  const values: InputValue[] = mapping.filter((e) => !isStackBinding(e)).map((e) => {
+  const values: InputValue[] = mapping.filter((e) => !isStackBinding(e) && e.source !== TRIGGER_DISABLE).map((e) => {
     const src = e.source
     let value: unknown = null
     if (PROMPT_SOURCES.includes(src)) {
@@ -460,6 +516,7 @@ export function mappingValues(
     values.push({ node: nid, input: 'loras', source: 'lora_stack', value: list ? { ...(node!.inputs.loras as object), __value__: list } : null })
     if (list && typeof node?.inputs?.text === 'string') values.push({ node: nid, input: 'text', source: 'lora_stack', value: loraStackText(list) })
   }
+  for (const e of mapping) if (e.source === TRIGGER_DISABLE) values.push(...toggleDisableInputs(String(e.node), api?.[String(e.node)]))
   return values
 }
 
@@ -484,6 +541,9 @@ export function checkAgainstObjectInfo(api: ApiWorkflow, inputsList: InputValue[
   for (const [nid, node] of Object.entries(api)) {
     if (!(node.class_type in objectInfo))
       msgs.push(['error', `节点 ${nid} 的类型「${node.class_type}」在当前 ComfyUI 中不存在（缺少自定义节点？）`])
+    // ComfyUI 不提供插件版本号，只能核对节点声明的输入：与已验证的结构不同时不要相信「禁止触发词注入」
+    else if (node.class_type === LM_TRIGGER_TOGGLE && !objectInfo[LM_TRIGGER_TOGGLE]?.input?.required?.group_mode)
+      msgs.push(['warning', `节点 #${nid}（${LM_TRIGGER_TOGGLE}）在当前 ComfyUI 中声明的输入与已验证的插件结构不同（没有 group_mode）：「禁止触发词注入」可能不生效，请检查插件版本`])
   }
   const checked = new Set<string>()
   for (const inputs of inputsList) {
@@ -551,6 +611,28 @@ export function historyError(entry: HistoryEntry): string {
 
 export function historyInterrupted(entry: HistoryEntry): boolean {
   return (entry.status?.messages ?? []).some((m) => Array.isArray(m) && m[0] === 'execution_interrupted')
+}
+
+/** 最终输出节点：映射了「输出文件前缀」的保存节点；没有该映射时为工作流中没有被其他节点使用的保存节点。为空表示无法判断 */
+export function finalOutputNodes(inputs: InputValue[] | null | undefined, api: ApiWorkflow | Record<string, { inputs?: Record<string, unknown> }> | null | undefined): Set<string> {
+  const mapped = new Set((inputs ?? []).filter((x) => x.source === 'filename_prefix').map((x) => String(x.node)))
+  if (mapped.size || !api) return mapped
+  const nodes = api as Record<string, { inputs?: Record<string, unknown> }>
+  const used = new Set(Object.values(nodes).flatMap((n) => Object.values(n.inputs ?? {}).filter(isLink).map((v) => v[0])))
+  return new Set(Object.keys(nodes).filter((id) => typeof nodes[id].inputs?.filename_prefix === 'string' && !used.has(id)))
+}
+
+/** 预览与「打开图片」使用的输出：优先已保存的最终输出；不依赖 ComfyUI 返回的节点顺序，也不会选中中间结果（旧记录没有 role，用冻结的映射判断） */
+export function primaryOutputIndex(unit: { outputs?: OutputFile[] | null; inputs?: InputValue[] | null } | null | undefined): number {
+  const outs = unit?.outputs ?? []
+  const mapped = finalOutputNodes(unit?.inputs, null)
+  const isFinal = (o: OutputFile) => (o.role ? o.role === 'final' : o.type === 'output' && (!mapped.size || mapped.has(o.node)))
+  const tests: ((o: OutputFile) => boolean)[] = [(o) => isFinal(o) && !!o.saved, isFinal, (o) => !!o.saved, (o) => o.type === 'output', () => true]
+  for (const t of tests) {
+    const i = outs.findIndex(t)
+    if (i >= 0) return i
+  }
+  return -1
 }
 
 export function extractOutputs(entry: HistoryEntry, outputDir = '', join?: (...p: string[]) => string): OutputFile[] {
