@@ -13,7 +13,7 @@ import type { ReplicaPlanView } from '@shared/api'
 import { effectiveLoraConfig } from '@shared/lora-config'
 import { normalizeReplicaData, originalPositive, PARAM_KEYS, PARAM_LABELS, tagStats, type ParamKey, type ReplacePart, type ReplicaData, type ReplicaImage, type ReplicaTag } from '@shared/replica'
 import type { LoraResource, Workflow } from '@shared/types'
-import { findPromptInjectors } from '@shared/workflow-analysis'
+import { findPromptInjectors, findTriggerPaths } from '@shared/workflow-analysis'
 import { FinalWorkflowDialog } from '../plan/dialogs'
 import { Select } from '../settings/WorkflowEditor'
 
@@ -531,6 +531,7 @@ function CharacterStep({ data, update, plan }: { data: ReplicaData; update: (p: 
   const outfits = lib.outfits.filter((o) => o.character_id === data.character_id)
   const cfg = wf ? effectiveLoraConfig(data.lora_config ?? undefined, wf.api_json ?? {}, wf.mapping ?? []) : null
   const toggles = wf ? findPromptInjectors(wf.api_json ?? {}, wf.mapping ?? []).filter((i) => i.kind === 'trigger_toggle' && i.polarity.length) : []
+  const cuttable = wf ? findTriggerPaths(wf.api_json ?? {}, wf.mapping ?? []).filter((p) => p.status === 'controllable').length : 0
   const charLora = character?.loras?.find((l) => l.name && !l.disabled)
   const replaceKey = cfg?.char_targets?.lora1?.replace
   const imageLoraNames = [...new Set(data.images.flatMap((im) => im.loras.map((l) => l.name)))]
@@ -586,9 +587,9 @@ function CharacterStep({ data, update, plan }: { data: ReplicaData; update: (p: 
         <section className="rounded-xl bg-card p-3 ring-1 ring-tint/[0.08]">
           <div className="mb-2 text-[12.5px] font-medium">工作流</div>
           <Select value={String(wid ?? '')} onChange={(v) => update({ workflow_id: v ? Number(v) : null, lora_config: null })} options={[['', '请选择'], ...lib.workflows.map((w) => [String(w.id), w.name] as [string, string])]} className="min-w-56" />
-          {toggles.length > 0 && (
+          {toggles.length + cuttable > 0 && (
             <label className="mt-2 flex items-center justify-between gap-3 text-[12px]" data-testid="replica-trigger">
-              关闭 TriggerWord Toggle 注入（触发词由角色 Prompt 负责）
+              关闭 LoRA 自动触发词注入（触发词由角色 Prompt 负责）
               <Switch checked={data.disable_triggers} onCheckedChange={(v) => update({ disable_triggers: !!v })} data-testid="replica-trigger-switch" />
             </label>
           )}

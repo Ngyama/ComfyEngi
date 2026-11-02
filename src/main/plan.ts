@@ -7,7 +7,7 @@ import { expandTask, normalizeTaskData, PlanLibrary } from '@shared/planner'
 import { MODULE_LABELS } from '@shared/prompt'
 import type { ApiWorkflow, InputChange, Lora, MappingEntry, PlanUnit, Settings, Task, TaskData, Workflow } from '@shared/types'
 import { controllableLoaders, effectiveLoraConfig, loraConfigInputs, loraConfigProblems, rolePlacement, type CharRole, type RoleState, type WfLoraConfig } from '@shared/lora-config'
-import { controlInputs, controlProblems, controlsOf, mergeControlInputs } from '@shared/node-controls'
+import { controlInputs, controlProblems, controlsOf, mergeControlInputs, withTriggerCuts } from '@shared/node-controls'
 import { diffWorkflow, findPromptInjectors, loaderChangedBy } from '@shared/workflow-analysis'
 import type { Store } from './store'
 
@@ -180,7 +180,7 @@ export function buildWorkflowInputs(store: Store, wf: Workflow, units: PlanUnit[
   if (!msgs.some(([l]) => l === 'error')) {
     for (const u of units) u.inputs = [...mappingValues(u, wf.mapping, settings, dateStr, wf.api_json), ...loraConfigInputs(wf.api_json ?? {}, wf.mapping ?? [], cfg, rolesOf(u))]
     // Prompt 路径上不受控制的节点：明确提示（用户可能有意使用触发词节点，只提示不阻止）
-    for (const inj of findPromptInjectors(wf.api_json ?? {}, wf.mapping ?? [])) {
+    for (const inj of findPromptInjectors(withTriggerCuts(wf.api_json ?? {}, controls), wf.mapping ?? [])) {
       if (!inj.polarity.length || inj.disabled || gone.has(inj.node)) continue
       once(warnings, `工作流「${wf.name}」${inj.message}`)
       if (inj.source_node && units.some((u) => loaderChangedBy(wf.api_json, u.inputs ?? [], inj.source_node!)))

@@ -8,10 +8,13 @@
 // （见 ComfyUI_frontend 的 ExecutableNodeDTO.resolveOutput 与 graphToPrompt）。API JSON 没有输出类型，
 // 因此只有在 /object_info 能确认「每个被使用的输出都对应唯一一个同类型、已连接的输入」时才允许，确认结果连同路由保存在配置中。
 // 这比编辑器保守：编辑器在多个同类型输入时按序号选择，这里一律拒绝，不猜测连接。
+//
+// 触发词路径（trigger_cuts）：只把已确认路径上的 StringConcatenate 输入写成空文本，Loader 的 MODEL、CLIP 与 LoRA 列表不变。
 
 import { controllableLoaders } from './lora-config'
-import { BYPASS_REWIRE, findLoraLoaders, isLink, LM_TRIGGER_TOGGLE, NODE_BYPASS, NODE_OVERRIDE, sortNodeIds, sourceLabel, toggleDisableInputs, toggleStructure, TRIGGER_DISABLE } from './mapping'
-import type { ApiNode, ApiWorkflow, InputValue, MappingEntry, Message, NodeBypass, ObjectInfo, ObjectInfoNode, WorkflowControls } from './types'
+import { BYPASS_REWIRE, findLoraLoaders, isLink, LM_LORA_LOADER, LM_TRIGGER_OUTPUT, LM_TRIGGER_TOGGLE, NODE_BYPASS, NODE_OVERRIDE, sortNodeIds, sourceLabel, toggleDisableInputs, toggleStructure, TRIGGER_CUT, TRIGGER_DISABLE } from './mapping'
+import { findTriggerPaths, type TriggerPath } from './workflow-analysis'
+import type { ApiNode, ApiWorkflow, InputValue, MappingEntry, Message, NodeBypass, ObjectInfo, ObjectInfoNode, TriggerCut, WorkflowControls } from './types'
 
 export const EMPTY_CONTROLS: WorkflowControls = { overrides: [], bypass: [] }
 
@@ -20,9 +23,22 @@ const isPlainObj = (v: unknown): v is Record<string, unknown> => typeof v === 'o
 
 /** 读取工作流的控制配置（旧工作流没有这个字段） */
 export function controlsOf(wf: { controls?: WorkflowControls | null } | null | undefined): WorkflowControls {
-  return { overrides: wf?.controls?.overrides ?? [], bypass: wf?.controls?.bypass ?? [] }
+  const cuts = wf?.controls?.trigger_cuts ?? []
+  return { overrides: wf?.controls?.overrides ?? [], bypass: wf?.controls?.bypass ?? [], ...(cuts.length ? { trigger_cuts: cuts } : {}) }
 }
-export const hasControls = (c: WorkflowControls) => c.overrides.length > 0 || c.bypass.length > 0
+export const hasControls = (c: WorkflowControls) => c.overrides.length > 0 || c.bypass.length > 0 || !!c.trigger_cuts?.length
+
+/** 这条路径当前是否由 ComfyEngi 管理 */
+export const isCut = (c: WorkflowControls, p: Pick<TriggerPath, 'node' | 'input'>) => !!c.trigger_cuts?.some((x) => x.node === p.node && x.input === p.input)
+export const cutOf = (p: TriggerPath): TriggerCut => ({ loader: p.loader, node: p.node, input: p.input, class_type: p.class_type })
+
+/** 切断后的工作流副本（只用于分析 Prompt 路径，实际提交的写入值由 controlInputs 给出） */
+export function withTriggerCuts(api: ApiWorkflow, c: WorkflowControls): ApiWorkflow {
+  if (!c.trigger_cuts?.length) return api
+  const out = { ...api }
+  for (const x of c.trigger_cuts) if (out[x.node] && x.input in (out[x.node].inputs ?? {})) out[x.node] = { ...out[x.node], inputs: { ...out[x.node].inputs, [x.input]: '' } }
+  return out
+}
 
 /** IPC 入口的结构检查：只保留已知字段；是否与当前工作流匹配由 controlProblems 判断 */
 export function normalizeControls(val: unknown): WorkflowControls | null {
@@ -53,7 +69,8 @@ export function normalizeControls(val: unknown): WorkflowControls | null {
     }),
     output_node: !!b.output_node,
   }))
-  return { overrides, bypass }
+  const cuts = list(val.trigger_cuts, 'trigger_cuts').map((c) => ({ loader: text(c.loader, 'loader'), node: text(c.node, 'node'), input: text(c.input, 'input'), class_type: text(c.class_type, 'class_type') }))
+  return { overrides, bypass, ...(cuts.length ? { trigger_cuts: cuts } : {}) }
 }
 
 // ---------------- 节点分类（只用于列表显示；认不出的第三方节点放入「其他」，不猜用途）
@@ -164,6 +181,7 @@ export function inputControl(api: ApiWorkflow, mapping: MappingEntry[], controls
   const mapped = mapping.filter((m) => m.source !== TRIGGER_DISABLE && String(m.node) === nid && m.input === input)
   const rewire = isLink(v) && controls.bypass.length ? rewireOf(api, controls, v) : null
   if (trigger) return { state: 'trigger', label: '禁止触发词注入', prepared: { value: trigger.value }, blocked: '已由「禁止触发词注入」控制' }
+  if (isCut(controls, { node: nid, input })) return { state: 'trigger', label: 'LoRA 自动触发词：由 ComfyEngi 管理', prepared: { value: '' }, blocked: '已由「LoRA 自动触发词」控制' }
   if (isLink(v)) return { state: 'link', label: rewire ? `连接（绕过后改接 #${rewire[0]}）` : '连接', prepared: rewire ? { value: rewire } : null, blocked: '这是节点连接，不是可以直接填写的值' }
   if (mapped.length) return { state: 'mapping', label: `映射：${mapped.map((m) => sourceLabel(m.source)).join('、')}`, prepared: null, blocked: '已由映射控制（每张图写入计划中的值）' }
   if (loraOwned(api, mapping, nid).includes(input)) return { state: 'lora', label: '任务 LoRA 配置', prepared: null, blocked: '已由套图任务的 LoRA 配置控制' }
@@ -302,6 +320,28 @@ export function controlProblems(api: ApiWorkflow, mapping: MappingEntry[], contr
       if (!r.ok) err(`节点绕过：${tag(b.node, node)} 不再满足绕过条件：${r.reason}`)
     }
   }
+  const paths = controls.trigger_cuts?.length ? findTriggerPaths(api, mapping) : []
+  const cutSeen = new Set<string>()
+  for (const c of controls.trigger_cuts ?? []) {
+    const at = `LoRA 自动触发词：#${c.node} 的 ${c.input}`
+    const key = `${c.node}\u0000${c.input}`
+    if (cutSeen.has(key)) err(`${at} 有多条配置`)
+    cutSeen.add(key)
+    const p = paths.find((x) => x.node === c.node && x.input === c.input && x.loader === c.loader && x.class_type === c.class_type)
+    if (!p) {
+      err(`${at} 不再是 #${c.loader} 的触发词路径（工作流结构或节点 ID 可能已变化）。请在工作流页面清除这条配置后重新设置`)
+      continue
+    }
+    if (p.status !== 'controllable') {
+      err(`${at} 现在无法确认：${p.reason}。请在工作流页面清除这条配置`)
+      continue
+    }
+    if (bypassed.has(c.node)) err(`${at} 不会生效，这个节点已绕过。请恢复节点或清除这条配置`)
+    if (bypassed.has(c.loader)) err(`${at} 不会生效，Loader #${c.loader} 已绕过。请恢复节点或清除这条配置`)
+    for (const m of mapping) if (String(m.node) === c.node && m.input === c.input) err(`冲突：${at} 同时由 LoRA 自动触发词和映射「${sourceLabel(m.source)}」控制，软件不会替你选择`)
+    const names = info?.[LM_LORA_LOADER]?.output_name
+    if (Array.isArray(names) && names[LM_TRIGGER_OUTPUT] !== 'trigger_words') err(`${at}：当前 ComfyUI 中 ${LM_LORA_LOADER} 的输出 ${LM_TRIGGER_OUTPUT} 是「${String(names[LM_TRIGGER_OUTPUT])}」，与已验证的插件结构不同，不能切断`)
+  }
   if (bypassed.size) {
     const saves = Object.keys(api).filter((id) => typeof api[id].inputs?.filename_prefix === 'string')
     if (saves.length && saves.every((id) => bypassed.has(id))) err('节点绕过：工作流中所有保存节点都被绕过，生成结果不会保存')
@@ -314,10 +354,11 @@ export function controlProblems(api: ApiWorkflow, mapping: MappingEntry[], contr
 export function controlInputs(api: ApiWorkflow, controls: WorkflowControls): InputValue[] {
   if (!hasControls(controls)) return []
   const out: InputValue[] = controls.overrides.map((o) => ({ node: o.node, input: o.input, source: NODE_OVERRIDE, value: o.value }))
+  for (const c of controls.trigger_cuts ?? []) out.push({ node: c.node, input: c.input, source: TRIGGER_CUT, value: '' })
   const byNode = new Map(controls.bypass.map((b) => [b.node, b]))
   for (const nid of sortNodeIds(Object.keys(api))) {
     if (byNode.has(nid)) continue
-    for (const [input, v] of Object.entries(api[nid].inputs ?? {})) if (isLink(v) && byNode.has(String(v[0]))) out.push({ node: nid, input, source: BYPASS_REWIRE, value: resolveLink(api, byNode, v) })
+    for (const [input, v] of Object.entries(api[nid].inputs ?? {})) if (isLink(v) && byNode.has(String(v[0])) && !isCut(controls, { node: nid, input })) out.push({ node: nid, input, source: BYPASS_REWIRE, value: resolveLink(api, byNode, v) })
   }
   for (const b of controls.bypass) out.push({ node: b.node, input: '*', source: NODE_BYPASS, value: true })
   return out

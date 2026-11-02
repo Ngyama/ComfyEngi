@@ -34,6 +34,8 @@ export const SOURCES: [string, string][] = [
 export const SIZE_SOURCES = ['width', 'height']
 /** 映射来源：禁止 TriggerWord Toggle 注入触发词（由工作流检查中的开关添加，不出现在手动映射列表） */
 export const TRIGGER_DISABLE = 'trigger_disable'
+/** 切断 Loader 的 trigger_words 文本路径（配置在工作流的 trigger_cuts，不是映射） */
+export const TRIGGER_CUT = 'trigger_cut'
 export const SOURCE_LABELS: Record<string, string> = { ...Object.fromEntries(SOURCES), [TRIGGER_DISABLE]: '禁止触发词注入' }
 export const PROMPT_SOURCES = ['positive', 'negative']
 export const DEFAULT_PREFIX_TEMPLATE = 'ComfyEngi/{任务}/{序号}_{姿态}'
@@ -197,6 +199,9 @@ export function loraBindingEntries(prefix: string, loader: LoraLoaderInfo): Mapp
 // 因此禁止注入要同时处理三个输入，只关闭开关不够（规则 1 会绕过它）。其他类型的节点一律不修改。
 
 export const LM_TRIGGER_TOGGLE = 'TriggerWord Toggle (LoraManager)'
+/** 已验证输出结构的 LoRA Loader：输出依次为 MODEL、CLIP、trigger_words、loaded_loras。名称含 Lora 的其他节点不按这个结构处理 */
+export const LM_LORA_LOADER = 'Lora Loader (LoraManager)'
+export const LM_TRIGGER_OUTPUT = 2
 
 export interface ToggleStructure {
   groups: { text: string; active: boolean }[]
@@ -524,7 +529,7 @@ export function mappingValues(
 export const NODE_OVERRIDE = 'node_override'
 export const BYPASS_REWIRE = 'bypass_rewire'
 export const NODE_BYPASS = 'node_bypass'
-const CONTROL_LABELS: Record<string, string> = { replica_param: '原图参数', [NODE_OVERRIDE]: '节点参数覆盖', [BYPASS_REWIRE]: '绕过节点后改接', [NODE_BYPASS]: '节点已绕过', lora_config: '任务 LoRA 配置', lora_stack: 'LoRA 列表' }
+const CONTROL_LABELS: Record<string, string> = { replica_param: '原图参数', [TRIGGER_CUT]: '触发词由 ComfyEngi 管理', [NODE_OVERRIDE]: '节点参数覆盖', [BYPASS_REWIRE]: '绕过节点后改接', [NODE_BYPASS]: '节点已绕过', lora_config: '任务 LoRA 配置', lora_stack: 'LoRA 列表' }
 export const sourceLabel = (s: string) => SOURCE_LABELS[s] ?? CONTROL_LABELS[s] ?? s
 
 /**

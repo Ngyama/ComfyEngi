@@ -215,14 +215,25 @@ export interface NodeBypass {
   routes: { output: number; input: string; type: string }[]
   output_node?: boolean
 }
+/** 由 ComfyEngi 管理的触发词路径：提交时把这个拼接输入写成空文本。只切断这一个文本输入，LoRA Loader 本身不变 */
+export interface TriggerCut {
+  /** 提供 trigger_words 的 Loader */
+  loader: string
+  node: string
+  input: string
+  class_type: string
+}
 export interface WorkflowControls {
   overrides: NodeOverride[]
   bypass: NodeBypass[]
+  /** 旧工作流没有这个字段：默认使用插件输出，提交内容不变 */
+  trigger_cuts?: TriggerCut[]
 }
 /** ComfyUI /object_info 中用到的字段 */
 export interface ObjectInfoNode {
   input?: { required?: Record<string, unknown>; optional?: Record<string, unknown> }
   output?: unknown[]
+  output_name?: unknown[]
   output_is_list?: boolean[]
   is_input_list?: boolean
   output_node?: boolean

@@ -28,6 +28,8 @@ export interface WfLoraConfig {
   entries: WfLoraEntry[]
   /** 角色 LoRA 在工作流中没有同名条目时的加载位置：追加到某个多 LoRA Loader，或替换某个条目 */
   char_targets?: Record<string, { node: string; replace?: string }>
+  /** 生成配置时工作流的 LoRA 列表：更新 JSON 后不一致时提示，不会静默沿用旧列表 */
+  sig?: string
 }
 
 export type CharRole = 'lora1' | 'second_lora1'
@@ -57,8 +59,10 @@ const defaultsOf = (api: ApiWorkflow, ld: LoraLoaderInfo): WfLoraEntry[] => {
 /** 工作流默认的 LoRA 配置（导入 / 选择工作流后直接读取已有 LoRA，包括停用的条目） */
 export function defaultLoraConfig(api: ApiWorkflow, mapping: MappingEntry[]): WfLoraConfig {
   const loaders = controllableLoaders(api, mapping)
-  return { nodes: loaders.map((l) => l.node), entries: loaders.flatMap((l) => defaultsOf(api, l)) }
+  const entries = loaders.flatMap((l) => defaultsOf(api, l))
+  return { nodes: loaders.map((l) => l.node), entries, sig: sigOf(entries) }
 }
+const sigOf = (entries: WfLoraEntry[]) => entries.map((e) => `${e.node}:${e.name}:${e.strength}:${e.clip}:${e.enabled ? 1 : 0}`).join('\n')
 
 /** 本任务对某个工作流的有效配置：任务保存的配置 + 之后才出现的 Loader 的默认值；已不存在的节点忽略 */
 export function effectiveLoraConfig(saved: WfLoraConfig | undefined, api: ApiWorkflow, mapping: MappingEntry[]): WfLoraConfig {
@@ -71,6 +75,7 @@ export function effectiveLoraConfig(saved: WfLoraConfig | undefined, api: ApiWor
     nodes: loaders.map((l) => l.node),
     entries: [...saved.entries.filter((e) => live.has(e.node)), ...fresh.flatMap((l) => defaultsOf(api, l))],
     char_targets: Object.fromEntries(Object.entries(saved.char_targets ?? {}).filter(([, t]) => live.has(t.node))),
+    ...(saved.sig ? { sig: saved.sig } : {}),
   }
 }
 
@@ -163,6 +168,7 @@ export function loraConfigProblems(api: ApiWorkflow, mapping: MappingEntry[], cf
   const errors: string[] = []
   const warnings: string[] = []
   const handled = new Set<CharRole>()
+  if (cfg.sig && cfg.sig !== defaultLoraConfig(api, mapping).sig) warnings.push('工作流 JSON 中的 LoRA 列表已经变化，本任务保存的 LoRA 配置仍是更新前的内容，新列表中多出的 LoRA 不会加载。如需使用新列表，请在 LoRA 配置中「恢复工作流默认」')
   for (const role of CHAR_ROLES) {
     const r = roles[role]
     if (!r || roleMapped(mapping, role)) continue

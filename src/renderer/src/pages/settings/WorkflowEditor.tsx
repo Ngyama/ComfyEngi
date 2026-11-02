@@ -33,10 +33,11 @@ import {
   validateMapping,
 } from '@shared/mapping'
 import { analyzeWorkflow, findPromptInjectors, mergeMapping, unsafeIntegers, type Suggestion, type WorkflowAnalysis } from '@shared/workflow-analysis'
-import { controlProblems, controlsOf, NODE_CATEGORIES, nodeCategory, problemNodes, type NodeCategory } from '@shared/node-controls'
+import { controlProblems, controlsOf, NODE_CATEGORIES, nodeCategory, problemNodes, type NodeCategory, withTriggerCuts } from '@shared/node-controls'
 import { MODULES, MODULE_LABELS } from '@shared/prompt'
 import type { ApiWorkflow, InputValue, MappingEntry, Message, ObjectInfo, Workflow, WorkflowControls } from '@shared/types'
 import { NodePanel } from './NodeInspector'
+import { TriggerPathsPanel } from './TriggerPathsPanel'
 
 export function Select({ value, onChange, options, className }: { value: string; onChange: (v: string) => void; options: [string, string][]; className?: string }) {
   return (
@@ -280,18 +281,16 @@ export function WorkflowEditor({ id, onDeleted, initialTab }: { id: number; onDe
   const msgs = [...validateMapping(api_json, mapping), ...controlProblems(api_json, mapping, controls)]
   const isDefault = lib?.settings.default_workflow_id === wf.id
 
-  const saveMapping = async (m: MappingEntry[]) => {
-    setWf({ ...wf, mapping: m })
+  // 保存失败时重新读取：界面不能继续显示没有写入的状态（例如显示已绕过，提交时却仍然执行）
+  const persist = async (patch: Partial<Workflow>) => {
+    setWf({ ...wf, ...patch })
     setOnline(null)
-    await call(api['workflows.save']({ id: wf.id, _revision: wf._revision, mapping: m }))
+    const r = await call(api['workflows.save']({ id: wf.id, _revision: wf._revision, ...patch }))
+    if (r === undefined) await api['workflows.get'](wf.id).then((w) => w && setWf(w))
     await reloadLib()
   }
-  const saveControls = async (c: WorkflowControls) => {
-    setWf({ ...wf, controls: c })
-    setOnline(null)
-    await call(api['workflows.save']({ id: wf.id, _revision: wf._revision, controls: c }))
-    await reloadLib()
-  }
+  const saveMapping = (m: MappingEntry[]) => persist({ mapping: m })
+  const saveControls = (c: WorkflowControls) => persist({ controls: c })
   const setEntry = (i: number, p: Partial<MappingEntry>) => {
     const next = mapping.map((e, j) => (j === i ? { ...e, ...p } : e))
     const e = next[i]
@@ -321,7 +320,7 @@ export function WorkflowEditor({ id, onDeleted, initialTab }: { id: number; onDe
   const selected = detail !== null && api_json[detail] ? detail : ids[0]
   const errorCount = msgs.filter(([l]) => l === 'error').length
   const allMsgs = online ?? msgs
-  const openInjectors = findPromptInjectors(api_json, mapping).filter((i) => i.polarity.length && !i.disabled && (i.controllable || i.kind !== 'unmapped_text') && !controls.bypass.some((b) => b.node === i.node))
+  const openInjectors = findPromptInjectors(withTriggerCuts(api_json, controls), mapping).filter((i) => i.polarity.length && !i.disabled && (i.controllable || i.kind !== 'unmapped_text') && !controls.bypass.some((b) => b.node === i.node))
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
@@ -363,6 +362,13 @@ export function WorkflowEditor({ id, onDeleted, initialTab }: { id: number; onDe
             const nw = await api['workflows.get'](wf.id)
             setWf(nw)
             await reloadLib()
+            // ComfyUI 中绕过的节点不会出现在导出的 JSON 里：节点增减说明这份 JSON 的启用状态与之前不同
+            if (nw) {
+              const added = Object.keys(nw.api_json).filter((n) => !api_json[n])
+              const gone = Object.keys(api_json).filter((n) => !nw.api_json[n])
+              const names = (g: typeof api_json, l: string[]) => l.slice(0, 6).map((n) => `#${n} ${g[n].class_type}`).join('、') + (l.length > 6 ? ` 等 ${l.length} 个` : '')
+              if (added.length || gone.length) toast.info('新 JSON 的节点有变化', { description: [added.length ? `新增：${names(nw.api_json, added)}` : '', gone.length ? `移除：${names(api_json, gone)}` : ''].filter(Boolean).join('\n') })
+            }
             if (nw && [...validateMapping(nw.api_json, nw.mapping), ...controlProblems(nw.api_json, nw.mapping, controlsOf(nw))].some(([l]) => l === 'error')) toast.warning('新的工作流与现有映射或节点控制不匹配（节点 ID 或输入字段可能已变化），请检查下方提示')
             else toast.success('已更新工作流 JSON，映射保持不变')
           }}
@@ -397,6 +403,7 @@ export function WorkflowEditor({ id, onDeleted, initialTab }: { id: number; onDe
           <span className="truncate">{errorCount} 个问题会阻止入队：{msgs.find(([l]) => l === 'error')?.[1]}</span>
         </button>
       )}
+      <TriggerPathsPanel api={api_json} mapping={mapping} controls={controls} onControls={(c) => void saveControls(c)} onMapping={(m) => void saveMapping(m)} />
       <div className="flex min-h-0 flex-1 gap-4">
         {/* 节点列表 */}
         <div className="flex w-[300px] shrink-0 flex-col">

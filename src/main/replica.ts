@@ -5,11 +5,13 @@ import { existsSync, readdirSync, statSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { applyInputs, newEntry, toggleDisableInputs, TRIGGER_DISABLE } from '@shared/mapping'
 import type { ScannedImage } from '@shared/mining'
-import { controlInputs, controlProblems, controlsOf } from '@shared/node-controls'
+import { controlInputs, controlProblems, controlsOf, cutOf, isCut } from '@shared/node-controls'
+import { defaultLoraConfig, effectiveLoraConfig } from '@shared/lora-config'
 import { matchRule, type SavedSourceRule } from '@shared/prompt-source'
+import { parseToken, splitTopLevel } from '@shared/tags'
 import { applyTagReplacement, mergeNegative, normalizeReplicaData, normalizeReplicaImage, originalPositive, outputStems, paramPlan, replicaTargets, stableSeed, type ParamRow, type ReplacePart, type ReplicaData, type ReplicaImage, type ReplicaRecord } from '@shared/replica'
 import type { ApiWorkflow, Lora, PlanUnit, Settings, UnitMeta, Workflow } from '@shared/types'
-import { diffWorkflow, findPromptInjectors } from '@shared/workflow-analysis'
+import { diffWorkflow, findPromptInjectors, findTriggerPaths } from '@shared/workflow-analysis'
 import { buildWorkflowInputs, outputDirOf, resolveLoraName, type FullPlan } from './plan'
 import { scanImage } from './mining'
 import type { Store } from './store'
@@ -98,13 +100,20 @@ function workflowOf(store: Store, data: ReplicaData): Workflow | null {
   return wid ? store.get('workflows', wid) : null
 }
 
-/** Prompt 路径上的 TriggerWord Toggle：关闭注入后触发词完全由角色 Prompt 负责 */
+/** Prompt 路径上的 TriggerWord Toggle 与直接拼接的 trigger_words：关闭注入后触发词完全由角色 Prompt 负责（换角色后不会再注入 Loader 的触发词） */
 function withTriggerOff(wf: Workflow, off: boolean): Workflow {
   if (!off) return wf
-  const extra = findPromptInjectors(wf.api_json ?? {}, wf.mapping ?? [])
+  const api = wf.api_json ?? {}
+  const extra = findPromptInjectors(api, wf.mapping ?? [])
     .filter((i) => i.kind === 'trigger_toggle' && i.polarity.length && !i.disabled)
     .map((i) => newEntry(TRIGGER_DISABLE, i.node, 'toggle_trigger_words'))
-  return extra.length ? { ...wf, mapping: [...wf.mapping, ...extra] } : wf
+  const controls = controlsOf(wf)
+  const gone = new Set(controls.bypass.map((b) => b.node))
+  const cuts = findTriggerPaths(api, wf.mapping ?? [])
+    .filter((p) => p.status === 'controllable' && !isCut(controls, p) && !gone.has(p.node) && !gone.has(p.loader))
+    .map(cutOf)
+  if (!extra.length && !cuts.length) return wf
+  return { ...wf, mapping: [...wf.mapping, ...extra], controls: { ...controls, ...(cuts.length ? { trigger_cuts: [...(controls.trigger_cuts ?? []), ...cuts] } : {}) } }
 }
 
 const safeDirName = (s: string) => s.replace(/[<>:"/\\|?*\x00-\x1f]/g, '_').trim() || '未命名'
@@ -184,8 +193,12 @@ export function planForReplica(store: Store, rec: ReplicaRecord, settings?: Sett
     if (!wf.mapping.some((m) => m.source === 'positive')) errors.push(`工作流「${wf.name}」没有映射正向 Prompt，无法写入每张图的 Prompt`)
     if (!wf.mapping.some((m) => m.source === 'negative') && units.some((u) => u.negative.trim())) warnings.push(`工作流「${wf.name}」没有映射负面 Prompt，负面内容不会提交`)
     const cfg = data.lora_config ?? undefined
-    if (loras.length && cfg && !cfg.char_targets?.lora1?.replace && !cfg.entries.some((e) => !e.enabled)) {
-      const kept = cfg.entries.map((e) => e.name)
+    // 没有调整过 LoRA 配置时同样提示：工作流里可能固定着原角色的 LoRA
+    const eff = effectiveLoraConfig(cfg, wf.api_json ?? {}, wf.mapping ?? [])
+    const defaults = defaultLoraConfig(wf.api_json ?? {}, wf.mapping ?? []).entries
+    const touched = eff.entries.some((e) => !e.enabled && defaults.find((d) => d.key === e.key)?.enabled)
+    if (loras.length && !eff.char_targets?.lora1?.replace && !touched) {
+      const kept = eff.entries.filter((e) => e.enabled).map((e) => e.name)
       if (kept.length) warnings.push(`工作流原有的 LoRA（${kept.join('、')}）都会继续加载。如果其中有原角色的 LoRA，请替换或关闭它`)
     }
     buildWorkflowInputs(store, wf, units, { savedCfg: cfg, settings, dateStr, errors, warnings })
@@ -200,6 +213,20 @@ export function planForReplica(store: Store, rec: ReplicaRecord, settings?: Sett
     const clash = [...new Set(data.images.filter((im) => !im.exclude).map((im) => dirname(im.path)))].find((d) => sameDir(d, outDir))
     if (clash) errors.push(`输出目录不能是原图所在的文件夹（${clash}），请换一个目录`)
   }
+  const live = rows.filter((r) => r.state === 'valid')
+  const withSyntax = live.filter((r) => /<lora:/i.test(r.positive)).length
+  if (withSyntax) warnings.push(`有 ${withSyntax} 张图的 Prompt 含有 <lora:…> 文字：ComfyUI 不会因此加载或替换 LoRA，这段文字可能属于原角色。可以在「替换」步骤选中删除`)
+  // 只提示不删除：Tag 替换保证未选中的内容逐字保留
+  const insertKeys = new Set(splitTopLevel(insert).map((p) => parseToken(p)?.key).filter(Boolean))
+  const dupes = new Set<string>()
+  let dupeRows = 0
+  for (const r of live) {
+    if (r.manual) continue
+    const hit = r.parts.filter((p) => p.kind === 'keep').map((p) => parseToken(p.text)?.key).filter((k): k is string => !!k && insertKeys.has(k))
+    if (hit.length) dupeRows++
+    hit.forEach((k) => dupes.add(k))
+  }
+  if (dupeRows) warnings.push(`有 ${dupeRows} 张图保留的内容与角色或服装 Prompt 重复（${[...dupes].slice(0, 5).join('、')}），可能是原服装残留。需要时请在「替换」步骤选中删除`)
   const blocked = rows.filter((r) => r.state !== 'valid' && r.state !== 'excluded').length
   if (!units.length && data.images.length && !errors.length) errors.push('没有可以生成的图片')
   if (blocked) warnings.push(`有 ${blocked} 张图片还不能生成，入队时不包含它们`)
@@ -270,7 +297,8 @@ export async function relocateImages(data: ReplicaData, folder: string): Promise
       notFound.push(im.name)
       continue
     }
-    const r = await relocateOne(im, p)
+    // 按文件名自动匹配时要求能核对：原图有 Prompt、找到的同名文件没有元数据时，不认为是同一张图
+    const r = await relocateOne(im, p, true)
     if (r) {
       images[i] = r
       relocated++
@@ -280,9 +308,10 @@ export async function relocateImages(data: ReplicaData, folder: string): Promise
 }
 
 /** 指定一张图的新位置：元数据中的 Prompt 与保存的一致才更新路径（没有元数据的图片不比较） */
-export async function relocateOne(im: ReplicaImage, path: string): Promise<ReplicaImage | null> {
+export async function relocateOne(im: ReplicaImage, path: string, strict = false): Promise<ReplicaImage | null> {
   if (!statSync(path).isFile()) return null
   const s = await scanImage(path)
+  if (strict && im.status !== 'error' && s.status === 'error') return null
   if (im.status !== 'error' && s.status !== 'error' && s.positive !== im.positive && !im.confirmed) return null
   return { ...im, path, name: im.name }
 }

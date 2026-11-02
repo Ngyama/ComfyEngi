@@ -7,7 +7,7 @@
 // - 生成尺寸：创建空 latent 的节点的 width / height；连接自上游整数节点时映射到上游节点（放大、分块等参数不会被当作尺寸）
 // 所有建议都只是候选，由用户确认后才写入映射。
 
-import { activeLoraNames, DEFAULT_PREFIX_TEMPLATE, findLoraLoaders, isLink, LM_TRIGGER_TOGGLE, newEntry, NODE_BYPASS, nodeTitle, parseStack, PROMPT_SOURCES, sortNodeIds, toggleStructure, TRIGGER_DISABLE, type LoraLoaderInfo } from './mapping'
+import { activeLoraNames, DEFAULT_PREFIX_TEMPLATE, findLoraLoaders, isLink, LM_LORA_LOADER, LM_TRIGGER_OUTPUT, LM_TRIGGER_TOGGLE, loraStackOf, newEntry, NODE_BYPASS, nodeTitle, parseStack, PROMPT_SOURCES, sortNodeIds, toggleStructure, TRIGGER_CUT, TRIGGER_DISABLE, type LoraLoaderInfo } from './mapping'
 import type { ApiNode, ApiWorkflow, InputChange, InputValue, MappingEntry, PromptInjector } from './types'
 
 export type SuggestionGroup = 'prompt' | 'seed' | 'lora' | 'output' | 'size'
@@ -145,7 +145,7 @@ function injectorMessage(nid: string, n: ApiNode, inj: Omit<PromptInjector, 'mes
     return `检测到 TriggerWord Toggle 节点 ${nodeLabel(nid, n)}${where}。该节点可能额外添加 LoRA metadata 中的触发词，当前 ComfyEngi 的角色和服装 Prompt 不一定包含此节点的实际输出；如果同时启用了多套服装触发词，可能造成服装特征混合。工作流保存的开关状态：${on} / ${groups.length} 组启用${inj.source_node ? `；另外，只要 LoRA #${inj.source_node} 实际加载的 LoRA 与保存工作流时不同，节点会绕过开关，输出这些 LoRA 的全部触发词` : ''}。可以在工作流检查中禁止它注入。`
   }
   if (inj.kind === 'trigger_unknown') return `检测到未受控制的 Prompt 注入节点 ${nodeLabel(nid, n)}${where}：看起来是触发词节点，但结构未经验证，ComfyEngi 不会修改它，也无法知道它的实际输出。如需排除它的影响，请在 ComfyUI 中调整后重新导出工作流。`
-  if (inj.kind === 'loader_text') return `节点 ${nodeLabel(nid, n)} 的文本输出接入了 Prompt${where}：未受控制的 Prompt 注入，它的内容不包含在 ComfyEngi 拼接的 Prompt 中。`
+  if (inj.kind === 'loader_text') return `节点 ${nodeLabel(nid, n)} 的文本输出接入了 Prompt${where}：未受控制的 Prompt 注入，它的内容不包含在 ComfyEngi 拼接的 Prompt 中。可以在工作流页面的「LoRA 自动触发词」查看并处理。`
   if (inj.kind === 'unmapped_text') return `节点 ${nodeLabel(nid, n)}${where}，它的文本没有映射，会保持工作流原值并进入 Prompt。`
   return `节点 ${nodeLabel(nid, n)}${where}，无法确定它输出的文本：未受控制的 Prompt 注入节点，请在 ComfyUI 中确认。`
 }
@@ -209,6 +209,107 @@ export function findPromptInjectors(api: ApiWorkflow, mapping: MappingEntry[], o
     if (st?.source_node && originalApi && !inj.disabled) inj.bypass = activeLoraNames(api[st.source_node]).join('\n') !== activeLoraNames(originalApi[st.source_node]).join('\n')
     return { ...inj, message: injectorMessage(nid, n, inj) }
   })
+}
+
+// ---------------- LoRA Loader 的 trigger_words 文本路径
+
+/** 已验证的字符串节点：只有这些输入的文本会原样进入输出。其他节点不猜测 */
+const TEXT_PASS: Record<string, string[]> = { StringConcatenate: ['string_a', 'string_b'], RegexReplace: ['string'] }
+const CUT_CLASS = 'StringConcatenate'
+
+/**
+ * controllable：可以切断（Loader → StringConcatenate → 已验证的文本节点 → 正向编码器）
+ * toggle：经过结构已验证的 TriggerWord Toggle，由现有的「禁止注入」控制
+ * off_prompt：没有进入 Prompt，不需要处理
+ * unsupported：无法确认，不修改
+ */
+export type TriggerPathStatus = 'controllable' | 'toggle' | 'off_prompt' | 'unsupported'
+export interface TriggerPath {
+  loader: string
+  /** 直接使用 trigger_words 输出的节点与输入 */
+  node: string
+  input: string
+  class_type: string
+  /** 从 Loader 到编码器经过的节点（有分支时按广度优先列出） */
+  route: string[]
+  encoders: string[]
+  status: TriggerPathStatus
+  reason: string
+  /** toggle：工作流已设置禁止注入 */
+  disabled: boolean
+}
+
+/** 沿字符串连接向下游走，直到编码器；遇到未验证的节点记入 unknown */
+function traceText(api: ApiWorkflow, start: string) {
+  const route = [start]
+  const encoders: string[] = []
+  const unknown: string[] = []
+  const queue = [start]
+  while (queue.length) {
+    const cur = queue.shift()!
+    for (const nid of sortNodeIds(Object.keys(api))) {
+      const n = api[nid]
+      for (const [input, v] of Object.entries(n.inputs ?? {})) {
+        if (!isLink(v) || String(v[0]) !== cur) continue
+        if (TEXT_PASS[n.class_type]?.includes(input)) {
+          if (!route.includes(nid)) {
+            route.push(nid)
+            queue.push(nid)
+          }
+        } else if (isEncoder(n) && TEXT_FIELDS.includes(input)) {
+          if (!encoders.includes(nid)) encoders.push(nid)
+        } else if (!unknown.includes(nid)) unknown.push(nid)
+      }
+    }
+  }
+  return { route, encoders, unknown }
+}
+
+/** 编码器实际接到采样器的哪一侧（不看标题，只看连接） */
+function encoderSides(api: ApiWorkflow) {
+  const out = { positive: new Set<string>(), negative: new Set<string>() }
+  for (const s of findSamplers(api)) for (const pol of ['positive', 'negative'] as const) for (const e of encodersOf(api, api[s].inputs[pol] as [string, number])) out[pol].add(e)
+  return out
+}
+
+/** 找出已验证的 LoRA Loader 的全部 trigger_words 路径（每个使用这个输出的输入算一条），不依赖固定节点 ID；不会遗漏，无法确认的标记为 unsupported 并说明原因 */
+export function findTriggerPaths(api: ApiWorkflow, mapping: MappingEntry[] = []): TriggerPath[] {
+  const sides = encoderSides(api)
+  const off = new Set(mapping.filter((m) => m.source === TRIGGER_DISABLE).map((m) => String(m.node)))
+  const out: TriggerPath[] = []
+  for (const loader of sortNodeIds(Object.keys(api))) {
+    const ld = api[loader]
+    if (ld.class_type !== LM_LORA_LOADER || !loraStackOf(ld)) continue
+    for (const nid of sortNodeIds(Object.keys(api))) {
+      const n = api[nid]
+      for (const [input, v] of Object.entries(n.inputs ?? {})) {
+        if (!isLink(v) || String(v[0]) !== loader || v[1] !== LM_TRIGGER_OUTPUT) continue
+        const base = { loader, node: nid, input, class_type: n.class_type }
+        const isToggle = !!toggleStructure(n) && input === 'trigger_words'
+        if (!isToggle && !(n.class_type === CUT_CLASS && TEXT_PASS[CUT_CLASS].includes(input))) {
+          const why = n.class_type === LM_TRIGGER_TOGGLE || /trigger/i.test(n.class_type) ? '是结构未验证的触发词节点' : '不是已验证的拼接节点'
+          out.push({ ...base, route: [loader, nid], encoders: [], status: 'unsupported', reason: `#${nid}（${n.class_type}）${why}，不修改这条路径`, disabled: false })
+          continue
+        }
+        const t = traceText(api, nid)
+        // 路径只显示进入编码器的分支（没有使用者的拼接节点不影响 Prompt）
+        const route = [loader, ...t.route.filter((x) => x === nid || traceText(api, x).encoders.length > 0), ...t.encoders]
+        const pos = t.encoders.filter((e) => sides.positive.has(e))
+        const neg = t.encoders.filter((e) => sides.negative.has(e))
+        const unsure = t.encoders.filter((e) => !sides.positive.has(e) && !sides.negative.has(e))
+        const res = (status: TriggerPathStatus, reason: string) => out.push({ ...base, route, encoders: t.encoders, status, reason, disabled: isToggle && off.has(nid) })
+        if (isToggle) {
+          if (!pos.length && !neg.length) res('off_prompt', 'TriggerWord Toggle 的输出没有确认进入 Prompt')
+          else res('toggle', '经过 TriggerWord Toggle，由这个节点的「禁止注入」控制')
+        } else if (t.unknown.length) res('unsupported', `下游 ${t.unknown.map((x) => `#${x}（${api[x].class_type}）`).join('、')} 不是已验证的文本节点，无法确认切断的影响，不修改这条路径`)
+        else if (neg.length) res('unsupported', `文本进入了负面 Prompt（${neg.map((x) => `#${x}`).join('、')}），不修改这条路径`)
+        else if (unsure.length) res('unsupported', `编码器 ${unsure.map((x) => `#${x}`).join('、')} 没有确认接到采样器的正向输入，不修改这条路径`)
+        else if (!pos.length) res('off_prompt', '没有进入 Prompt，不影响生成')
+        else res('controllable', '')
+      }
+    }
+  }
+  return out
 }
 
 /** 这些写入值是否改变了 LoRA Loader 实际加载的 LoRA（插件的 TriggerWord Toggle 会因此绕过开关状态） */
@@ -278,6 +379,7 @@ export function changeLines(changes: InputChange[]): ChangeLine[] {
   for (const c of changes) {
     const base = { node: c.node, class_type: c.class_type, title: c.title, source: c.source, change: c }
     if (c.source === NODE_BYPASS) out.push({ ...base, label: '', before: '', after: '', long: false, kind: 'bypass' })
+    else if (c.source === TRIGGER_CUT) out.push({ ...base, label: c.input, before: isLink(c.before) ? `#${c.before[0]} 的触发词输出` : lineValue(c.before), after: '空文本', long: false, kind: 'value' })
     else if (c.source === TRIGGER_DISABLE) {
       if (!triggered.has(c.node)) out.push({ ...base, label: '', before: '', after: '', long: false, kind: 'trigger' })
       triggered.add(c.node)

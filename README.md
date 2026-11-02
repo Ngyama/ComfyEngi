@@ -161,6 +161,14 @@ TriggerWord Toggle (LoraManager)：按插件源码（`py/nodes/trigger_word_togg
 
 限制：只适配 class_type 为 `TriggerWord Toggle (LoraManager)` 且输入结构已验证的节点；ComfyUI 不提供插件版本号，联网校验只能核对节点声明的输入。其他触发词节点、动态 Prompt、LLM 等节点的实际输出无法得知，只标记为未受控制，不会修改。非确定性节点即使提交内容相同也可能得到不同结果；通过 API 提交时 PNG 中没有前端工作流信息，所以即使像素相同，文件字节也可能与网页界面生成的不同。
 
+**LoRA 自动触发词（工作流页面）**：`Lora Loader (LoraManager)` 的 `trigger_words` 输出（序号 2）进入 Prompt 时，页面逐条列出路径，每条可以选择「由 ComfyEngi 管理」或「使用插件输出」，默认使用插件输出（旧工作流提交内容不变）。识别只看节点类型与连接，不依赖节点 ID：
+
+- 直接接入 `StringConcatenate`，下游只经过 `StringConcatenate` / `RegexReplace` 到达正向编码器：可以管理，提交时把这个输入写成 `""`（配置保存在工作流的 `controls.trigger_cuts`）。Loader 的 MODEL、CLIP、LoRA 名称和权重不变，导入的工作流不变。
+- 经过结构已验证的 TriggerWord Toggle：使用现有的 `trigger_disable`。
+- 其他结构（未知节点、进入负面、编码器未确认接到采样器）：保持原样并说明原因。名称含 Lora 的其他节点不按这个结构处理。
+
+更新 JSON 后配置的路径不再匹配时阻止入队，并提示清除。这些行为基于静态结构判断，插件实际输出仍需要实机验证。
+
 ## 工作流页面
 
 左侧导航 →「工作流」：选择、导入、更新工作流，查看和控制节点。设置中不再有工作流管理（默认工作流仍可在「生成默认值」中选择）。不是图形编辑器，不能添加节点或改连线。

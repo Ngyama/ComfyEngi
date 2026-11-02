@@ -8,7 +8,7 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { dirname, extname, join } from 'node:path'
 import { BrowserWindow, clipboard, dialog, ipcMain, nativeImage, shell, app } from 'electron'
 import { API_METHODS, INVOKE_CHANNEL, RUNNER_EVENT_CHANNEL, type Api, type ApiMethod } from '@shared/api'
-import { BYPASS_REWIRE, checkAgainstObjectInfo, ComfyError, NODE_BYPASS, NODE_OVERRIDE, findLoraLoaders, loadApiWorkflow, mappingValues, primaryOutputIndex, sortNodeIds, validateMapping } from '@shared/mapping'
+import { TRIGGER_CUT, BYPASS_REWIRE, checkAgainstObjectInfo, ComfyError, NODE_BYPASS, NODE_OVERRIDE, findLoraLoaders, loadApiWorkflow, mappingValues, primaryOutputIndex, sortNodeIds, validateMapping } from '@shared/mapping'
 import { normalizeCard } from '@shared/cards'
 import { normalizeTaskData } from '@shared/planner'
 import { diffWorkflow, findPromptInjectors, generationSize } from '@shared/workflow-analysis'
@@ -176,7 +176,7 @@ function inspectAttempt(store: Store, id: number): ExecutionInspection {
     attempt,
     graph_json: JSON.stringify(graph, null, 2),
     original_json: JSON.stringify(orig, null, 2),
-    controls: inputs.filter((x) => x.source === NODE_OVERRIDE || x.source === NODE_BYPASS || x.source === BYPASS_REWIRE),
+    controls: inputs.filter((x) => x.source === NODE_OVERRIDE || x.source === NODE_BYPASS || x.source === BYPASS_REWIRE || x.source === TRIGGER_CUT),
     intact: stored.intact,
     changes,
     unchanged,
