@@ -130,7 +130,13 @@ try {
   await win.waitForTimeout(800)
   await win.locator('[data-testid=replica-wf-lora-replace]').first().click()
   await win.waitForTimeout(800)
-  check('替换后旧 LoRA 显示为已替换', (await win.locator('[data-testid=replica-wf-lora-replace]').first().innerText()).includes('已替换'))
+  check('替换后显示 原 LoRA → 新 LoRA', (await win.locator('[data-testid=replica-wf-lora]').first().getAttribute('data-replaced')) !== null && (await win.locator('[data-testid=replica-wf-lora-target]').first().innerText()).includes('charB'))
+  // 取消替换不会白屏，状态恢复；再次替换供后续步骤使用
+  await win.locator('[data-testid=replica-wf-lora-replace]').first().click()
+  await win.waitForTimeout(500)
+  check('取消替换后页面正常、状态恢复', (await win.locator('[data-testid=replica-crashed]').count()) === 0 && (await win.locator('[data-testid=replica-wf-lora]').first().getAttribute('data-replaced')) === null)
+  await win.locator('[data-testid=replica-wf-lora-replace]').first().click()
+  await win.waitForTimeout(800)
   await shot('r3-character')
 
   // 4. 预览

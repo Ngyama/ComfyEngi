@@ -57,15 +57,68 @@ describe('Tag 替换', () => {
     expect(replace('a \\( b, c', ['c']).status).toBe('ok')
   })
 
-  it('选中的 Tag 在组合权重里时不拆组合，要求手动处理', () => {
+  it('组合中的 Tag 可以单独移除，组合的括号与权重保留在其余 Tag 上', () => {
     const r = replace('(blue hair, long hair:1.2), smile', ['blue_hair'], 'x')
-    expect(r.status).toBe('group')
-    expect(r.text).toContain('(blue hair, long hair:1.2)')
-    expect(r.grouped).toEqual(['blue_hair'])
-    // 组合中的 Tag 自己带权重也能识别
-    expect(replace('(blue hair:1.2, long hair), smile', ['blue_hair']).status).toBe('group')
+    expect(r.status).toBe('ok')
+    expect(r.text).toBe('x, (long hair:1.2), smile')
+    expect(r.grouped).toEqual([])
+    // 组合中的 Tag 自己带权重
+    expect(replace('(blue hair:1.2, long hair), smile', ['blue_hair']).text).toBe('(long hair), smile')
     // 没选中组合里的内容时不受影响
     expect(replace('(blue hair, long hair:1.2), smile', ['smile']).text).toBe('(blue hair, long hair:1.2)')
+  })
+
+  it('各种组合写法：只移除选中的 Tag，不留空括号、空 Tag 或多余逗号', () => {
+    const cases: [string, string[], string][] = [
+      ['(bowtie, single_braid), smile', ['bowtie'], '(single_braid), smile'],
+      ['(bowtie, single_braid), smile', ['bowtie', 'single_braid'], 'smile'],
+      ['(a, b:1.2)', ['a'], '(b:1.2)'],
+      ['((a, b))', ['a'], '((b))'],
+      ['(a:1.1), (b:1.2)', ['a'], '(b:1.2)'],
+      ['(a, (b:1.3))', ['a'], '((b:1.3))'],
+      ['(a, (b:1.3))', ['b'], '(a)'],
+      ['[a, b]', ['b'], '[a]'],
+      ['( a , b ), c', ['a'], '(b ), c'],
+      ['x, (a, b), c', ['a', 'b'], 'x, c'],
+    ]
+    for (const [src, keys, want] of cases) {
+      const r = replace(src, keys)
+      expect(r.text, src).toBe(want)
+      expect(r.status, src).toBe('ok')
+      expect(r.text, src).not.toMatch(/\(\s*\)|\[\s*\]|,\s*,|^\s*,|,\s*$/)
+    }
+  })
+
+  it('部分移除组合时角色 Prompt 放在组合前；整组移除时放在原位置', () => {
+    expect(replace('x, (a, b), c', ['a'], 'NEW').text).toBe('x, NEW, (b), c')
+    expect(replace('x, (a, b), c', ['a', 'b'], 'NEW').text).toBe('x, NEW, c')
+  })
+
+  it('动态语法、调度语法里的 Tag 不自动修改，说明原因', () => {
+    for (const src of ['{a|b}, c', '[a:b:0.5], c', '[a|b], c']) {
+      const r = replace(src, ['a'], 'x')
+      expect(r.status, src).toBe('group')
+      expect(r.text, src).toContain(src.split(', c')[0])
+      expect(r.grouped, src).toEqual(['a'])
+    }
+  })
+
+  it('组合内移除的显示片段能还原结果', () => {
+    for (const [src, keys] of [['(bowtie, single_braid), smile', ['bowtie']], ['x, (a, (b:1.3)), c', ['b']], ['(a, b:1.2)', ['a', 'b']]] as [string, string[]][]) {
+      const r = replace(src, keys, 'NEW')
+      expect(r.parts.filter((p) => p.kind !== 'remove').map((p) => p.text).join(''), src).toBe(r.text)
+    }
+  })
+
+  it('统计时组合里的 Tag 单独列出，多种写法合并计数', () => {
+    const stats = tagStats([{ positive: '(bowtie, single_braid), smile' }, { positive: 'bowtie, (smile:1.2)' }])
+    const bow = stats.find((t) => t.key === 'bowtie')!
+    expect(bow.count).toBe(2)
+    expect(bow.images).toEqual([0, 1])
+    expect(bow.grouped).toBe(1)
+    expect(bow.forms.map((f) => f.raw).sort()).toEqual(['(bowtie, single_braid)', 'bowtie'])
+    expect(stats.find((t) => t.key === 'single_braid')?.count).toBe(1)
+    expect(stats.find((t) => t.key === 'smile')?.count).toBe(2)
   })
 
   it('全角逗号与换行作为分隔符保留', () => {
@@ -301,11 +354,11 @@ describe('计划与执行', () => {
     expect(wf.api_json['3'].inputs.steps).toBe(28)
   })
 
-  it('需确认、括号不配对、组合权重的图片不会自动提交，手动编辑或确认后才进入计划', async () => {
+  it('需确认、括号不配对、动态语法中的图片不会自动提交，手动编辑或确认后才进入计划；普通组合可以自动处理', async () => {
     const images = await importAll()
     images[0] = { ...images[0], status: 'check', notes: ['不确定'] }
     images[1] = { ...images[1], positive: '1girl, (red hair, sitting' }
-    images[2] = { ...images[2], positive: '(red hair, long hair:1.2), running' }
+    images[2] = { ...images[2], positive: '{red hair|long hair}, running' }
     const plan = planForReplica(s, draft(images))
     expect(plan.rows.map((r) => r.state)).toEqual(['confirm', 'confirm', 'confirm', 'invalid'])
     expect(plan.units).toHaveLength(0)
@@ -313,6 +366,10 @@ describe('计划与执行', () => {
     const p2 = planForReplica(s, draft(fixed))
     expect(p2.rows.map((r) => r.state)).toEqual(['valid', 'valid', 'confirm', 'invalid'])
     expect(p2.units[1].positive).toBe('手动内容')
+    const grouped = planForReplica(s, draft([{ ...images[2], positive: '(red hair, long hair:1.2), running' }]))
+    expect(grouped.rows[0].state).toBe('valid')
+    expect(grouped.rows[0].positive).not.toMatch(/red hair/)
+    expect(grouped.rows[0].positive).toContain('(long hair:1.2), running')
   })
 
   it('Prompt 映射按模块拆分的工作流不能用于复刻（不会提交空 Prompt）', async () => {

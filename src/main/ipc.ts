@@ -412,7 +412,7 @@ export function registerIpc(ctx: IpcContext) {
       if (!rec) throw new BadArg('草稿不存在')
       const p = planForReplica(store, rec)
       const size = p.workflow ? generationSize(p.workflow.api_json ?? {}) : null
-      return { rows: p.rows, errors: p.errors, warnings: p.warnings, output_dir: p.output_dir, loras: p.loras, units: p.units.length, workflow: p.workflow ? { id: p.workflow.id!, name: p.workflow.name } : null, default_size: size ? { width: size.width, height: size.height } : null }
+      return { rows: p.rows, errors: p.errors, warnings: p.warnings, output_dir: p.output_dir, loras: p.loras, lora_info: p.lora_info, units: p.units.length, workflow: p.workflow ? { id: p.workflow.id!, name: p.workflow.name } : null, default_size: size ? { width: size.width, height: size.height } : null }
     },
     'replicas.finalWorkflow': (id, unit) => {
       const rec = store.get('replicas', int(id))

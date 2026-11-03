@@ -151,6 +151,32 @@ const hasTop = (s: string, ch: string) => {
 
 const NUM = /^\s*-?\d+(?:\.\d+)?\s*$/
 
+export interface WeightLayer {
+  open: '(' | '['
+  /** 括号内去掉显式权重后的内容（保留原始空白） */
+  body: string
+  /** 显式权重的原文，例如 ":1.2"；没有时为空 */
+  suffix: string
+  close: ')' | ']'
+  weight: number
+}
+
+/** 最外层的一层权重括号：(x)、(x:1.2)、[x]。[a:b:0.5]、[a|b] 等动态语法与不完整的括号返回 null（不拆） */
+export function peelWeight(raw: string): WeightLayer | null {
+  const s = raw.trim()
+  if (s.length < 2) return null
+  const c = s[0]
+  if ((c !== '(' && c !== '[') || matchClose(s, 0) !== s.length - 1) return null
+  const inner = s.slice(1, -1)
+  if (c === '(') {
+    const colon = lastTopColon(inner)
+    if (colon >= 0 && NUM.test(inner.slice(colon + 1))) return { open: '(', body: inner.slice(0, colon), suffix: inner.slice(colon), close: ')', weight: Number(inner.slice(colon + 1)) }
+    return { open: '(', body: inner, suffix: '', close: ')', weight: 1.1 }
+  }
+  if (hasTop(inner, ':') || hasTop(inner, '|')) return null
+  return { open: '[', body: inner, suffix: '', close: ']', weight: 1 / 1.1 }
+}
+
 /** 去掉外层权重语法，得到标签文本与权重。不认识的括号内容（[a:b:0.5]、[a|b]、{a|b}）原样保留 */
 export function stripWeight(raw: string): { core: string; weight: number } {
   let s = raw.trim()

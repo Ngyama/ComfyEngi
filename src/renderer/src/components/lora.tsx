@@ -5,6 +5,7 @@ import { Command, CommandEmpty, CommandInput, CommandItem, CommandList } from '@
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { api } from '@/lib/api'
 import { LoraThumb, loraTitle } from '@/pages/LorasPage'
+import { selectableLoras } from '@shared/lora-names'
 import type { LoraResource } from '@shared/types'
 
 // ---------------------------------------------------------------- LoRA 资源（复用 LoRA Manager 的数据接口）
@@ -37,8 +38,7 @@ export function LoraPicker({ resources, onPick, children }: { resources: LoraRes
   }, [open])
   const list = useMemo(() => {
     const words = q.toLowerCase().split(/\s+/).filter(Boolean)
-    return resources
-      .filter((r) => !r.missing && !r.offline)
+    return selectableLoras(resources)
       .filter((r) => {
         const hay = `${r.name} ${r.sidecar?.modelName ?? ''} ${r.folder}`.toLowerCase()
         return words.every((w) => hay.includes(w))

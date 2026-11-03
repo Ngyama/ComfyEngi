@@ -74,9 +74,18 @@ export function effectiveLoraConfig(saved: WfLoraConfig | undefined, api: ApiWor
   return {
     nodes: loaders.map((l) => l.node),
     entries: [...saved.entries.filter((e) => live.has(e.node)), ...fresh.flatMap((l) => defaultsOf(api, l))],
-    char_targets: Object.fromEntries(Object.entries(saved.char_targets ?? {}).filter(([, t]) => live.has(t.node))),
+    // 旧版界面取消替换时可能留下空值：只保留结构完整的目标
+    char_targets: Object.fromEntries(Object.entries(saved.char_targets ?? {}).filter(([, t]) => !!t && typeof t === 'object' && typeof t.node === 'string' && live.has(t.node))),
     ...(saved.sig ? { sig: saved.sig } : {}),
   }
+}
+
+/** 设置或取消某个角色的加载位置（取消时删除这个键，不留下空值） */
+export function setCharTarget(cfg: WfLoraConfig, role: CharRole, target: { node: string; replace?: string } | null): WfLoraConfig {
+  const next = { ...(cfg.char_targets ?? {}) }
+  if (target) next[role] = target
+  else delete next[role]
+  return { ...cfg, char_targets: next }
 }
 
 /** 角色 LoRA 在本工作流中的位置：link 关联已有同名条目；append 追加到多 LoRA Loader；replace 替换某个条目；none 没有可用位置 */

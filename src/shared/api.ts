@@ -10,11 +10,13 @@ export type SaveResult = { id: number }
 export type Plan = PlanResult & { units: PlanUnit[] }
 
 export interface ReplicaPlanView {
-  rows: { index: number; path: string; name: string; state: 'valid' | 'confirm' | 'invalid' | 'missing' | 'excluded'; reason: string; positive: string; negative: string; original_positive: string; original_negative: string; parts: ReplacePart[]; removed: string[]; manual: boolean; params: ParamRow[]; seed: number; seed_generated: boolean; width: number | null; height: number | null; output_name: string; unit: number | null }[]
+  rows: { index: number; path: string; name: string; state: 'valid' | 'confirm' | 'invalid' | 'missing' | 'excluded'; reason: string; positive: string; negative: string; original_positive: string; original_negative: string; parts: ReplacePart[]; removed: string[]; manual: boolean; params: ParamRow[]; seed: number; seed_generated: boolean; width: number | null; height: number | null; output_name: string; outfit: string; outfit_source: 'default' | 'image'; unit: number | null }[]
   errors: string[]
   warnings: string[]
   output_dir: string
   loras: string[]
+  /** 新角色 LoRA 的名称、权重与实际写入位置 */
+  lora_info: { name: string; strength: number; placement: string; ok: boolean }[]
   units: number
   workflow: { id: number; name: string } | null
   default_size: { width: unknown; height: unknown } | null

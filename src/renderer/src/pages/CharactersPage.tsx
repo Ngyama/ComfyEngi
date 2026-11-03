@@ -18,6 +18,7 @@ import { cn } from '@/lib/utils'
 import { LoraThumb, loraTitle } from '@/pages/LorasPage'
 import { folderOf, LoraPicker, useLoraResources } from '@/components/lora'
 import { prependTags, promptTags } from '@shared/prompt'
+import { suggestedComfyName } from '@shared/lora-names'
 import type { Character, Lora, LoraResource, Outfit } from '@shared/types'
 
 /** 角色的 LoRA：最多关联一个；旧版多 LoRA 数据保持原样并明确提示 */
@@ -80,7 +81,7 @@ function LoraSection({ loras, resources, onChange, onResourceChanged, onImport }
     )
 
   const r = byId(l.resource_id)
-  const suggested = r ? (/^[a-z]:[\\/]/i.test(r.path) ? r.relativePath.replaceAll('/', '\\') : r.relativePath) : ''
+  const suggested = r ? suggestedComfyName(r) : ''
   return (
     <div className="flex items-center gap-3 rounded-xl bg-tint/[0.035] p-2.5 ring-1 ring-tint/[0.096]" data-testid="character-lora">
       {r ? (

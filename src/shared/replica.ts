@@ -1,10 +1,12 @@
 // 套图复刻：从原图元数据恢复生成参数、统计 Tag、替换选中的 Tag。
-// 替换只移除选中的完整表达式，其余文本逐字节保留（不去重、不重排、不改权重）。
+// 替换只移除选中的 Tag，其余文本逐字节保留（不去重、不重排、不改权重）。
+// 选择单位是单个 Tag：(a, b:1.2)、((a, b))、[a, b] 这样的组合会逐层展开，只移除选中的子 Tag，保留括号与权重写法，
+// 因此其余 Tag 的有效权重不变。动态语法（{a|b}、[a:b:0.5]）不拆开，选中的 Tag 在其中时要求手动编辑。
 
 import { findLoraLoaders, isLink, loraStem } from './mapping'
 import { consumersOf, inputControl, literalKind } from './node-controls'
 import { parseJsonLoose, samplersOfGraph, type PromptCandidate, type PromptSource } from './prompt-source'
-import { normalizeKey, parseToken, splitTopLevel, topLevelSegments } from './tags'
+import { normalizeKey, parseToken, peelWeight, splitTopLevel, topLevelSegments } from './tags'
 import type { ApiWorkflow, InputValue, MappingEntry, WorkflowControls } from './types'
 import type { WfLoraConfig } from './lora-config'
 
@@ -250,18 +252,87 @@ export interface ReplicaTag {
   forms: ReplicaTagForm[]
   /** 出现的图片序号 */
   images: number[]
-  /** 有多少张图的这个 Tag 在 (a, b:1.2) 这样的组合里，不能单独移除 */
+  /** 有多少张图的这个 Tag 在 (a, b:1.2) 这样的组合里（删除时只移除这个 Tag，组合中其他 Tag 保留） */
   grouped: number
 }
 
 /** 组合内的子 Tag 可能带自己的权重写法：(a:1.2, b) */
 const subTag = (s: string) => s.replace(/:\s*-?\d+(?:\.\d+)?\s*$/, '')
+/** 组合内单个 Tag 的比较键（统计与替换使用同一个规则） */
+const atomKey = (s: string) => parseToken(subTag(s))?.key ?? null
 
-/** 组合权重 (a, b:1.2) 中的子 Tag；普通 Tag 返回空 */
-function groupKeys(core: string): string[] {
-  const parts = splitTopLevel(core)
-  if (parts.length < 2) return []
-  return parts.map((p) => parseToken(subTag(p))?.key).filter((k): k is string => !!k)
+/** 表达式中的单个 Tag：权重括号逐层展开，组合按逗号拆开；weight 为有效权重。只有一个 Tag 时不是组合 */
+export function tagLeaves(raw: string, weight = 1): { key: string; text: string; weight: number }[] {
+  const p = peelWeight(raw)
+  if (p) return tagLeaves(p.body, weight * p.weight)
+  const { segments } = topLevelSegments(raw)
+  if (segments.length > 1) return segments.flatMap((x) => tagLeaves(x.raw, weight))
+  const t = parseToken(subTag(raw))
+  return t ? [{ key: t.key, text: t.core, weight: Math.round(weight * t.weight * 1000) / 1000 }] : []
+}
+
+/** 没有被拆开的部分（动态语法等）中出现的选中 Tag：宽松查找，只用于要求手动确认 */
+function looseKeys(raw: string): string[] {
+  return raw
+    .replace(/\\[()[\]{}]/g, ' ')
+    .split(/[()[\]{}|:,，\n]/)
+    .filter((x) => x.trim() && !/^\s*-?\d+(?:\.\d+)?\s*$/.test(x))
+    .map((x) => parseToken(x)?.key)
+    .filter((k): k is string => !!k)
+}
+
+interface ExprEdit {
+  text: string
+  parts: ReplacePart[]
+  removed: string[]
+}
+
+/** 从一个表达式中移除选中的 Tag：保留括号与显式权重，全部移除时返回空文本 */
+function editExpr(s: string, keys: Set<string>): ExprEdit {
+  const keep: ExprEdit = { text: s, parts: [{ kind: 'keep', text: s }], removed: [] }
+  const p = peelWeight(s)
+  if (p) {
+    const r = editExpr(p.body, keys)
+    if (!r.removed.length) return keep
+    if (!r.text.trim()) return { text: '', parts: [{ kind: 'remove', text: s.trim() }], removed: r.removed }
+    // 外层括号与权重原样保留，只改括号内的内容
+    const lead = s.slice(0, s.indexOf(p.open) + 1)
+    const tail = p.suffix + p.close + s.slice(s.lastIndexOf(p.close) + 1)
+    return { text: lead + r.text + tail, parts: [{ kind: 'keep', text: lead }, ...r.parts, { kind: 'keep', text: tail }], removed: r.removed }
+  }
+  const { segments } = topLevelSegments(s)
+  if (segments.length > 1) {
+    const parts: ReplacePart[] = []
+    const removed: string[] = []
+    let out = ''
+    let cursor = 0
+    let wrote = false
+    for (const seg of segments) {
+      const between = s.slice(cursor, seg.start)
+      cursor = seg.end
+      const r = editExpr(seg.raw, keys)
+      removed.push(...r.removed)
+      if (!r.text) {
+        parts.push(...r.parts)
+        continue
+      }
+      // 前面的 Tag 被移除时，它后面的分隔符随之移除
+      const sep = wrote || seg === segments[0] ? between : ''
+      if (sep) parts.push({ kind: 'sep', text: sep })
+      out += sep + r.text
+      parts.push(...r.parts)
+      wrote = true
+    }
+    const tail = s.slice(cursor)
+    if (wrote && tail) {
+      parts.push({ kind: 'sep', text: tail })
+      out += tail
+    }
+    return { text: wrote ? out : '', parts, removed }
+  }
+  const k = atomKey(s)
+  if (k && keys.has(k)) return { text: '', parts: [{ kind: 'remove', text: s.trim() }], removed: [s.trim()] }
+  return keep
 }
 
 export function tagStats(images: { positive: string }[]): ReplicaTag[] {
@@ -279,13 +350,10 @@ export function tagStats(images: { positive: string }[]): ReplicaTag[] {
     for (const part of splitTopLevel(im.positive ?? '')) {
       const t = parseToken(part)
       if (!t) continue
-      const subs = splitTopLevel(t.core)
-      if (subs.length > 1) {
-        for (const s of subs) {
-          const st = parseToken(subTag(s))
-          if (st) hit(st.key, part, t.weight * st.weight, i, true)
-        }
-      } else hit(t.key, t.raw, t.weight, i, false)
+      const leaves = tagLeaves(part)
+      // 组合中的每个 Tag 单独统计，写法记录原始表达式
+      if (leaves.length > 1) for (const l of leaves) hit(l.key, part, l.weight, i, true)
+      else hit(t.key, t.raw, t.weight, i, false)
     }
   })
   const total = images.length || 1
@@ -305,10 +373,10 @@ export interface ReplacePart {
 }
 export interface ReplaceResult {
   text: string
-  /** unsafe：括号不配对，不做替换；group：选中的 Tag 在组合里，这个 Tag 没有移除 */
+  /** unsafe：括号不配对，不做替换；group：选中的 Tag 在无法安全拆开的表达式里（动态语法等），没有移除 */
   status: 'ok' | 'unsafe' | 'group'
   removed: string[]
-  /** 留在组合里、没有移除的 Tag */
+  /** 留在无法拆开的表达式里、没有移除的 Tag */
   grouped: string[]
   parts: ReplacePart[]
 }
@@ -317,6 +385,7 @@ const cleanInsert = (s: string) => String(s ?? '').trim().replace(/^[,，\s]+|[,
 
 /**
  * 替换选中的 Tag：第一个选中 Tag 的位置放入角色 Prompt（作为整体），其余选中的 Tag 与它前面的分隔符一起移除。
+ * 选中的 Tag 在组合里时只移除它，组合保留其余 Tag；第一个选中 Tag 在仍然保留的组合里时，角色 Prompt 放在这个组合前面。
  * 没有选中的 Tag 和它前面的分隔符（逗号、换行、BREAK）逐字节保留。这张图没有选中的 Tag 时，角色 Prompt 放在最前面。
  */
 export function applyTagReplacement(text: string, removed: Iterable<string>, insert = ''): ReplaceResult {
@@ -353,11 +422,34 @@ export function applyTagReplacement(text: string, removed: Iterable<string>, ins
       }
       continue
     }
-    if (t) {
-      const inner = groupKeys(t.core)
-      const stuck = inner.filter((k) => keys.has(k))
-      if (stuck.length) grouped.push(...stuck)
+    if (t && tagLeaves(seg.raw).length > 1) {
+      const r = editExpr(seg.raw, keys)
+      if (r.removed.length) {
+        hits.push(...r.removed)
+        if (!r.text) {
+          // 组合中的 Tag 全部选中：整个表达式移除，与单个 Tag 相同
+          if (!inserted && add) {
+            write('sep', between)
+            parts.push(...r.parts)
+            write('add', add)
+            inserted = true
+            wrote = true
+          } else parts.push(...r.parts)
+          continue
+        }
+        write('sep', wrote || seg === segments[0] ? between : '')
+        if (!inserted && add) {
+          write('add', add)
+          write('sep', ', ')
+          inserted = true
+        }
+        for (const p of r.parts) write(p.kind, p.text)
+        grouped.push(...looseKeys(r.text).filter((k) => keys.has(k)))
+        wrote = true
+        continue
+      }
     }
+    if (t) grouped.push(...looseKeys(seg.raw).filter((k) => keys.has(k)))
     // 第一个写出的内容之前只保留开头的文本（前面的 Tag 已被移除时，分隔符随之移除）
     write('sep', wrote || !segments.length || seg === segments[0] ? between : '')
     write('keep', seg.raw)
@@ -413,6 +505,8 @@ export interface ReplicaImage {
   manual_negative: string | null
   /** 这张图手动指定的参数 */
   overrides: Partial<Record<ParamKey, number | string>>
+  /** 这张图使用的服装：没有这个字段时使用草稿的默认服装；null 为不使用服装。按图片保存，删除或重新排序图片时不会错位 */
+  outfit_id?: number | null
 }
 
 export interface ReplicaData {
@@ -469,7 +563,41 @@ export function normalizeReplicaImage(raw: Partial<ReplicaImage>): ReplicaImage 
     manual_positive: typeof r.manual_positive === 'string' ? r.manual_positive : null,
     manual_negative: typeof r.manual_negative === 'string' ? r.manual_negative : null,
     overrides,
+    ...(r.outfit_id === null || (typeof r.outfit_id === 'number' && Number.isSafeInteger(r.outfit_id)) ? { outfit_id: r.outfit_id } : {}),
   }
+}
+
+/** 这张图实际使用的服装 ID：没有单独指定时使用默认服装 */
+export const imageOutfitId = (im: Pick<ReplicaImage, 'outfit_id'>, fallback: number | null) => (im.outfit_id === undefined ? fallback : im.outfit_id)
+
+/** 去掉单独指定的服装（恢复为默认服装） */
+export const withoutOutfit = (im: ReplicaImage): ReplicaImage => {
+  if (im.outfit_id === undefined) return im
+  const { outfit_id: _drop, ...rest } = im
+  return rest
+}
+
+/**
+ * 给图 from..to（从 1 开始，包含两端）指定服装：value 为服装 ID，null 为不使用服装，undefined 为恢复默认。
+ * 结果写在每张图上，之后删除或重新排序图片不会错位。范围不合法时返回错误说明，不修改。
+ */
+export function assignOutfit(images: ReplicaImage[], from: number, to: number, value: number | null | undefined): { images: ReplicaImage[]; error: string } {
+  const n = images.length
+  if (!Number.isInteger(from) || !Number.isInteger(to) || from < 1 || to > n || from > to) return { images, error: `请输入 1 到 ${n} 之间的图片编号，起始不大于结束` }
+  return { images: images.map((im, i) => (i + 1 < from || i + 1 > to ? im : value === undefined ? withoutOutfit(im) : { ...im, outfit_id: value })), error: '' }
+}
+
+/** 连续使用同一服装设置的图片（显示用，下标从 0 开始） */
+export function outfitRuns(images: ReplicaImage[]): { a: number; b: number; value: number | null | undefined; excluded: number }[] {
+  const runs: { a: number; b: number; value: number | null | undefined; excluded: number }[] = []
+  images.forEach((im, i) => {
+    const last = runs.at(-1)
+    if (last && last.value === im.outfit_id) {
+      last.b = i
+      if (im.exclude) last.excluded++
+    } else runs.push({ a: i, b: i, value: im.outfit_id, excluded: im.exclude ? 1 : 0 })
+  })
+  return runs
 }
 
 export function normalizeReplicaData(raw: Partial<ReplicaData> | null | undefined): ReplicaData {

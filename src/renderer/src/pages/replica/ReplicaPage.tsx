@@ -1,7 +1,7 @@
 // 套图复刻：导入 → 选择替换内容 → 选择新角色 → 预览 → 生成。全部在一个页面内完成，草稿自动保存。
 
-import { useEffect, useMemo, useRef, useState } from 'react'
-import { AlertCircle, ArrowLeft, Check, ChevronDown, ChevronRight, Copy, FolderOpen, ImageOff, ImagePlus, ListPlus, Pencil, Play, Plus, RotateCcw, Trash2 } from 'lucide-react'
+import { Component, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { AlertCircle, ArrowLeft, Check, ChevronDown, ChevronRight, Copy, FolderOpen, ImageOff, ImagePlus, ListPlus, Pencil, Play, Plus, RotateCcw, Trash2, X } from 'lucide-react'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { Switch } from '@/components/ui/switch'
@@ -10,21 +10,58 @@ import { api, call } from '@/lib/api'
 import { confirm, useLib, useNav } from '@/lib/stores'
 import { cn } from '@/lib/utils'
 import type { ReplicaPlanView } from '@shared/api'
-import { effectiveLoraConfig } from '@shared/lora-config'
-import { normalizeReplicaData, originalPositive, PARAM_KEYS, PARAM_LABELS, tagStats, type ParamKey, type ReplacePart, type ReplicaData, type ReplicaImage, type ReplicaTag } from '@shared/replica'
-import type { LoraResource, Workflow } from '@shared/types'
+import { effectiveLoraConfig, setCharTarget, type WfLoraEntry } from '@shared/lora-config'
+import { loadNameOf, suggestedComfyName } from '@shared/lora-names'
+import { loraStem } from '@shared/mapping'
+import { assignOutfit, normalizeReplicaData, outfitRuns, withoutOutfit, originalPositive, PARAM_KEYS, PARAM_LABELS, tagStats, type ParamKey, type ReplacePart, type ReplicaData, type ReplicaImage, type ReplicaTag } from '@shared/replica'
+import type { LoraResource, Outfit, Workflow } from '@shared/types'
+import { folderOf, LoraPicker } from '@/components/lora'
+import { loraTitle } from '@/pages/LorasPage'
 import { findPromptInjectors, findTriggerPaths } from '@shared/workflow-analysis'
 import { FinalWorkflowDialog } from '../plan/dialogs'
 import { Select } from '../settings/WorkflowEditor'
 
 type Row = ReplicaPlanView['rows'][number]
+/** 草稿修改：传入函数时基于最新状态计算（连续操作、异步回调不会用旧状态覆盖新状态） */
+type Update = (p: Partial<ReplicaData> | ((d: ReplicaData) => Partial<ReplicaData>)) => void
 
 const STEPS = ['导入', '选择替换内容', '选择新角色', '预览', '生成']
 const PAGE = 20
 
 export default function ReplicaPage() {
   const [id, setId] = useState<number | null>(null)
-  return id === null ? <DraftList onOpen={setId} /> : <Editor key={id} id={id} onBack={() => setId(null)} />
+  const [attempt, setAttempt] = useState(0)
+  if (id === null) return <DraftList onOpen={setId} />
+  return (
+    <Guard key={`${id}:${attempt}`} onBack={() => setId(null)} onRetry={() => setAttempt((n) => n + 1)}>
+      <Editor id={id} onBack={() => setId(null)} />
+    </Guard>
+  )
+}
+
+/** 页面出错时显示原因并允许返回或重新打开草稿（不吞掉错误：原因显示给用户，同时写入控制台） */
+class Guard extends Component<{ onBack: () => void; onRetry: () => void; children: ReactNode }, { error: Error | null }> {
+  state = { error: null as Error | null }
+  static getDerivedStateFromError(error: Error) {
+    return { error }
+  }
+  componentDidCatch(error: Error) {
+    console.error('套图复刻页面出错', error)
+  }
+  render() {
+    if (!this.state.error) return this.props.children
+    return (
+      <div className="flex h-full flex-col items-center justify-center gap-3 p-6 text-center" data-testid="replica-crashed">
+        <AlertCircle className="size-6 text-destructive" />
+        <div className="text-[13px] font-medium">套图复刻页面出错，草稿中已保存的内容不受影响</div>
+        <div className="max-w-xl font-mono text-[11.5px] break-words text-muted-foreground select-text">{this.state.error.message}</div>
+        <div className="flex gap-2">
+          <Button size="sm" onClick={this.props.onRetry}>重新打开草稿</Button>
+          <Button size="sm" variant="ghost" onClick={this.props.onBack}>返回列表</Button>
+        </div>
+      </div>
+    )
+  }
 }
 
 function DraftList({ onOpen }: { onOpen: (id: number) => void }) {
@@ -148,17 +185,28 @@ function Editor({ id, onBack }: { id: number; onBack: () => void }) {
   const [plan, setPlan] = useState<ReplicaPlanView | null>(null)
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const pending = useRef<{ name?: string; data?: ReplicaData } | null>(null)
-  const flush = async () => {
+  /** 保存失败时把修改放回待保存队列（下次修改或返回时重试），返回是否已全部保存 */
+  const flush = async (): Promise<boolean> => {
     if (timer.current) clearTimeout(timer.current)
     timer.current = null
     const p = pending.current
     pending.current = null
-    if (p) await call(api['replicas.save']({ id, ...p }))
+    if (!p) return true
+    const r = await call(api['replicas.save']({ id, ...p }), (m) => toast.error('草稿没有保存，修改仍保留在界面上，下次修改时会重试', { description: m }))
+    if (r !== undefined) return true
+    // 保存期间又有新的修改时，新修改优先
+    const later = pending.current as typeof p | null
+    pending.current = { ...p, ...later }
+    return false
   }
+  // 只采用最后一次请求的计划：较早的请求晚返回时不能覆盖新的结果
+  const planSeq = useRef(0)
   const refreshPlan = async () => {
+    const seq = ++planSeq.current
     await flush()
     const r = await call(api['replicas.plan'](id))
-    if (r) setPlan(r)
+    if (r && seq === planSeq.current) setPlan(r)
+    return r
   }
   const planTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const schedule = (p: { name?: string; data?: ReplicaData }) => {
@@ -168,9 +216,9 @@ function Editor({ id, onBack }: { id: number; onBack: () => void }) {
     if (planTimer.current) clearTimeout(planTimer.current)
     planTimer.current = setTimeout(() => void refreshPlan(), 500)
   }
-  const update = (patch: Partial<ReplicaData>) =>
+  const update: Update = (patch) =>
     setData((d) => {
-      const next = { ...d!, ...patch }
+      const next = { ...d!, ...(typeof patch === 'function' ? patch(d!) : patch) }
       schedule({ data: next })
       return next
     })
@@ -189,12 +237,12 @@ function Editor({ id, onBack }: { id: number; onBack: () => void }) {
   }, [id]) // eslint-disable-line react-hooks/exhaustive-deps
   if (!data) return null
   const active = data.images.filter((im) => !im.exclude)
-  const setImage = (i: number, patch: Partial<ReplicaImage>) => update({ images: data.images.map((im, n) => (n === i ? { ...im, ...patch } : im)) })
+  const setImage = (i: number, patch: Partial<ReplicaImage>) => update((d) => ({ images: d.images.map((im, n) => (n === i ? { ...im, ...patch } : im)) }))
   const counts = { total: data.images.length, valid: plan?.rows.filter((r) => r.state === 'valid').length ?? 0 }
   return (
     <div className="flex h-full min-h-0 flex-col" data-testid="replica-editor">
       <div className="flex items-center gap-2 px-6 pt-4 pb-2">
-        <Button size="icon-sm" variant="ghost" aria-label="返回" onClick={async () => { await flush(); onBack() }} data-testid="replica-back">
+        <Button size="icon-sm" variant="ghost" aria-label="返回" onClick={async () => { if ((await flush()) || (await confirm({ title: '草稿没有保存', description: '最近的修改没有写入草稿，返回后会丢失。仍要返回吗？', confirmText: '仍然返回', destructive: true }))) onBack() }} data-testid="replica-back">
           <ArrowLeft />
         </Button>
         <input
@@ -235,7 +283,7 @@ function Editor({ id, onBack }: { id: number; onBack: () => void }) {
 
 // ---------------- 第 1 步：导入
 
-function ImportStep({ id, data, plan, update, setImage, flush, reload }: { id: number; data: ReplicaData; plan: ReplicaPlanView | null; update: (p: Partial<ReplicaData>) => void; setImage: (i: number, p: Partial<ReplicaImage>) => void; flush: () => Promise<void>; reload: () => Promise<void> }) {
+function ImportStep({ id, data, plan, update, setImage, flush, reload }: { id: number; data: ReplicaData; plan: ReplicaPlanView | null; update: Update; setImage: (i: number, p: Partial<ReplicaImage>) => void; flush: () => Promise<boolean>; reload: () => Promise<void> }) {
   const [recursive, setRecursive] = useState(false)
   const [busy, setBusy] = useState<{ done: number; total: number } | null>(null)
   const [sel, setSel] = useState<number | null>(null)
@@ -255,10 +303,13 @@ function ImportStep({ id, data, plan, update, setImage, flush, reload }: { id: n
     const r = await call(p)
     setBusy(null)
     if (!r) return
+    // 读取期间草稿可能已被修改：基于最新状态合并
     const known = new Set(data.images.map((im) => im.path))
     const fresh = r.images.filter((im) => !known.has(im.path))
-    const images = [...data.images, ...fresh].sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }))
-    update({ images })
+    update((d) => {
+      const have = new Set(d.images.map((im) => im.path))
+      return { images: [...d.images, ...r.images.filter((im) => !have.has(im.path))].sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true })) }
+    })
     if (r.errors.length) toast.warning(r.errors[0])
     if (fresh.length) toast.success(`已导入 ${fresh.length} 张图片`)
     else if (r.images.length) toast.info('这些图片已经在草稿中')
@@ -298,7 +349,7 @@ function ImportStep({ id, data, plan, update, setImage, flush, reload }: { id: n
               variant="secondary"
               data-testid="replica-relocate-folder"
               onClick={async () => {
-                await flush()
+                if (!(await flush())) return
                 const r = await call(api['replicas.relocateFolder'](id))
                 if (!r) return
                 await reload()
@@ -319,7 +370,7 @@ function ImportStep({ id, data, plan, update, setImage, flush, reload }: { id: n
                   <Thumb path={im.path} className="aspect-square w-full rounded-none" />
                   <div className="flex items-center gap-1 px-1.5 py-1">
                     <StatusDot tone={gone || s === 'error' ? 'error' : s === 'check' ? 'warn' : 'ok'} />
-                    <span className="truncate text-[10.5px]" title={im.path}>{im.name}</span>
+                    <span className="truncate text-[10.5px]" title={im.path}><span className="text-muted-foreground tabular-nums">{i + 1}</span> {im.name}</span>
                   </div>
                 </button>
               )
@@ -329,7 +380,7 @@ function ImportStep({ id, data, plan, update, setImage, flush, reload }: { id: n
         </div>
       </div>
       {cur && sel !== null && (
-        <ImageDetail key={cur.path} im={cur} row={plan?.rows[sel]} onChange={(p) => setImage(sel, p)} onRelocate={async () => { await flush(); const r = await call(api['replicas.relocateFile'](id, sel)); if (r === false) toast.error('这张图片的 Prompt 与草稿中的不一致，没有替换'); if (r) await reload() }} onRemove={() => { update({ images: data.images.filter((_, n) => n !== sel) }); setSel(null) }} />
+        <ImageDetail key={cur.path} im={cur} row={plan?.rows[sel]} onChange={(p) => setImage(sel, p)} onRelocate={async () => { if (!(await flush())) return; const r = await call(api['replicas.relocateFile'](id, sel)); if (r === false) toast.error('这张图片的 Prompt 与草稿中的不一致，没有替换'); if (r) await reload() }} onRemove={() => { const path = cur.path; update((d) => ({ images: d.images.filter((x) => x.path !== path) })); setSel(null) }} />
       )}
     </div>
   )
@@ -436,7 +487,7 @@ function ParamList({ im, row, onChange }: { im: ReplicaImage; row?: Row; onChang
 
 // ---------------- 第 2 步：Tag 汇总
 
-function TagStep({ images, removed, update, plan }: { images: ReplicaImage[]; removed: string[]; update: (p: Partial<ReplicaData>) => void; plan: ReplicaPlanView | null }) {
+function TagStep({ images, removed, update, plan }: { images: ReplicaImage[]; removed: string[]; update: Update; plan: ReplicaPlanView | null }) {
   const [q, setQ] = useState('')
   const [minRatio, setMinRatio] = useState(0)
   const [open, setOpen] = useState<string | null>(null)
@@ -444,7 +495,7 @@ function TagStep({ images, removed, update, plan }: { images: ReplicaImage[]; re
   const tags = useMemo(() => tagStats(list), [list])
   const set = new Set(removed)
   const shown = tags.filter((t) => t.ratio * 100 >= minRatio && (!q || `${t.key} ${t.raw}`.toLowerCase().includes(q.toLowerCase().replace(/\s+/g, '_')) || t.raw.toLowerCase().includes(q.toLowerCase())))
-  const toggle = (k: string) => update({ removed_tags: set.has(k) ? removed.filter((x) => x !== k) : [...removed, k] })
+  const toggle = (k: string) => update((d) => ({ removed_tags: d.removed_tags.includes(k) ? d.removed_tags.filter((x) => x !== k) : [...d.removed_tags, k] }))
   const sample = plan?.rows.find((r) => r.removed.length) ?? plan?.rows.find((r) => r.state !== 'excluded' && r.state !== 'invalid')
   return (
     <div className="flex h-full min-h-0 gap-4">
@@ -491,8 +542,9 @@ function TagRow({ t, checked, open, onToggle, onOpen, images }: { t: ReplicaTag;
     <div className="border-b border-tint/[0.05] last:border-0" data-testid="tag-row" data-key={t.key} data-count={t.count}>
       <div className={cn('flex items-center gap-2 px-2.5 py-1.5 text-[12px]', checked && 'bg-destructive/[0.06]')}>
         <input type="checkbox" checked={checked} onChange={onToggle} className="accent-primary" data-testid="tag-check" />
-        <button type="button" className="min-w-0 flex-1 truncate text-left font-mono" onClick={onToggle} title={t.raw}>{t.raw}</button>
-        {t.grouped > 0 && <span className="shrink-0 rounded bg-warning/10 px-1 text-[10.5px] text-warning" title="这个 Tag 在组合权重里，选中后这些图片需要手动编辑">组合 {t.grouped}</span>}
+        <button type="button" className="min-w-0 flex-1 truncate text-left font-mono" onClick={onToggle} title={`原始写法：${t.forms.map((f) => f.raw).join('  ')}`} data-testid="tag-name">{t.key}</button>
+        {t.forms.length > 1 && <span className="shrink-0 text-[10.5px] text-muted-foreground" title={t.forms.map((f) => f.raw).join('\n')}>{t.forms.length} 种写法</span>}
+        {t.grouped > 0 && <span className="shrink-0 rounded bg-tint/[0.06] px-1 text-[10.5px] text-muted-foreground" title="在 (a, b) 这样的组合里出现。删除时只移除这个 Tag，组合中其他 Tag 与权重保留" data-testid="tag-grouped">组合中 {t.grouped}</span>}
         <span className="h-1 w-14 shrink-0 overflow-hidden rounded-full bg-tint/[0.08]"><span className="block h-full bg-primary/60" style={{ width: `${t.ratio * 100}%` }} /></span>
         <span className="w-16 shrink-0 text-right text-[11px] text-muted-foreground tabular-nums">{t.count} · {Math.round(t.ratio * 100)}%</span>
         <button type="button" className="shrink-0 text-muted-foreground hover:text-foreground" onClick={onOpen} aria-label="查看详情" data-testid="tag-open">
@@ -516,17 +568,18 @@ function TagRow({ t, checked, open, onToggle, onOpen, images }: { t: ReplicaTag;
 
 // ---------------- 第 3 步：新角色、LoRA、工作流
 
-function CharacterStep({ data, update, plan }: { data: ReplicaData; update: (p: Partial<ReplicaData>) => void; plan: ReplicaPlanView | null }) {
+function CharacterStep({ data, update, plan }: { data: ReplicaData; update: Update; plan: ReplicaPlanView | null }) {
   const lib = useLib((s) => s.lib)!
   const [q, setQ] = useState('')
   const [wf, setWf] = useState<Workflow | null>(null)
   const [resources, setResources] = useState<LoraResource[]>([])
   const wid = data.workflow_id ?? lib.settings.default_workflow_id ?? null
+  const loadResources = () => void call(api['loras.list']()).then((r) => r && setResources(r))
   useEffect(() => {
     if (wid) void call(api['workflows.get'](wid)).then((w) => setWf(w ?? null))
     else setWf(null)
-    void call(api['loras.list']()).then((r) => r && setResources(r))
-  }, [wid])
+    loadResources()
+  }, [wid]) // eslint-disable-line react-hooks/exhaustive-deps
   const character = lib.characters.find((c) => c.id === data.character_id)
   const outfits = lib.outfits.filter((o) => o.character_id === data.character_id)
   const cfg = wf ? effectiveLoraConfig(data.lora_config ?? undefined, wf.api_json ?? {}, wf.mapping ?? []) : null
@@ -537,32 +590,52 @@ function CharacterStep({ data, update, plan }: { data: ReplicaData; update: (p: 
   const imageLoraNames = [...new Set(data.images.flatMap((im) => im.loras.map((l) => l.name)))]
   const shownChars = lib.characters.filter((c) => !q || c.name.toLowerCase().includes(q.toLowerCase()))
   const field = 'rounded-lg bg-tint/[0.045] px-2 py-1 text-[12px] ring-1 ring-tint/[0.112] outline-none'
+  // 实际会使用的新角色 LoRA：第 3 步选择的优先，否则是角色库中的第一个
+  const picked = data.lora.resource_id ? resources.find((r) => r.id === data.lora.resource_id) : undefined
+  const newLora = data.lora.enabled ? (data.lora.name ?? charLora?.name ?? null) : null
+  const linkedChar = picked?.characterId != null ? lib.characters.find((c) => c.id === picked.characterId) : undefined
+  const assigned = data.images.filter((im) => im.outfit_id !== undefined).length
+
+  const chooseCharacter = (cid: number) => {
+    if (cid === data.character_id) return
+    // 服装属于角色：换角色时清除按图片分配的服装（之前的服装不属于新角色）
+    if (assigned) toast.info(`已清除 ${assigned} 张图片单独指定的服装`, { description: '这些服装属于之前的角色。' })
+    update((d) => ({ character_id: cid, outfit_id: null, images: d.images.map(withoutOutfit) }))
+  }
+  const pickLora = (r: LoraResource) => {
+    const link = !data.character_id && r.characterId != null ? lib.characters.find((c) => c.id === r.characterId) : undefined
+    if (link) toast.success(`已同时选择关联的角色「${link.name}」`, { description: '在 LoRA 管理中这个 LoRA 关联了该角色，可以在左侧更换。' })
+    update((d) => ({ lora: { ...d.lora, enabled: true, name: r.comfyName || suggestedComfyName(r), resource_id: r.id }, ...(link ? { character_id: link.id!, outfit_id: null, images: d.images.map(withoutOutfit) } : {}) }))
+  }
+  const setReplace = (e: WfLoraEntry | null) => update((d) => {
+    if (!wf) return {}
+    const cur = effectiveLoraConfig(d.lora_config ?? undefined, wf.api_json ?? {}, wf.mapping ?? [])
+    return { lora_config: setCharTarget(cur, 'lora1', e ? { node: e.node, replace: e.key } : null) }
+  })
   return (
     <div className="grid h-full min-h-0 grid-cols-2 gap-4 overflow-y-auto" data-testid="replica-character-step">
       <div className="space-y-3">
         <section className="rounded-xl bg-card p-3 ring-1 ring-tint/[0.08]">
           <div className="mb-2 flex items-center gap-2 text-[12.5px] font-medium">
             新角色
+            <span className="text-[11px] font-normal text-muted-foreground">角色库记录，提供基础 Prompt 与服装</span>
             <SearchBox value={q} onChange={setQ} placeholder="搜索" className="ml-auto w-40" />
           </div>
           <div className="flex max-h-44 flex-wrap gap-1.5 overflow-y-auto">
             {shownChars.map((c) => (
-              <button key={c.id} type="button" onClick={() => update({ character_id: c.id!, outfit_id: null, lora: { enabled: true, name: null, resource_id: null, strength: null } })} data-active={c.id === data.character_id || undefined} data-testid="replica-character" data-id={c.id} className="rounded-lg bg-tint/[0.04] px-2.5 py-1 text-[12px] hover:bg-tint/[0.08] data-[active]:bg-primary/15 data-[active]:text-primary">{c.name}</button>
+              <button key={c.id} type="button" onClick={() => chooseCharacter(c.id!)} data-active={c.id === data.character_id || undefined} data-testid="replica-character" data-id={c.id} className="rounded-lg bg-tint/[0.04] px-2.5 py-1 text-[12px] hover:bg-tint/[0.08] data-[active]:bg-primary/15 data-[active]:text-primary">{c.name}</button>
             ))}
             {!lib.characters.length && <span className="text-[11.5px] text-muted-foreground">角色库还是空的</span>}
           </div>
-          {character && (
+          {character ? (
             <div className="mt-2 space-y-1.5 text-[11.5px]">
               <div className="rounded-lg bg-success/[0.06] px-2 py-1.5 font-mono break-words select-text" data-testid="replica-character-prompt">{character.positive || '（基础 Prompt 为空）'}</div>
-              {outfits.length > 0 && (
-                <div className="flex items-center gap-2">
-                  <span className="text-muted-foreground">服装</span>
-                  <Select value={String(data.outfit_id ?? '')} onChange={(v) => update({ outfit_id: v ? Number(v) : null })} options={[['', '不使用'], ...outfits.map((o) => [String(o.id), o.name] as [string, string])]} className="min-w-40" />
-                </div>
-              )}
             </div>
+          ) : (
+            <div className="mt-2 rounded-lg bg-warning/[0.08] px-2 py-1.5 text-[11.5px] text-warning" data-testid="replica-character-missing">还没有选择角色。只选择 LoRA 不够：生成需要角色库中的角色提供基础 Prompt。</div>
           )}
         </section>
+        {character && <OutfitSection data={data} outfits={outfits} update={update} plan={plan} />}
         <section className="rounded-xl bg-card p-3 ring-1 ring-tint/[0.08]">
           <div className="mb-2 text-[12.5px] font-medium">负面 Prompt</div>
           <Select value={data.negative_mode} onChange={(v) => update({ negative_mode: v as ReplicaData['negative_mode'] })} options={[['append', '保留原图 + 追加角色负面'], ['keep', '只保留原图'], ['replace', '只用角色负面']]} className="min-w-56" />
@@ -573,7 +646,7 @@ function CharacterStep({ data, update, plan }: { data: ReplicaData; update: (p: 
             {([['seed', 'Seed'], ['size', '尺寸'], ['sampling', 'Steps、CFG、Sampler、Scheduler、Denoise']] as const).map(([k, l]) => (
               <label key={k} className="flex items-center justify-between gap-3">
                 {l}
-                <Switch checked={data.keep[k]} onCheckedChange={(v) => update({ keep: { ...data.keep, [k]: !!v } })} data-testid={`replica-keep-${k}`} />
+                <Switch checked={data.keep[k]} onCheckedChange={(v) => update((d) => ({ keep: { ...d.keep, [k]: !!v } }))} data-testid={`replica-keep-${k}`} />
               </label>
             ))}
             <label className="flex items-center justify-between gap-3 text-muted-foreground">
@@ -584,6 +657,27 @@ function CharacterStep({ data, update, plan }: { data: ReplicaData; update: (p: 
         </section>
       </div>
       <div className="space-y-3">
+        <section className="rounded-xl bg-card p-3 text-[11.5px] ring-1 ring-tint/[0.08]" data-testid="replica-current">
+          <div className="mb-1.5 text-[12.5px] font-medium">当前配置</div>
+          <div className="grid grid-cols-[4.5rem_1fr] gap-x-2 gap-y-1">
+            <span className="text-muted-foreground">角色</span>
+            <span className={cn(!character && 'text-warning')}>{character?.name ?? '未选择'}</span>
+            <span className="text-muted-foreground">服装</span>
+            <span>{outfitSummary(data, outfits)}</span>
+            <span className="text-muted-foreground">角色 LoRA</span>
+            <span data-testid="replica-current-lora">
+              {plan?.lora_info.length
+                ? plan.lora_info.map((l) => (
+                    <span key={l.name} className={cn('block', !l.ok && 'text-destructive')}>
+                      {loraStem(l.name)} · 权重 {l.strength} · {l.placement}
+                    </span>
+                  ))
+                : newLora
+                  ? '选择工作流后显示加载位置'
+                  : '不加载'}
+            </span>
+          </div>
+        </section>
         <section className="rounded-xl bg-card p-3 ring-1 ring-tint/[0.08]">
           <div className="mb-2 text-[12.5px] font-medium">工作流</div>
           <Select value={String(wid ?? '')} onChange={(v) => update({ workflow_id: v ? Number(v) : null, lora_config: null })} options={[['', '请选择'], ...lib.workflows.map((w) => [String(w.id), w.name] as [string, string])]} className="min-w-56" />
@@ -598,40 +692,53 @@ function CharacterStep({ data, update, plan }: { data: ReplicaData; update: (p: 
           <div className="mb-2 text-[12.5px] font-medium">LoRA</div>
           <div className="space-y-1.5 text-[12px]">
             <div className="flex items-center gap-2" data-testid="replica-char-lora">
-              <Switch checked={data.lora.enabled} onCheckedChange={(v) => update({ lora: { ...data.lora, enabled: !!v } })} data-testid="replica-char-lora-switch" />
+              <Switch checked={data.lora.enabled} onCheckedChange={(v) => update((d) => ({ lora: { ...d.lora, enabled: !!v } }))} data-testid="replica-char-lora-switch" />
               <span className="shrink-0 text-muted-foreground">新角色</span>
-              <Select
-                value={data.lora.name ?? ''}
-                onChange={(v) => {
-                  const r = resources.find((x) => x.comfyName === v)
-                  update({ lora: { ...data.lora, name: v || null, resource_id: r?.id ?? null } })
-                }}
-                options={[['', charLora ? `角色 LoRA：${charLora.name}` : '不加载 LoRA'], ...resources.filter((r) => r.comfyName).map((r) => [r.comfyName!, r.comfyName!] as [string, string])]}
-                className="min-w-0 flex-1"
-              />
-              <input type="number" step="0.05" value={data.lora.strength ?? charLora?.strength ?? 1} onChange={(e) => update({ lora: { ...data.lora, strength: Number(e.target.value) } })} className={cn(field, 'w-16')} data-testid="replica-char-lora-strength" />
+              <LoraPicker resources={resources} onPick={pickLora}>
+                <button type="button" className={cn(field, 'min-w-0 flex-1 truncate text-left hover:bg-tint/[0.07]')} data-testid="replica-char-lora-pick" title={data.lora.name ?? undefined}>
+                  {picked ? loraTitle(picked) : data.lora.name ? loraStem(data.lora.name) : charLora ? `角色库：${loraStem(charLora.name)}` : '选择 LoRA'}
+                </button>
+              </LoraPicker>
+              {data.lora.name && (
+                <button type="button" aria-label="取消选择" title="取消选择（使用角色库中的 LoRA）" className="grid size-6 shrink-0 place-items-center rounded-md text-muted-foreground hover:bg-tint/[0.06] hover:text-foreground" onClick={() => update((d) => ({ lora: { ...d.lora, name: null, resource_id: null } }))} data-testid="replica-char-lora-clear">
+                  <X className="size-3.5" />
+                </button>
+              )}
+              <input type="number" step="0.05" value={data.lora.strength ?? charLora?.strength ?? 1} onChange={(e) => update((d) => ({ lora: { ...d.lora, strength: Number(e.target.value) } }))} className={cn(field, 'w-16')} data-testid="replica-char-lora-strength" />
             </div>
+            <LoraStatus data={data} picked={picked} charLora={charLora?.name} linkedChar={linkedChar?.id !== data.character_id ? linkedChar?.name : undefined} onSaved={loadResources} />
             <div className="pt-1.5 text-[11px] text-muted-foreground">工作流中的 LoRA</div>
-            {cfg?.entries.map((e) => (
-              <div key={e.key} className="flex items-center gap-2" data-testid="replica-wf-lora" data-key={e.key}>
-                <Switch
-                  checked={e.enabled && replaceKey !== e.key}
-                  disabled={replaceKey === e.key}
-                  onCheckedChange={(v) => update({ lora_config: { ...cfg, entries: cfg.entries.map((x) => (x.key === e.key ? { ...x, enabled: !!v } : x)) } })}
-                  data-testid="replica-wf-lora-switch"
-                />
-                <span className={cn('min-w-0 flex-1 truncate font-mono text-[11.5px]', replaceKey === e.key && 'text-destructive line-through')} title={e.name}>{e.name}</span>
-                <Button
-                  size="sm"
-                  variant={replaceKey === e.key ? 'secondary' : 'ghost'}
-                  disabled={!data.lora.enabled || !(data.lora.name || charLora)}
-                  onClick={() => update({ lora_config: { ...cfg, char_targets: { ...cfg.char_targets, lora1: replaceKey === e.key ? (undefined as never) : { node: e.node, replace: e.key } } } })}
-                  data-testid="replica-wf-lora-replace"
-                >
-                  {replaceKey === e.key ? '已替换' : '替换'}
-                </Button>
-              </div>
-            ))}
+            {cfg?.entries.map((e) => {
+              const replaced = replaceKey === e.key
+              return (
+                <div key={e.key} className="flex items-center gap-2" data-testid="replica-wf-lora" data-key={e.key} data-replaced={replaced || undefined}>
+                  <Switch
+                    checked={e.enabled && !replaced}
+                    disabled={replaced}
+                    onCheckedChange={(v) => update((d) => {
+                      if (!wf) return {}
+                      const cur = effectiveLoraConfig(d.lora_config ?? undefined, wf.api_json ?? {}, wf.mapping ?? [])
+                      return { lora_config: { ...cur, entries: cur.entries.map((x) => (x.key === e.key ? { ...x, enabled: !!v } : x)) } }
+                    })}
+                    data-testid="replica-wf-lora-switch"
+                  />
+                  <span className="min-w-0 flex-1 truncate font-mono text-[11.5px]" title={e.name}>
+                    <span className={cn(replaced && newLora && 'text-destructive line-through')}>{loraStem(e.name)}</span>
+                    {replaced && <span className={cn('ml-1', newLora ? 'text-success' : 'text-warning')} data-testid="replica-wf-lora-target">→ {newLora ? loraStem(newLora) : '没有新 LoRA，替换不会生效'}</span>}
+                  </span>
+                  <Button
+                    size="sm"
+                    variant={replaced ? 'secondary' : 'ghost'}
+                    disabled={!replaced && !newLora}
+                    title={replaced ? '恢复工作流中的这个 LoRA' : newLora ? `用 ${loraStem(newLora)} 替换它` : '先启用并选择新角色 LoRA'}
+                    onClick={() => setReplace(replaced ? null : e)}
+                    data-testid="replica-wf-lora-replace"
+                  >
+                    {replaced ? '取消替换' : '替换为新 LoRA'}
+                  </Button>
+                </div>
+              )
+            })}
             {cfg && !cfg.entries.length && <div className="text-[11.5px] text-muted-foreground">工作流中没有可控制的 LoRA Loader</div>}
             {imageLoraNames.length > 0 && <div className="pt-1 text-[11px] break-words text-muted-foreground" data-testid="replica-image-loras">原图用过：{imageLoraNames.slice(0, 10).join('、')}</div>}
           </div>
@@ -639,6 +746,90 @@ function CharacterStep({ data, update, plan }: { data: ReplicaData; update: (p: 
         {plan && plan.errors.length > 0 && <Problems list={plan.errors} />}
       </div>
     </div>
+  )
+}
+
+function outfitSummary(data: ReplicaData, outfits: Outfit[]) {
+  const name = (id: number | null) => (id === null ? '不使用' : (outfits.find((o) => o.id === id)?.name ?? '已不属于当前角色'))
+  const own = data.images.filter((im) => im.outfit_id !== undefined).length
+  return `默认 ${name(data.outfit_id)}${own ? `；${own} 张单独指定` : ''}`
+}
+
+/** 选择的 LoRA 提交时使用的名称：没有设置 ComfyUI 名称时明确提示，不假装可以加载 */
+function LoraStatus({ data, picked, charLora, linkedChar, onSaved }: { data: ReplicaData; picked?: LoraResource; charLora?: string; linkedChar?: string; onSaved: () => void }) {
+  if (!data.lora.enabled) return <div className="text-[11px] text-muted-foreground">不加载新角色 LoRA</div>
+  if (!data.lora.name) return <div className="text-[11px] text-muted-foreground" data-testid="replica-lora-status">{charLora ? `使用角色库中的 LoRA：${charLora}` : '角色没有设置 LoRA，也没有选择：不加载'}</div>
+  if (!picked) return <div className="text-[11px] text-warning" data-testid="replica-lora-status">「{data.lora.name}」在 LoRA 管理中找不到（可能已移除扫描目录），将按这个名称提交</div>
+  const st = loadNameOf(picked)
+  return (
+    <div className="space-y-0.5 text-[11px]" data-testid="replica-lora-status">
+      <div className="truncate text-muted-foreground" title={picked.path}>{folderOf(picked)} · {picked.name}</div>
+      {st.ok ? <div className="font-mono text-muted-foreground">ComfyUI 加载名称：{st.name}</div> : (
+        <div className="text-destructive" data-testid="replica-lora-unloadable">
+          {st.reason}，现在不能生成。
+          {!picked.comfyName && !picked.missing && !picked.offline && (
+            <button type="button" className="ml-1 underline" onClick={async () => { let failed = false; await call(api['loras.save']({ ...picked, comfyName: suggestedComfyName(picked) }), (m) => { failed = true; toast.error('没有保存 ComfyUI 模型名称', { description: m }) }); if (!failed) onSaved() }} data-testid="replica-lora-use-relative">
+              使用相对路径 {suggestedComfyName(picked)}
+            </button>
+          )}
+        </div>
+      )}
+      {linkedChar && <div className="text-warning">这个 LoRA 在 LoRA 管理中关联的是角色「{linkedChar}」</div>}
+    </div>
+  )
+}
+
+/** 默认服装 + 按图片编号范围分配。分配结果保存在每张图上，删除或重新排序图片时不会错位 */
+function OutfitSection({ data, outfits, update, plan }: { data: ReplicaData; outfits: Outfit[]; update: Update; plan: ReplicaPlanView | null }) {
+  const n = data.images.length
+  const [from, setFrom] = useState('1')
+  const [to, setTo] = useState(String(n || 1))
+  const [pick, setPick] = useState('default')
+  const label = (v: number | null | undefined) => (v === undefined ? `默认（${data.outfit_id === null ? '不使用' : (outfits.find((o) => o.id === data.outfit_id)?.name ?? '无效')}）` : v === null ? '不使用服装' : (outfits.find((o) => o.id === v)?.name ?? '已不属于当前角色'))
+  const apply = () => {
+    const a = Number(from)
+    const b = Number(to)
+    const value = pick === 'default' ? undefined : pick === 'none' ? null : Number(pick)
+    const { error } = assignOutfit(data.images, a, b, value)
+    if (error) return void toast.error(error)
+    update((d) => ({ images: assignOutfit(d.images, a, b, value).images }))
+  }
+  // 连续使用同一服装的图片合并显示
+  const runs = outfitRuns(data.images)
+  const bad = plan?.errors.filter((m) => m.includes('服装')) ?? []
+  return (
+    <section className="rounded-xl bg-card p-3 text-[12px] ring-1 ring-tint/[0.08]" data-testid="replica-outfits">
+      <div className="mb-2 flex items-center gap-2">
+        <span className="text-[12.5px] font-medium">服装</span>
+        <span className="text-muted-foreground">默认</span>
+        <Select value={String(data.outfit_id ?? '')} onChange={(v) => update({ outfit_id: v ? Number(v) : null })} options={[['', '不使用'], ...outfits.map((o) => [String(o.id), o.name] as [string, string])]} className="min-w-40" />
+      </div>
+      {n > 0 && (
+        <>
+          <div className="flex flex-wrap items-center gap-1.5 text-[11.5px]">
+            <span className="text-muted-foreground">图</span>
+            <input type="number" min={1} max={n} value={from} onChange={(e) => setFrom(e.target.value)} className="w-14 rounded bg-tint/[0.05] px-1 py-0.5 text-center ring-1 ring-tint/[0.1] outline-none" data-testid="outfit-from" />
+            <span className="text-muted-foreground">到</span>
+            <input type="number" min={1} max={n} value={to} onChange={(e) => setTo(e.target.value)} className="w-14 rounded bg-tint/[0.05] px-1 py-0.5 text-center ring-1 ring-tint/[0.1] outline-none" data-testid="outfit-to" />
+            <Select value={pick} onChange={setPick} options={[['default', '使用默认服装'], ['none', '不使用服装'], ...outfits.map((o) => [String(o.id), o.name] as [string, string])]} className="min-w-32" />
+            <Button size="sm" variant="secondary" onClick={apply} data-testid="outfit-apply">应用</Button>
+          </div>
+          <div className="mt-2 space-y-0.5" data-testid="outfit-runs">
+            {runs.map((r) => (
+              <div key={r.a} className="flex items-center gap-2 text-[11.5px]" data-testid="outfit-run" data-from={r.a + 1} data-to={r.b + 1}>
+                <span className="w-20 shrink-0 tabular-nums text-muted-foreground">图 {r.a + 1}{r.b > r.a ? `–${r.b + 1}` : ''}</span>
+                <span className="min-w-0 flex-1 truncate text-muted-foreground" title={data.images.slice(r.a, r.b + 1).map((im) => im.name).join('\n')}>{data.images[r.a].name}{r.b > r.a ? ` … ${data.images[r.b].name}` : ''}</span>
+                <span className={cn('shrink-0', r.value !== undefined && 'font-medium')}>{label(r.value)}</span>
+                {r.excluded > 0 && <span className="shrink-0 text-muted-foreground">含 {r.excluded} 张已排除</span>}
+                {r.value !== undefined && <button type="button" className="shrink-0 text-muted-foreground hover:text-foreground" title="恢复为默认服装" onClick={() => { const paths = new Set(data.images.slice(r.a, r.b + 1).map((im) => im.path)); update((d) => ({ images: d.images.map((im) => (paths.has(im.path) ? withoutOutfit(im) : im)) })) }} data-testid="outfit-run-clear"><X className="size-3.5" /></button>}
+              </div>
+            ))}
+          </div>
+          <div className="mt-1 text-[11px] text-muted-foreground">图片编号与第 1 步的顺序相同。重叠时后应用的覆盖之前的；没有分配的图片使用默认服装。</div>
+        </>
+      )}
+      {bad.length > 0 && <div className="mt-1.5 text-[11px] text-destructive">{bad[0]}</div>}
+    </section>
   )
 }
 
@@ -655,7 +846,7 @@ function Problems({ list, tone = 'error' }: { list: string[]; tone?: 'error' | '
 
 const ROW_LABEL: Record<Row['state'], [string, string]> = { valid: ['可生成', 'text-success'], confirm: ['需确认', 'text-warning'], invalid: ['不能生成', 'text-destructive'], missing: ['原图丢失', 'text-destructive'], excluded: ['已排除', 'text-muted-foreground'] }
 
-function PreviewStep({ id, data, plan, setImage, update, goImport }: { id: number; data: ReplicaData; plan: ReplicaPlanView | null; setImage: (i: number, p: Partial<ReplicaImage>) => void; update: (p: Partial<ReplicaData>) => void; goImport: () => void }) {
+function PreviewStep({ id, data, plan, setImage, update, goImport }: { id: number; data: ReplicaData; plan: ReplicaPlanView | null; setImage: (i: number, p: Partial<ReplicaImage>) => void; update: Update; goImport: () => void }) {
   const [page, setPage] = useState(0)
   const [only, setOnly] = useState<'all' | 'problem'>('all')
   const [json, setJson] = useState<number | null>(null)
@@ -682,7 +873,7 @@ function PreviewStep({ id, data, plan, setImage, update, goImport }: { id: numbe
       <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-[11.5px] text-muted-foreground" data-testid="replica-summary">
         <span>工作流：<b className="font-medium text-foreground">{plan.workflow?.name ?? '未选择'}</b></span>
         <span data-testid="replica-sizes">尺寸：{[...sizes].map(([k, v]) => `${k} × ${v}`).join('；') || '—'}</span>
-        <span data-testid="replica-loras">LoRA：{plan.loras.join('、') || '不加载'}</span>
+        <span data-testid="replica-loras">新角色 LoRA：{plan.lora_info.map((l) => `${loraStem(l.name)} ${l.strength}（${l.placement}）`).join('、') || '不加载'}</span>
         <span data-testid="replica-param-summary">原始参数：{PARAM_KEYS.map((k) => `${PARAM_LABELS[k]} ${rows.filter((r) => r.params.find((p) => p.key === k)?.applied).length}`).join('　')}</span>
       </div>
       {plan.errors.length > 0 && <Problems list={plan.errors} />}
@@ -728,7 +919,9 @@ function PreviewRow({ r, im, characterName, onChange, onJson, goImport }: { r: R
   return (
     <div className={cn('rounded-xl bg-card p-2.5 ring-1 ring-tint/[0.08]', r.state === 'excluded' && 'opacity-50')} data-testid="replica-row" data-name={r.name} data-state={r.state}>
       <div className="mb-1.5 flex items-center gap-2 text-[11.5px]">
+        <span className="text-muted-foreground tabular-nums">图 {r.index + 1}</span>
         <span className="font-medium select-text">{r.name}</span>
+        <span className={cn('shrink-0', r.outfit_source === 'image' ? 'text-primary' : 'text-muted-foreground')} data-testid="replica-row-outfit">服装：{r.outfit || '不使用'}{r.outfit_source === 'image' ? '（单独指定）' : ''}</span>
         <span className="text-muted-foreground" data-testid="replica-output-name">→ {r.output_name}.png</span>
         <span className={tone}>{label}</span>
         {r.manual && <span className="rounded bg-warning/10 px-1 text-[10.5px] text-warning">手动编辑</span>}
@@ -768,14 +961,16 @@ function PreviewRow({ r, im, characterName, onChange, onJson, goImport }: { r: R
 
 // ---------------- 第 5 步：生成
 
-function GenerateStep({ id, data, plan, update, flush, refresh }: { id: number; data: ReplicaData; plan: ReplicaPlanView | null; update: (p: Partial<ReplicaData>) => void; flush: () => Promise<void>; refresh: () => Promise<void> }) {
+function GenerateStep({ id, data, plan, update, flush, refresh }: { id: number; data: ReplicaData; plan: ReplicaPlanView | null; update: Update; flush: () => Promise<boolean>; refresh: () => Promise<ReplicaPlanView | undefined> }) {
   const go = useNav((s) => s.go)
   const [done, setDone] = useState<{ n: number; dir: string } | null>(null)
   const enqueue = async (start: boolean) => {
-    await refresh()
-    await flush()
-    const skipped = plan?.rows.filter((r) => r.state !== 'valid' && r.state !== 'excluded').length ?? 0
-    if (skipped && !(await confirm({ title: `有 ${skipped} 张图片不会生成`, description: `${plan!.rows.filter((r) => r.state !== 'valid' && r.state !== 'excluded').slice(0, 8).map((r) => `${r.name}：${r.reason}`).join('\n')}\n\n只生成其余 ${plan!.units} 张？`, confirmText: '继续' }))) return
+    // 入队使用已保存的草稿：保存失败时不入队，避免队列内容与界面不一致
+    if (!(await flush())) return
+    const fresh = await refresh()
+    if (!fresh) return
+    const bad = fresh.rows.filter((r) => r.state !== 'valid' && r.state !== 'excluded')
+    if (bad.length && !(await confirm({ title: `有 ${bad.length} 张图片不会生成`, description: `${bad.slice(0, 8).map((r) => `${r.name}：${r.reason}`).join('\n')}\n\n只生成其余 ${fresh.units} 张？`, confirmText: '继续' }))) return
     const r = await call(api['replicas.enqueue'](id))
     if (!r) return
     if (r.runId === null) return void toast.error('无法加入队列', { description: r.errors.slice(0, 4).join('\n') })
