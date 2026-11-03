@@ -35,13 +35,22 @@ export interface FullPlan {
  *   只有当绑定节点的全部强度输入都已映射时才能安全禁用，否则不能入队；
  * - 强度映射不完整、只能识别 lora_name 的自定义节点给出提示；没有被映射的 Loader（工作流中固定的 LoRA）保持原样，不检查。
  */
-/** LoRA 资源 → ComfyUI 中的相对模型名称（检查名称合法、文件存在）；失败时记录错误并保留原名称 */
-export function resolveLoraName(store: Store, l: Lora, errors: string[]): string {
+/**
+ * LoRA 资源 → 写入工作流的名称（检查名称合法、文件存在）；失败时记录错误并保留原名称。
+ * stack：写入多 LoRA Loader（LoraManager 等）的列表。列表只写文件名（loraStem），按文件名查找，
+ * 不需要 ComfyUI 相对路径，所以不要求设置 comfyName，名称取自资源的实际文件；单 LoRA Loader 的 lora_name 需要相对路径，仍要求 comfyName。
+ */
+export function resolveLoraName(store: Store, l: Lora, errors: string[], stack = false): string {
   if (!store.files || !l.resource_id) return l.name
   try {
     if (!/^[a-f0-9-]{36}$/i.test(l.resource_id)) throw new Error('无效 LoRA 资源 ID')
     const r = JSON.parse(readFileSync(join(store.files.root,'loras/metadata',l.resource_id+'.json'),'utf8'))
-    if (!r.comfyName || /^(?:[A-Za-z]:|[\\/])/.test(r.comfyName) || r.comfyName.split(/[\\/]/).includes('..')) throw new Error('请配置 ComfyUI 相对模型名称')
+    if (stack) {
+      if (!existsSync(r.path)) throw new Error('模型文件缺失')
+      l.name = String(r.path).split(/[\\/]/).pop() || l.name
+      return l.name
+    }
+    if (!r.comfyName || /^(?:[A-Za-z]:|[\\/])/.test(r.comfyName) || r.comfyName.split(/[\\/]/).includes('..')) throw new Error('请配置 ComfyUI 相对模型名称（这个 LoRA 写入单 LoRA Loader 的 lora_name，需要 models/loras 下的相对路径，可在 LoRA 管理中设置）')
     if (!existsSync(r.path)) throw new Error('模型文件缺失')
     l.name = r.comfyName
   } catch(e) { const msg = `LoRA ${l.name}: ${(e as Error).message}`; if (!errors.includes(msg)) errors.push(msg) }
@@ -136,7 +145,9 @@ export function buildWorkflowInputs(store: Store, wf: Workflow, units: PlanUnit[
   }
   // 任务的 LoRA 配置（按工作流保存；没有保存时使用工作流中已有的 LoRA）
   const cfg = effectiveLoraConfig(opts.savedCfg, wf.api_json ?? {}, wf.mapping ?? [])
-  cfg.entries = cfg.entries.map((e) => (e.resource_id && e.enabled ? { ...e, name: resolveLoraName(store, { name: e.name, resource_id: e.resource_id, strength: e.strength }, errors) } : e))
+  // 在 LoRA 配置中从 LoRA 管理添加或替换的条目：所在 Loader 是多 LoRA 列表时只写文件名，不需要 ComfyUI 相对路径
+  const stackNodes = new Set(controllableLoaders(wf.api_json ?? {}, wf.mapping ?? []).filter((l) => l.support === 'stack').map((l) => l.node))
+  cfg.entries = cfg.entries.map((e) => (e.resource_id && e.enabled ? { ...e, name: resolveLoraName(store, { name: e.name, resource_id: e.resource_id, strength: e.strength }, errors, stackNodes.has(e.node)) } : e))
   const rolesOf = (u: PlanUnit) => {
     const r: Partial<Record<CharRole, RoleState & { label: string }>> = {}
     if (u.loras.length) r.lora1 = { name: u.loras[0].name, load: slotLora(u, 'lora', 1) ?? null, label: `主角色「${u.meta.character}」的 LoRA` }
