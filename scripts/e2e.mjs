@@ -274,200 +274,86 @@ try {
   const cardOrder = (await win.locator('[data-testid=template-card]').allInnerTexts()).map((t) => t.split('\n')[0])
   const prio = await win.evaluate(async () => (await window.api['library.load']()).templates.find((t) => t.name === '动作C')?.priority)
   check('优先级设为高：保存并排到状态列表最前，其余顺序不变', prio === 'high' && cardOrder[0] === '动作C' && cardOrder[1] === firstCard && (await win.locator('[data-testid=template-card]').first().locator('[data-testid=priority-badge]').count()) === 1, `${prio} ${cardOrder.join(',')}`)
-  // 旧版单人动作转为单人动作卡：复制 Prompt 作为基础 Prompt，原状态保留为共享素材
+  // 旧版单人动作转为单人动作卡：状态的 Prompt 写入卡中的一个模板，原状态保留为共享素材
   await win.locator('[data-testid=state-to-card]').click()
   await win.waitForTimeout(900)
   await win.locator('[data-testid=lib-tab-cards]').click()
   await win.waitForTimeout(300)
-  const kindsC = await win.evaluate(async () => (await window.api['library.load']()).templates.filter((t) => t.name === '动作C').map((t) => `${t.kind}:${t.positive}:${t.card?.solo ?? ''}`).sort().join(','))
-  check('状态转为单人动作卡：动作卡列表显示「动作C · 单人」，原状态保留', (await win.locator('[data-testid=position-row]', { hasText: '动作C' }).innerText()).includes('单人') && kindsC === 'position:action_c:true,state:action_c:', kindsC)
-  // 动作卡：新建双人动作卡，编辑基础 Prompt；子体位（结构变体）以可展开卡片显示在下方（类似角色与服装）
+  const cardInfo = (name) =>
+    win.evaluate(async (n) => {
+      const lib = await window.api['library.load']()
+      const c = lib.templates.find((t) => t.kind === 'position' && t.name === n)
+      const tpls = lib.templates.filter((t) => t.kind === 'card_tpl' && t.parent_id === c?.id).sort((a, b) => (a.sort ?? 0) - (b.sort ?? 0) || a.id - b.id)
+      return { id: c?.id, card: c?.card, tpls: tpls.map((t) => ({ name: t.name, positive: t.positive, category: t.category ?? '', tags: t.tags ?? '' })), state: lib.templates.some((t) => t.kind === 'state' && t.name === n) }
+    }, name)
+  const cardC = await cardInfo('动作C')
+  check('状态转为单人动作卡：动作卡列表显示「动作C · 单人」，模板包含原 Prompt 与占位符，原状态保留', (await win.locator('[data-testid=card-row]', { hasText: '动作C' }).innerText()).includes('单人') && cardC.card?.solo === true && cardC.card?.templates === true && cardC.tpls.length === 1 && cardC.tpls[0].positive.includes('action_c') && cardC.tpls[0].positive.includes('{女特征}') && cardC.state, JSON.stringify(cardC))
+  // 动作卡 → 分类 → Prompt 模板：新建双人动作卡与分类，写一个完整模板，复制后只改几个标签
   await win.locator('[data-testid=new-duo-card]').click()
-  await win.waitForTimeout(500)
-  const posDetail = win.locator('[data-testid=position-detail]')
-  await posDetail.locator('textarea').first().fill('missionary')
-  await posDetail.getByRole('button', { name: '新建子体位' }).click()
-  await win.waitForTimeout(400)
-  const subRow = win.locator('[data-testid=subposition-row]')
-  await subRow.locator('input').fill('新子体位')
-  await subRow.locator('textarea').fill('legs up')
-  await win.waitForTimeout(900)
-  await shot('09b-library-card')
-  check('动作卡与子体位只有正面 Prompt（没有负面、备注输入）', (await posDetail.getByText('负面 Prompt').count()) === 0 && (await posDetail.getByText('备注').count()) === 0 && (await subRow.locator('textarea').count()) === 1)
-  await subRow.getByRole('button', { name: '新子体位' }).click()
-  await win.waitForTimeout(300)
-  check('子体位卡片收起后显示名称与 Prompt 摘要', (await subRow.innerText()).includes('新子体位') && (await subRow.innerText()).includes('legs up'), (await subRow.innerText()).replace(/\n/g, ' | '))
-  // 双人互动素材在「状态」中新建（全局共享），动作卡只记录允许使用哪些
-  await win.locator('[data-testid=lib-tab-state]').click()
-  await win.locator('main button', { hasText: '新建状态' }).click()
-  await win.waitForTimeout(400)
-  // 再建一个长名称的状态，检查素材标签的截断（新建后移除，不影响后面的步骤）
-  const LONG_NAME = '这是一个名称非常长的局部姿态素材用来检查素材标签是否会被合理截断而不是撑破整个面板的宽度甚至更长一些'
-  await win.locator('main button', { hasText: '新建状态' }).click()
-  await win.waitForTimeout(400)
-  await win.locator('[data-testid=template-editor] input').first().fill(LONG_NAME)
-  await win.waitForTimeout(900)
-  await win.locator('[data-testid=lib-tab-cards]').click()
-  await win.waitForTimeout(300)
-  await win.locator('[data-testid=position-row]', { hasText: '新双人动作卡' }).locator('button').nth(1).click()
-  await win.waitForTimeout(300)
-  const duoRow = win.locator('[data-testid=position-row]', { hasText: '新双人动作卡' })
-  check('动作卡：单人卡与新建的双人卡 / 子体位（层级不变）', (await win.locator('[data-testid=position-row]').count()) === 2 && (await win.locator('[data-testid=subposition-row]').count()) === 1 && (await duoRow.innerText()).includes('1 个子体位') && (await duoRow.innerText()).includes('双人'), (await duoRow.innerText()).replace(/\n/g, ' | '))
-  // 素材池：主角色局部姿态固定动作A、动作C（在两栏之间拖动），双人互动固定「新状态」，第二角色局部姿态随机候选只有动作B
-  const pool = (k) => posDetail.locator(`[data-testid=pool-${k}]`)
-  const pickList = win.locator('[data-testid=material-picker] [data-testid=picker-list] button')
-  const savedCardNow = () => win.evaluate(async () => (await window.api['library.load']()).templates.find((t) => t.name === '新双人动作卡')?.card)
-  const poseNames = async () => win.evaluate(async () => {
-    const lib = await window.api['library.load']()
-    const p = lib.templates.find((t) => t.name === '新双人动作卡').card.pools.pose
-    const n = (ids) => (ids ?? []).map((id) => lib.templates.find((t) => t.id === id)?.name).join('+')
-    return `${n(p.fixed)}|${n(p.random)}`
-  })
-  // 用真实的鼠标事件拖动手柄：target 为素材标签（放在它的 where 一侧）或一栏（where 为 below 时指向栏底部的空白处）
-  const dragStart = async (name) => {
-    const from = await pool('pose').getByRole('button', { name: `拖动 ${name}` }).boundingBox()
-    await win.mouse.move(from.x + from.width / 2, from.y + from.height / 2)
-    await win.mouse.down()
-    await win.mouse.move(from.x + from.width / 2 + 4, from.y + from.height / 2 + 6, { steps: 3 })
-  }
-  const dragOverTarget = async (target, where = 'center') => {
-    const box = await target.boundingBox()
-    const x = where === 'after' ? box.x + box.width - 3 : where === 'before' ? box.x + 3 : box.x + box.width / 2
-    const y = where === 'below' ? box.y + box.height - 2 : box.y + box.height / 2
-    await win.mouse.move(x, y, { steps: 12 })
-    await win.waitForTimeout(120)
-    // 拖动途中标签会重新换行：按目标的新位置再对准一次
-    const again = await target.boundingBox()
-    if (again && (again.x !== box.x || again.y !== box.y)) {
-      const x2 = where === 'after' ? again.x + again.width - 3 : where === 'before' ? again.x + 3 : again.x + again.width / 2
-      const y2 = where === 'below' ? again.y + again.height - 2 : again.y + again.height / 2
-      await win.mouse.move(x2, y2, { steps: 6 })
-      await win.waitForTimeout(120)
-    }
-  }
-  const dragPose = async (name, target, where = 'center') => {
-    await dragStart(name)
-    await dragOverTarget(target, where)
-    await win.mouse.up()
+  await win.waitForTimeout(600)
+  const tplRows = (cat) => win.locator(`[data-testid=template-group][data-category="${cat}"] [data-testid=template-row]`)
+  const rowNames = (cat) => tplRows(cat).evaluateAll((els) => els.map((e) => e.querySelector('span[title]')?.getAttribute('title') ?? ''))
+  check('新建双人动作卡：列表中有单人卡与双人卡，新卡还没有模板', (await win.locator('[data-testid=card-row]').count()) === 2 && (await win.locator('[data-testid=card-row]', { hasText: '新双人动作卡' }).innerText()).includes('双人') && (await win.locator('[data-testid=template-row]').count()) === 0)
+  const addCategory = async (name) => {
+    await win.locator('[data-testid=add-category]').click()
+    await win.locator('[data-testid=category-name]').fill(name)
+    await win.keyboard.press('Enter')
     await win.waitForTimeout(700)
   }
-  const poseZone = (z) => win.locator(`[data-testid=pool-pose-${z}]`)
-  const poseRow = (name) => pool('pose').locator('[data-testid=pool-item]', { hasText: name })
-  check('素材池默认折叠为摘要行', (await posDetail.locator('[data-testid=card-pools] input').count()) === 0)
-  await pool('pose').locator('button').first().click()
-  check('素材池没有模式切换和数量设置，始终显示固定与随机两栏', (await posDetail.locator('[data-testid^=pool-pose-mode]').count()) === 0 && (await pool('pose').locator('input').count()) === 0 && (await poseZone('fixed').innerText()).includes('固定 Prompt') && (await poseZone('random').innerText()).includes('随机候选 Prompt'))
-  await win.locator('[data-testid=pool-pose-random-add]').click()
-  await pickList.filter({ hasText: /^动作A/ }).first().click()
-  await pickList.filter({ hasText: /^动作C/ }).first().click()
-  await win.locator('[data-testid=picker-done]').click()
+  await addCategory('抬脚')
+  await addCategory('贴近')
+  const duoCats = (await cardInfo('新双人动作卡')).card?.categories
+  check('新建分类：按创建顺序保存到动作卡', JSON.stringify(duoCats) === JSON.stringify(['抬脚', '贴近']) && (await win.locator('[data-testid=category-row][data-category="贴近"]').count()) === 1, JSON.stringify(duoCats))
+  await win.locator('[data-testid=category-row][data-category="抬脚"]').click()
+  await win.locator('[data-testid=new-template]').click()
   await win.waitForTimeout(700)
-  check('添加的素材进入随机栏', (await poseNames()) === '|动作A+动作C', await poseNames())
-  await dragPose('动作A', poseZone('fixed'))
-  check('从随机栏拖到空的固定栏（移动，不复制）', (await poseNames()) === '动作A|动作C', await poseNames())
-  await dragPose('动作C', poseZone('fixed'), 'below')
-  check('随机栏拖到固定栏，随机栏为空', (await poseNames()) === '动作A+动作C|', await poseNames())
-  await dragPose('动作A', poseRow('动作C'), 'after')
-  check('固定栏内调整顺序', (await poseNames()) === '动作C+动作A|', await poseNames())
-  await dragPose('动作A', poseZone('random'))
-  check('从固定栏拖到空的随机栏', (await poseNames()) === '动作C|动作A', await poseNames())
-  await dragPose('动作A', poseRow('动作C'), 'before')
-  check('拖回固定栏并放在目标前面', (await poseNames()) === '动作A+动作C|', await poseNames())
-  await win.locator('[data-testid=pool-pose-random-add]').click()
-  check('已固定的素材不出现在随机栏的选择器中', (await pickList.filter({ hasText: /^动作A/ }).count()) === 0)
-  await pickList.filter({ hasText: /^动作B/ }).first().click()
-  await win.locator('[data-testid=picker-done]').click()
-  await win.waitForTimeout(700)
-  await pool('pose').getByRole('button', { name: '移除 动作B' }).click()
-  await win.waitForTimeout(700)
-  check('标签上的按钮移除素材', (await poseNames()) === '动作A+动作C|', await poseNames())
-  // 紧凑布局：多个标签自动换行、宽度随名称变化、长名称截断并有完整提示；拖动在换行的布局中同样有效
-  const chipBoxes = async (zone) => poseZone(zone).locator('[data-testid=pool-item]').evaluateAll((els) => els.map((el) => { const r = el.getBoundingClientRect(); return { x: r.x, y: Math.round(r.y), w: r.width, right: r.right, text: el.innerText } }))
-  const wraps = (boxes) => { const rows = new Map(); for (const b of boxes) rows.set(b.y, (rows.get(b.y) ?? 0) + 1); return { rows: rows.size, most: Math.max(0, ...rows.values()) } }
-  const fixedRow = await chipBoxes('fixed')
-  check('固定栏多个素材排在同一行（多列）', wraps(fixedRow).rows === 1 && wraps(fixedRow).most === 2 && fixedRow[0].x < fixedRow[1].x, JSON.stringify(fixedRow))
-  await win.locator('[data-testid=pool-pose-random-add]').click()
-  await win.locator('[data-testid=picker-add-all]').click()
-  await win.locator('[data-testid=picker-done]').click()
-  await win.waitForTimeout(700)
-  const randomBoxes = await chipBoxes('random')
-  const zoneBox = await poseZone('random').boundingBox()
-  check('随机栏多个素材多列显示并自动换行', randomBoxes.length >= 4 && wraps(randomBoxes).rows >= 2 && wraps(randomBoxes).most >= 2, JSON.stringify(wraps(randomBoxes)))
-  check('标签宽度随名称变化，都不超出所在的栏', new Set(randomBoxes.map((b) => Math.round(b.w))).size >= 2 && randomBoxes.every((b) => b.right <= zoneBox.x + zoneBox.width), JSON.stringify(randomBoxes.map((b) => Math.round(b.w))))
-  const longName = poseRow(LONG_NAME).locator('span[title]')
-  check('长名称截断，title 显示完整名称', (await longName.getAttribute('title')) === LONG_NAME && (await longName.evaluate((el) => el.scrollWidth > el.clientWidth)), LONG_NAME.length)
-  check('素材标签比旧的整行素材紧凑（高度不超过 28px）', randomBoxes.length > 0 && (await poseRow('动作B').boundingBox()).height <= 28)
-  // 拖动中的反馈：浮层跟随指针，目标栏高亮
-  await dragStart('动作B')
-  await dragOverTarget(poseRow('动作A'), 'before')
-  const dragFeedback = { overlay: await win.locator('[data-testid=pool-drag-overlay]').isVisible(), active: await poseZone('fixed').getAttribute('data-drop-active'), order: (await poseZone('fixed').locator('[data-testid=pool-item]').allInnerTexts()).join('+') }
-  await shot('09c0-pool-chips-dragging')
-  check('拖动时有浮层、目标栏高亮，素材实时移到落点', dragFeedback.overlay && dragFeedback.active === 'true' && dragFeedback.order.startsWith('动作B'), JSON.stringify(dragFeedback))
-  await win.mouse.up()
-  await win.waitForTimeout(700)
-  check('松手后保存：拖到固定栏最前面', (await poseNames()).startsWith('动作B+动作A+动作C|'), await poseNames())
-  // 在换行的布局中排序：把随机栏的第一个拖到最后一个后面（跨行）
-  const randomOrder = async () => (await poseNames()).split('|')[1].split('+')
-  const beforeSort = await randomOrder()
-  await dragPose(beforeSort[0], poseRow(beforeSort[beforeSort.length - 1]), 'after')
-  const afterSort = await randomOrder()
-  check('随机栏内跨行调整顺序', afterSort[afterSort.length - 1] === beforeSort[0] && afterSort.length === beforeSort.length, afterSort.join('+'))
-  // 宽度不同的标签来回调整也不会丢失或重复
-  await dragPose(afterSort[afterSort.length - 1], poseRow(LONG_NAME), 'after')
-  const afterLong = await randomOrder()
-  check('跨过长名称标签排序（不跳动、不丢失）', afterLong.indexOf(afterSort[afterSort.length - 1]) === afterLong.indexOf(LONG_NAME) + 1 && new Set(afterLong).size === beforeSort.length, afterLong.join('+'))
-  // 指向一行末尾的空白处：放到最近的标签后面
-  const lastChip = (await randomOrder()).at(-1)
-  const firstChip = (await randomOrder())[0]
-  const lastBox = await poseRow(lastChip).boundingBox()
-  const blankZone = await poseZone('random').boundingBox()
-  await dragStart(firstChip)
-  await win.mouse.move(blankZone.x + blankZone.width - 12, lastBox.y + lastBox.height / 2, { steps: 12 })
-  await win.waitForTimeout(150)
-  const blankNow = await poseRow(lastChip).boundingBox()
-  await win.mouse.move(blankZone.x + blankZone.width - 12, blankNow.y + blankNow.height / 2, { steps: 4 })
-  await win.waitForTimeout(150)
-  await win.mouse.up()
-  await win.waitForTimeout(700)
-  check('拖到行尾空白处：放在该行最后', (await randomOrder()).at(-1) === firstChip, (await randomOrder()).join('+'))
-  // 键盘：左右键调整顺序，上下键移到另一栏，焦点留在素材上
-  await pool('pose').getByRole('button', { name: '拖动 动作A' }).focus()
-  await win.keyboard.press('ArrowRight')
-  await win.waitForTimeout(500)
-  check('键盘左右键调整标签顺序', (await poseNames()).startsWith('动作B+动作C+动作A|'), await poseNames())
-  await win.keyboard.press('ArrowDown')
-  await win.waitForTimeout(500)
-  check('键盘下键移到随机栏', (await randomOrder()).at(-1) === '动作A' && (await poseNames()).startsWith('动作B+动作C|'), await poseNames())
-  await win.keyboard.press('ArrowUp')
-  await win.waitForTimeout(500)
-  check('键盘上键移回固定栏（焦点保留）', (await poseNames()).startsWith('动作B+动作C+动作A|'), await poseNames())
-  await dragPose('动作A', poseRow('动作C'), 'before')
-  await shot('09c0-pool-chips')
-  // 还原：固定栏只留动作A、动作C，随机栏清空
-  await pool('pose').getByRole('button', { name: '移除 动作B' }).click()
-  await win.waitForTimeout(700)
-  await win.locator('[data-testid=pool-pose-random-add]').click()
-  await win.locator('[data-testid=material-picker]').getByRole('button', { name: '清空' }).click()
-  await win.locator('[data-testid=picker-done]').click()
-  await win.waitForTimeout(700)
-  check('还原后素材池保存格式不变', (await poseNames()) === '动作A+动作C|', await poseNames())
-  await pool('interaction').locator('button').first().click()
-  await win.locator('[data-testid=pool-interaction-fixed-add]').click()
-  await pickList.filter({ hasText: /^新状态/ }).first().click()
-  await win.locator('[data-testid=picker-done]').click()
-  await win.waitForTimeout(700)
-  await pool('pose2').locator('button').first().click()
-  await win.locator('[data-testid=pool-pose2-random-add]').click()
-  await pickList.filter({ hasText: /^动作B/ }).first().click()
-  await win.locator('[data-testid=picker-done]').click()
+  const tplEditor = win.locator('[data-testid=template-editor]')
+  const tplText = tplEditor.locator('[data-testid=template-positive]')
+  check('新建模板：放在当前分类，正文预填占位符骨架', (await rowNames('抬脚')).length === 1 && (await tplText.inputValue()).includes('{女特征}') && (await tplText.inputValue()).includes('{男特征}'), await tplText.inputValue())
+  const BODY = (pose) => `{全局},\n{场景}, {镜头},\n{女特征}, {女服装},\nmissionary, ${pose},\n{男特征}, {男服装},\n{附加}`
+  await tplEditor.locator('input').nth(0).fill('抬脚01')
+  await tplEditor.locator('input').nth(1).fill('闭眼')
+  await tplText.fill(BODY('legs up, closed eyes'))
   await win.waitForTimeout(900)
-  await shot('09c-library-card-pools')
-  const savedCard = await savedCardNow()
+  await win.keyboard.press('Control+d')
+  await win.waitForTimeout(1000)
+  check('Ctrl+D 复制当前模板：副本紧跟原模板并进入编辑', JSON.stringify(await rowNames('抬脚')) === JSON.stringify(['抬脚01', '抬脚01 副本']) && (await tplEditor.locator('input').nth(0).inputValue()) === '抬脚01 副本', (await rowNames('抬脚')).join(','))
+  await tplEditor.locator('input').nth(0).fill('抬脚02')
+  await tplEditor.locator('input').nth(1).fill('睁眼')
+  await tplText.fill(BODY('legs up, open eyes'))
+  await win.waitForTimeout(900)
+  const diffText = await tplEditor.locator('[data-testid=template-diff]').innerText()
+  check('编辑副本时显示与复制来源的差异', diffText.includes('抬脚01') && diffText.includes('open eyes') && diffText.includes('closed eyes'), diffText.replace(/\n/g, ' | '))
+  await win.locator('[data-testid=duplicate-template]').click()
+  await win.waitForTimeout(1000)
+  await tplEditor.locator('input').nth(0).fill('贴近01')
+  await tplEditor.locator('input').nth(1).fill('')
+  await tplText.fill(BODY('hugging, kiss'))
+  await tplEditor.locator('[data-testid=template-category]').selectOption('贴近')
+  await win.waitForTimeout(900)
+  // 「全部」：按分类分组显示
+  await win.locator('[data-testid=category-row]').first().click()
+  await win.waitForTimeout(300)
+  const rowB = win.locator('[data-testid=template-row]', { hasText: '抬脚02' })
+  check('改分类：模板移到「贴近」分组；列表显示表情与同组不同的标签', JSON.stringify(await rowNames('抬脚')) === JSON.stringify(['抬脚01', '抬脚02']) && JSON.stringify(await rowNames('贴近')) === JSON.stringify(['贴近01']) && (await rowB.innerText()).includes('睁眼') && (await rowB.innerText()).includes('open eyes') && !(await rowB.innerText()).includes('legs up'), (await rowB.innerText()).replace(/\n/g, ' | '))
+  // 多选后批量移动：Ctrl 点击两个模板，移到「未分类」，再移回
+  await tplRows('抬脚').nth(0).click({ modifiers: ['Control'] })
+  await tplRows('抬脚').nth(1).click({ modifiers: ['Control'] })
+  const moveTo = win.locator('[data-testid=card-template-list] select')
+  await moveTo.selectOption({ label: '未分类' })
+  await win.waitForTimeout(1000)
+  check('多选后批量移到「未分类」', JSON.stringify(await rowNames('')) === JSON.stringify(['抬脚01', '抬脚02']) && (await rowNames('抬脚')).length === 0, JSON.stringify(await rowNames('')))
+  await moveTo.selectOption({ label: '抬脚' })
+  await win.waitForTimeout(1000)
+  await win.locator('[data-testid=card-template-list] button', { hasText: '取消多选' }).click()
+  const duoInfo = await cardInfo('新双人动作卡')
   check(
-    '素材池只保存素材 ID（不复制 Prompt），摘要显示两栏数量',
-    savedCard?.pools?.pose?.fixed?.length === 2 && savedCard.pools.pose.random.length === 0 && savedCard.rules === undefined && savedCard.pools.interaction.fixed?.length === 1 && savedCard.pools.pose2.random?.length === 1 && (await win.locator('[data-testid=pool-pose-summary]').innerText()).includes('固定 2 项') && !JSON.stringify(savedCard).includes('action_'),
-    JSON.stringify(savedCard),
+    '模板保存完整 Prompt、分类与表情；动作卡只保存分类顺序',
+    JSON.stringify(duoInfo.tpls.map((t) => [t.name, t.category, t.tags])) === JSON.stringify([['抬脚01', '抬脚', '闭眼'], ['抬脚02', '抬脚', '睁眼'], ['贴近01', '贴近', '']]) && duoInfo.tpls[1].positive === BODY('legs up, open eyes') && JSON.stringify(duoInfo.card?.categories) === JSON.stringify(['抬脚', '贴近']),
+    JSON.stringify(duoInfo),
   )
-  // 在任务中使用：添加动作卡（默认显示动作卡，直接使用卡片的默认组合规则）
+  await shot('09b-library-card-templates')
+  // 在任务中使用：添加动作卡（默认显示动作卡，从卡中的全部模板轮流抽取）
   await nav('套图任务')
   await win.locator('button', { hasText: '添加动作' }).first().click()
   check('添加对话框默认显示动作卡（单人 / 双人）', (await win.locator('[role=dialog] [data-testid=card-tile]').count()) === 2)
@@ -484,7 +370,8 @@ try {
   check('选择第二角色后双人动作卡由第二角色出场，旧单人动作保持单人', (await duoCard.innerText()).includes('+ 角色B') && !(await cards.nth(0).innerText()).includes('+ 角色B'), (await duoCard.innerText()).replace(/\n/g, ' | '))
   await duoCard.click()
   await win.waitForTimeout(300)
-  check('动作卡详情：只需选择服装、场景与张数；高级组合设置默认折叠', (await win.locator('[data-testid=card-detail]').count()) === 1 && (await win.locator('[data-testid=card-advanced]').count()) === 0 && (await win.locator('[data-testid=second-state]').innerText()).includes('角色B 出场') && (await win.locator('[data-testid=main-pose]').count()) === 0)
+  const sourceSummary = () => win.locator('[data-testid=template-source-summary]').innerText()
+  check('动作卡详情：只需选择服装、场景与张数；模板来源默认全部模板', (await win.locator('[data-testid=card-detail]').count()) === 1 && (await win.locator('[data-testid=card-advanced]').count()) === 0 && (await win.locator('[data-testid=second-state]').innerText()).includes('角色B 出场') && (await win.locator('[data-testid=main-pose]').count()) === 0 && (await sourceSummary()).includes('3 个模板 · 10 张'), await sourceSummary())
   await shot('09e-plan-card-detail')
   const unitsOf = (label) =>
     win.evaluate(async (l) => {
@@ -492,26 +379,35 @@ try {
       const p = await window.api['plan.forTask'](lib.settings.last_task_id ?? lib.tasks[0].id)
       return p.units.filter((u) => u.section === 'pose' && u.item_label === l)
     }, label)
+  const tplCount = (units) => {
+    const m = {}
+    for (const u of units) m[u.meta.template] = (m[u.meta.template] ?? 0) + 1
+    return m
+  }
   let duoUnits = await unitsOf('新双人动作卡')
   const pos = duoUnits[0]?.positive ?? ''
+  const counts = Object.values(tplCount(duoUnits))
   check(
-    '动作卡按「主角色局部姿态 → 动作卡基础 + 子体位 → 第二角色」组合，每张的素材来源可查',
-    duoUnits.length === 10 && duoUnits.every((u) => /action_a,\s*action_c/.test(u.positive) && /missionary,\s*legs up/.test(u.positive) && u.meta.action2 === '动作B' && u.meta.picks.some((p) => p.name === '新状态' && !p.random)) && pos.indexOf('action_a') < pos.indexOf('missionary') && pos.indexOf('missionary') < pos.indexOf('1girl, char_b') && pos.indexOf('1girl, char_b') < pos.indexOf('action_b'),
-    pos,
+    '模板动作卡：正面 Prompt 按模板逐行填入（占位符全部替换，动作在第二角色之前），3 个模板轮流各 3～4 张，每张的模板来源可查',
+    duoUnits.length === 10 && duoUnits.every((u) => u.from_template && /missionary, (legs up, (closed|open) eyes|hugging, kiss)/.test(u.positive) && u.meta.picks.some((p) => p.pool === 'template' && p.name === u.meta.template)) && counts.length === 3 && Math.min(...counts) === 3 && Math.max(...counts) === 4 && !/\{[^}|]*\}/.test(pos) && pos.indexOf('missionary') > 0 && pos.indexOf('missionary') < pos.indexOf('1girl, char_b'),
+    `${JSON.stringify(tplCount(duoUnits))} ${pos}`,
   )
-  // 高级组合设置：只对当前任务生效，可恢复动作卡默认设置
-  await win.locator('[data-testid=card-detail]').getByText('高级组合设置', { exact: true }).click()
-  await win.locator('[data-testid=card-advanced] [data-testid=pool-pose2] button').first().click()
-  await win.locator('[data-testid=card-advanced] [data-testid=pool-pose2]').getByRole('button', { name: '移除 动作B' }).click()
+  // 模板来源：只对当前任务生效。取消「贴近」分类后 10 张平均分给其余 2 个模板
+  await win.locator('[data-testid=source-category][data-category="贴近"] [data-testid=source-category-check]').click()
   await win.waitForTimeout(1300)
   duoUnits = await unitsOf('新双人动作卡')
-  const libCard = await win.evaluate(async () => (await window.api['library.load']()).templates.find((t) => t.name === '新双人动作卡')?.card)
-  check('高级组合设置只对当前任务生效：移除第二角色局部姿态后不再加入，素材库中的动作卡不变', duoUnits.length === 10 && duoUnits.every((u) => !u.meta.action2) && libCard?.pools?.pose2?.random?.length === 1 && (await duoCard.innerText()).includes('已调整组合'), JSON.stringify(libCard?.pools?.pose2))
-  await shot('09f-plan-card-advanced')
-  await win.locator('[data-testid=card-restore]').click()
+  const byTpl = tplCount(duoUnits)
+  check('取消分类：其余模板平均分配，素材库中的模板不变，动作卡片显示「部分模板」', duoUnits.length === 10 && byTpl['抬脚01'] === 5 && byTpl['抬脚02'] === 5 && !byTpl['贴近01'] && (await cardInfo('新双人动作卡')).tpls.length === 3 && (await sourceSummary()).includes('每个模板 5 张') && (await duoCard.innerText()).includes('部分模板'), JSON.stringify(byTpl))
+  await win.locator('[data-testid=source-category][data-category="抬脚"] button[aria-label="展开"]').click()
+  await win.locator('[data-testid=source-template]', { hasText: '抬脚02' }).locator('input').click()
   await win.waitForTimeout(1300)
   duoUnits = await unitsOf('新双人动作卡')
-  check('恢复动作卡默认设置', duoUnits.every((u) => u.meta.action2 === '动作B') && !(await duoCard.innerText()).includes('已调整组合'))
+  check('单独取消一个模板：只用剩下的模板', duoUnits.length === 10 && duoUnits.every((u) => u.meta.template === '抬脚01'), JSON.stringify(tplCount(duoUnits)))
+  await shot('09f-plan-template-source')
+  await win.locator('[data-testid=template-source-reset]').click()
+  await win.waitForTimeout(1300)
+  duoUnits = await unitsOf('新双人动作卡')
+  check('恢复全部模板', Object.keys(tplCount(duoUnits)).length === 3 && !(await duoCard.innerText()).includes('部分模板'), JSON.stringify(tplCount(duoUnits)))
   // ---- 镜头视角：在素材库管理（新建、编辑、优先级、搜索、删除），动作中多选，每张图片抽 1 个
   await nav('素材库')
   await win.locator('[data-testid=lib-tab-camera]').click()
@@ -1045,19 +941,22 @@ try {
   const oldAfter = await win.evaluate((id) => window.api['tasks.get'](id), oldTask.id)
   check('已有任务不受默认值影响', JSON.stringify(oldAfter.data) === JSON.stringify(oldTask.data))
 
-  // 大量素材：300 个状态，在动作卡素材池的选择器中搜索、多选、切换搜索后保留、取消单个、批量添加搜索结果
+  // 大量素材：300 个镜头，在动作详情的镜头选择器中搜索、多选、切换搜索后保留、取消单个、批量添加搜索结果
   await win.evaluate(async () => {
-    for (let i = 1; i <= 300; i++) await window.api['templates.save']({ kind: 'act', name: `批量互动${i}`, positive: `bulk_act_${i}, (weight:1.1)` })
+    for (let i = 1; i <= 300; i++) await window.api['templates.save']({ kind: 'camera', name: `批量镜头${i}`, positive: `bulk_cam_${i}, (weight:1.1)` })
   })
   await win.reload()
   await win.locator('nav').waitFor()
-  await nav('素材库')
-  await win.locator('[data-testid=lib-tab-cards]').click()
-  await win.locator('[data-testid=position-row]', { hasText: '新双人动作卡' }).locator('button').nth(1).click()
+  // 在新任务中添加动作卡（之后检查多尺寸张数）
+  await nav('套图任务')
+  await win.locator('button', { hasText: '添加动作' }).first().click()
+  await win.locator('[role=dialog] [data-testid=card-tile]', { hasText: '新双人动作卡' }).click()
+  await win.locator('[role=dialog] button', { hasText: '添加 1 个动作' }).click()
+  await win.waitForTimeout(500)
+  await cards.filter({ hasText: '新双人动作卡' }).first().click({ position: { x: 120, y: 20 } })
   await win.waitForTimeout(300)
-  const iPool = win.locator('[data-testid=position-detail] [data-testid=pool-interaction]')
-  await iPool.locator('button').first().click()
-  await win.locator('[data-testid=pool-interaction-random-add]').click()
+  const pickBulk = win.locator('[data-testid=camera-field] [data-testid=pick-camera]')
+  await pickBulk.click()
   const mp = win.locator('[data-testid=material-picker]')
   const list = mp.locator('[data-testid=picker-list]')
   const bulk = await list.locator('button').count()
@@ -1068,46 +967,48 @@ try {
     return { top: r.top, bottom: r.bottom, vh: window.innerHeight, scroll: l.scrollHeight > l.clientHeight, doneVisible: done.bottom <= window.innerHeight && done.top >= 0 }
   })
   check('300 个素材：列表可滚动，标题与完成按钮都在窗口内', bulk >= 300 && geo.scroll && geo.top >= 0 && geo.bottom <= geo.vh && geo.doneVisible, JSON.stringify({ bulk, ...geo }))
-  await mp.getByPlaceholder(/搜索名称/).fill('批量互动12')
+  await mp.getByPlaceholder(/搜索名称/).fill('批量镜头12')
   check('按名称搜索', (await list.locator('button').count()) === 11, String(await list.locator('button').count()))
-  await list.locator('button', { hasText: /^批量互动12bulk/ }).click()
-  await list.locator('button', { hasText: /^批量互动125bulk/ }).click()
-  await mp.getByPlaceholder(/搜索名称/).fill('批量互动250')
-  await list.locator('button', { hasText: /^批量互动250bulk/ }).click()
+  await list.locator('button', { hasText: /^批量镜头12bulk/ }).click()
+  await list.locator('button', { hasText: /^批量镜头125bulk/ }).click()
+  await mp.getByPlaceholder(/搜索名称/).fill('批量镜头250')
+  await list.locator('button', { hasText: /^批量镜头250bulk/ }).click()
   await mp.getByPlaceholder(/搜索名称/).fill('')
   await shot('24-material-picker')
   const summary = () => mp.locator('[data-testid=picker-selected]').innerText()
   const summaryText = await summary()
-  check('切换搜索后已选内容保留', (await summary()).includes('已选 3') && ['批量互动12', '批量互动125', '批量互动250'].every((n) => summaryText.includes(n)), (await summary()).replace(/\n/g, ' '))
-  await mp.getByRole('button', { name: '移除 批量互动125' }).click()
+  check('切换搜索后已选内容保留', (await summary()).includes('已选 3') && ['批量镜头12', '批量镜头125', '批量镜头250'].every((n) => summaryText.includes(n)), (await summary()).replace(/\n/g, ' '))
+  await mp.getByRole('button', { name: '移除 批量镜头125' }).click()
   await mp.locator('[data-testid=picker-done]').click()
   await win.waitForTimeout(1200)
-  const poolNames = async () => win.evaluate(async () => { const lib = await window.api['library.load'](); const c = lib.templates.find((t) => t.name === '新双人动作卡'); return (c.card.pools.interaction?.random ?? []).map((id) => lib.templates.find((t) => t.id === id)?.name) })
-  check('多选结果按点选顺序保存为候选，取消的项不保留', JSON.stringify(await poolNames()) === JSON.stringify(['批量互动12', '批量互动250']), JSON.stringify(await poolNames()))
-  await win.locator('[data-testid=pool-interaction-random-add]').click()
-  await mp.getByPlaceholder(/搜索名称/).fill('批量互动29')
+  const pickedCams = async () =>
+    win.evaluate(async () => {
+      const lib = await window.api['library.load']()
+      const t = lib.tasks.find((x) => x.id === (lib.settings.last_task_id ?? lib.tasks[0].id)) ?? lib.tasks[0]
+      const full = await window.api['tasks.get'](t.id)
+      const c = lib.templates.find((x) => x.kind === 'position' && x.name === '新双人动作卡')
+      const it = full.data.items.filter((i) => i.card_id === c?.id).at(-1)
+      return (it?.camera_ids ?? []).map((id) => lib.templates.find((m) => m.id === id)?.name)
+    })
+  check('多选结果按点选顺序保存，取消的项不保留', JSON.stringify(await pickedCams()) === JSON.stringify(['批量镜头12', '批量镜头250']), JSON.stringify(await pickedCams()))
+  await pickBulk.click()
+  await mp.getByPlaceholder(/搜索名称/).fill('批量镜头29')
   await mp.locator('[data-testid=picker-add-all]').click()
   await mp.locator('[data-testid=picker-done]').click()
   await win.waitForTimeout(1200)
-  const after = await poolNames()
-  check('批量添加搜索结果（追加在原有候选之后）', after.length === 13 && after[0] === '批量互动12' && after[1] === '批量互动250' && after.slice(2).every((n) => n.startsWith('批量互动29')), JSON.stringify(after))
-  // 生成设置：在新任务中添加动作卡，多尺寸张数写入计划
-  await nav('套图任务')
-  await win.locator('button', { hasText: '添加动作' }).first().click()
-  await win.locator('[role=dialog] [data-testid=card-tile]', { hasText: '新双人动作卡' }).click()
-  await win.locator('[role=dialog] button', { hasText: '添加 1 个动作' }).click()
-  await win.waitForTimeout(500)
-  await cards.filter({ hasText: '新双人动作卡' }).first().click({ position: { x: 120, y: 20 } })
+  const after = await pickedCams()
+  check('批量添加搜索结果（追加在原有选择之后）', after.length === 13 && after[0] === '批量镜头12' && after[1] === '批量镜头250' && after.slice(2).every((n) => n.startsWith('批量镜头29')), JSON.stringify(after))
+  // 生成设置：多尺寸张数写入计划
   await win.getByRole('button', { name: '横图增加 5 张' }).click()
   await win.waitForTimeout(1000)
   const sp = await planNow()
   const mine = sp.units.filter((u) => u.item_label === '新双人动作卡')
   check('多尺寸：计划中每张带宽高（竖图在前、横图在后）', mine.length === 20 && mine[0].width === 1024 && mine[0].height === 1536 && mine.at(-1).width === 1536 && mine.at(-1).height === 1024, mine.map((u) => `${u.width}x${u.height}`).join(','))
-  check('正面 Prompt 模块之间空一行，与提交内容一致', mine[0].positive.includes(',\n\n') && mine[0].inputs.find((x) => x.source === 'positive')?.value === mine[0].positive)
-  check('同一动作卡的多张图片抽到不同的互动组合', new Set(mine.map((u) => u.positive)).size > 1)
+  check('模板动作卡的正面 Prompt 按模板写入，与提交内容一致', mine[0].from_template && mine[0].positive.includes('missionary') && mine[0].inputs.find((x) => x.source === 'positive')?.value === mine[0].positive)
+  check('同一动作卡的多张图片轮流使用全部模板', new Set(mine.map((u) => u.meta.template)).size === 3, JSON.stringify(mine.map((u) => u.meta.template)))
   await win.locator('[data-testid=detail-generate]').getByText('组合与 Prompt 预览', { exact: true }).click()
   await win.waitForTimeout(300)
-  check('动作详情中可查看每张的素材来源', (await win.locator('[data-testid=pick-sources]').innerText()).includes('新状态'))
+  check('动作详情中可查看每张的模板来源', (await win.locator('[data-testid=pick-sources]').innerText()).includes('Prompt 模板'))
   await shot('25-detail-sizes')
 
   check('没有渲染进程错误', errors.length === 0, errors.slice(0, 3).join(' / '))

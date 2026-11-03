@@ -215,7 +215,7 @@ export function TemplateEditor({ t, onClose, onDeleted }: { t: Template; onClose
               onClick={async () => {
                 flush()
                 const r = await createSoloCards([{ ...t, ...draft }])
-                if (r.length) toast.success(`已创建单人动作卡「${draft.name}」`, { description: '在「动作卡」中配置素材池' })
+                if (r.length) toast.success(`已创建单人动作卡「${draft.name}」`, { description: '在「动作卡」中编辑模板' })
               }}
             >
               转为单人动作卡
