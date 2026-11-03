@@ -37,6 +37,7 @@ import { DEFAULT_SETTINGS, SIZE_PRESETS, type Library, type PlanUnit, type TaskD
 import { PlanPreviewDialog, TaskSettingsDialog } from './dialogs'
 import { LoraPanel } from './LoraPanel'
 import { CharacterPicker, GlobalPicker, PosePicker, StoryPicker, WorkflowMenu, type NewAction } from './pickers'
+import { isTemplateCard } from '@shared/card-templates'
 import { CardItemDetail } from './CardDetail'
 import { PoseDetail } from './PoseDetail'
 
@@ -221,7 +222,8 @@ function PoseCard({
   const scene = T(item.scene_id ?? null)
   const card = item.card_id != null ? T(item.card_id) : undefined
   const isCard = item.card_id != null
-  const tuned = isCard && (!!Object.keys(item.card_rules ?? {}).length || !!(item.card_exclude ?? []).length)
+  const templated = isTemplateCard(card)
+  const tuned = isCard && (templated ? !!item.card_pick : !!Object.keys(item.card_rules ?? {}).length || !!(item.card_exclude ?? []).length)
   const label = isCard
     ? (card?.name ?? '（动作卡已删除）')
     : item.position_id
@@ -268,8 +270,8 @@ function PoseCard({
             </span>
           )}
           {tuned && (
-            <span className="shrink-0 rounded-md bg-amber-500/12 px-1.5 py-0.5 text-[10.5px] text-amber-700" title="本任务修改了动作卡的默认组合规则">
-              已调整组合
+            <span className="shrink-0 rounded-md bg-amber-500/12 px-1.5 py-0.5 text-[10.5px] text-amber-700" title={templated ? '只从部分分类或模板中抽取' : '本任务修改了动作卡的默认组合规则'}>
+              {templated ? '部分模板' : '已调整组合'}
             </span>
           )}
           {!isCard && item.position_id && states.length > 0 && <span className="shrink-0 truncate text-[11px] text-muted-foreground">+ {states.map((t) => t?.name ?? '（已删除）').join(' + ')}</span>}

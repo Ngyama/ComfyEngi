@@ -311,12 +311,12 @@ export function CardPools({
   )
 }
 
-const POOL_LABEL = Object.fromEntries(CARD_POOLS.map((p) => [p.key, p.label])) as Record<CardPoolKey, string>
+const POOL_LABEL = { ...Object.fromEntries(CARD_POOLS.map((p) => [p.key, p.label])), template: 'Prompt 模板' } as Record<CardPick['pool'], string>
 
 /** 一张图片实际使用的素材：按池列出，标明固定 / 随机（来自冻结的计划，与 Prompt 一致） */
 export function PickSources({ picks, card, camera }: { picks?: CardPick[]; card?: string; camera?: string }) {
   if (!card) return null
-  const by = new Map<CardPoolKey, CardPick[]>()
+  const by = new Map<CardPick['pool'], CardPick[]>()
   for (const p of picks ?? []) by.set(p.pool, [...(by.get(p.pool) ?? []), p])
   return (
     <div className="space-y-1 rounded-xl bg-tint/[0.025] p-2.5 text-[12px] ring-1 ring-tint/[0.07]" data-testid="pick-sources">
@@ -331,7 +331,7 @@ export function PickSources({ picks, card, camera }: { picks?: CardPick[]; card?
             {list.map((p) => (
               <span key={p.id} className={cn('rounded-md px-1.5 py-0.5', p.random ? 'bg-violet-500/10 text-violet-700' : 'bg-tint/[0.06]')} title={p.random ? '随机抽取' : '固定'}>
                 {p.name || '（未命名）'}
-                <span className="ml-1 text-[10px] opacity-70">{p.random ? '随机' : '固定'}</span>
+                <span className="ml-1 text-[10px] opacity-70">{p.random ? (p.pool === 'template' ? '轮流抽取' : '随机') : '固定'}</span>
               </span>
             ))}
           </span>

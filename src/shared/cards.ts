@@ -37,6 +37,12 @@ export function normalizeCard(c: unknown): ActionCard {
   const o = isObject(c) ? c : {}
   const out: ActionCard = {}
   if (o.solo === true) out.solo = true
+  if (o.templates === true) out.templates = true
+  if (Array.isArray(o.categories)) {
+    const cats = [...new Set(o.categories.filter((x): x is string => typeof x === 'string').map((x) => x.trim()).filter(Boolean))]
+    if (cats.length) out.categories = cats
+  }
+  if (typeof o.skeleton === 'string') out.skeleton = o.skeleton
   const pools = isObject(o.pools) ? o.pools : {}
   const rules = isObject(o.rules) ? o.rules : null
   const legacy = !!rules || Object.values(pools).some(Array.isArray)

@@ -3,6 +3,7 @@ import { existsSync, mkdirSync, readFileSync, renameSync, rmSync } from 'node:fs
 import { join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { FileLibrary, FILE_TABLES, atomic, encode } from './file-library'
+import { migrateTemplateCards, needsTemplateMigration } from './card-migration'
 import { Store, TABLES, type TableName } from './store'
 import { planForTask } from './plan'
 export function createVault(root:string, legacy?:string) {
@@ -65,5 +66,8 @@ export function openVault(root:string) {
     library.migrateStateKinds(join(root, 'data', 'backups', `state-merge-${new Date().toISOString().replace(/[:.]/g, '-')}`))
   }
   const store = new Store(join(root,'data','comfyengi.db'),{backupDir:join(root,'data','backups')})
-  store.files=library; return store
+  store.files=library
+  // 旧版素材池动作卡转换为模板动作卡：动作卡与子体位文件先备份到 data/backups/card-templates-时间/
+  if (needsTemplateMigration(store)) migrateTemplateCards(store, join(root, 'data', 'backups', `card-templates-${new Date().toISOString().replace(/[:.]/g, '-')}`))
+  return store
 }

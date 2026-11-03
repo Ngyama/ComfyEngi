@@ -297,10 +297,10 @@ export class Store {
     return Number(r.lastInsertRowid)
   }
 
-  /** 主体位的子体位（类似角色的服装：复制、删除主体位时一起处理） */
+  /** 动作卡的子体位与 Prompt 模板（类似角色的服装：复制、删除动作卡时一起处理） */
   private subpositionsOf(table: TableName, id: number): Template[] {
     if (table !== 'templates' || (this.get('templates', id) as Template | null)?.kind !== 'position') return []
-    return this.list('templates').filter((t) => t.kind === 'subposition' && t.parent_id === id)
+    return this.list('templates').filter((t) => (t.kind === 'subposition' || t.kind === 'card_tpl') && t.parent_id === id)
   }
 
   remove(table: TableName, id: number) {

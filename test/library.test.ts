@@ -85,10 +85,12 @@ describe('素材分类与数据库迁移', () => {
     s.save('templates', { id: pose, kind: 'position' })
     expect(s.get('templates', pose)?.kind).toBe('position')
     expect(s.files!.entries.get(`templates:${pose}`)!.path).toBe(posePath)
-    const files = readdirSync(join(root, 'prompts'), { recursive: true }).length
+    // 重新打开时旧动作卡转换为模板（写入 prompts/card-templates），其余文件数量不变
+    const count = () => readdirSync(join(root, 'prompts'), { recursive: true }).filter((f) => !String(f).startsWith('card-templates')).length
+    const files = count()
     s.close()
     const s2 = openVault(root)
-    expect(readdirSync(join(root, 'prompts'), { recursive: true }).length).toBe(files)
+    expect(count()).toBe(files)
     expect(existsSync(posePath)).toBe(true)
     s2.close()
   })

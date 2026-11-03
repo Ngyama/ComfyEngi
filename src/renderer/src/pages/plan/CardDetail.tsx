@@ -10,11 +10,13 @@ import type { MaterialOption } from '@/lib/material-select'
 import { templatesOf, useLib, usePlan } from '@/lib/stores'
 import { cn } from '@/lib/utils'
 import { effectivePool, isSoloCard, normalizePool } from '@shared/cards'
+import { isTemplateCard } from '@shared/card-templates'
 import { setItemSizes, sizeTotal } from '@shared/planner'
 import { PLACEHOLDER_HELP } from '@shared/prompt'
 import { CARD_POOLS, type CardPoolKey, type PlanUnit, type PoolConfig, type TaskItem } from '@shared/types'
 import { MaterialPicker } from './MaterialPicker'
 import { CameraField, PickField, Section, SizeCards } from './PoseDetail'
+import { TemplateSource } from './TemplateSource'
 
 type PickerKey = 'card' | 'scene' | 'outfit' | 'outfit2'
 
@@ -41,6 +43,7 @@ export function CardItemDetail({ index, units, onClose }: { index: number; units
   }
   const card = T(item.card_id)
   const solo = isSoloCard(card)
+  const templated = isTemplateCard(card)
   const char = lib?.characters.find((c) => c.id === charId)
   const char2 = char2Id ? lib?.characters.find((c) => c.id === char2Id) : undefined
   const defaultScene = T(task.data.scene_id)
@@ -70,7 +73,7 @@ export function CardItemDetail({ index, units, onClose }: { index: number; units
   const single = (v: number | null | undefined) => (v ? [v] : [])
   const pickers: Record<PickerKey, { title: string; items: MaterialOption[]; value: number[]; noneLabel?: string; onChange: (ids: number[]) => void; description?: string; empty?: string }> = {
     // 换成另一张动作卡时，本任务对原卡的覆盖不再适用
-    card: { title: '动作卡', items: cards, value: single(item.card_id), onChange: (ids) => ids[0] && ids[0] !== item.card_id && update((d) => Object.assign(d.items[index], { card_id: ids[0], card_rules: undefined, card_exclude: undefined })), empty: '还没有动作卡，可在「素材库 → 动作卡」中添加' },
+    card: { title: '动作卡', items: cards, value: single(item.card_id), onChange: (ids) => ids[0] && ids[0] !== item.card_id && update((d) => Object.assign(d.items[index], { card_id: ids[0], card_rules: undefined, card_exclude: undefined, card_pick: undefined })), empty: '还没有动作卡，可在「素材库 → 动作卡」中添加' },
     scene: { title: '场景', items: scenes, value: single(item.scene_id), noneLabel: defaultScene ? `任务默认：${defaultScene.name}` : '不指定', onChange: (ids) => set({ scene_id: ids[0] ?? null }), empty: '场景库为空，可在「素材库 → 场景」中添加' },
     outfit: { title: `主角色服装（${char?.name ?? ''}）`, items: outfitOpts(outfits), value: single(item.outfit_id), noneLabel: '不指定', onChange: (ids) => set({ outfit_id: ids[0] ?? null }), empty: charId ? '该角色还没有服装' : '先选择主角色' },
     outfit2: { title: `第二角色服装（${char2?.name ?? ''}）`, items: outfitOpts(outfits2), value: single(item.second_outfit_id), noneLabel: '不指定', onChange: (ids) => set({ second_outfit_id: ids[0] ?? null }) },
@@ -93,7 +96,7 @@ export function CardItemDetail({ index, units, onClose }: { index: number; units
 
       <div className="min-h-0 flex-1 space-y-3 overflow-y-auto px-4 pb-6">
         <Section title="画面内容" testId="detail-scene">
-          <PickField label="动作卡" names={nameOf(item.card_id, cards)} placeholder="选择动作卡" onOpen={() => setPicker('card')} testId="pick-card" hint={card ? '基础 Prompt、子体位、局部姿态、表情和互动按动作卡的默认规则自动组合' : undefined} />
+          <PickField label="动作卡" names={nameOf(item.card_id, cards)} placeholder="选择动作卡" onOpen={() => setPicker('card')} testId="pick-card" hint={card ? (templated ? '从勾选的模板中轮流抽取：每个模板用过一遍再开始下一轮' : '基础 Prompt、子体位、局部姿态、表情和互动按动作卡的默认规则自动组合') : undefined} />
           <PickField label="场景" icon={<MapPin />} names={nameOf(item.scene_id, scenes)} placeholder={defaultScene ? `任务默认：${defaultScene.name}` : '不指定'} onOpen={() => setPicker('scene')} onClear={() => set({ scene_id: null })} testId="pick-scene" />
           <CameraField item={item} onChange={set} />
         </Section>
@@ -167,7 +170,9 @@ export function CardItemDetail({ index, units, onClose }: { index: number; units
           </Disclosure>
         </Section>
 
-        {card && (
+        {card && templated && <TemplateSource card={card} pick={item.card_pick} total={total} onChange={(p) => set({ card_pick: p })} />}
+
+        {card && !templated && (
           <Disclosure
             title="高级组合设置"
             summary={tuned ? `本任务已修改 ${tuned} 项` : '使用动作卡的默认设置'}

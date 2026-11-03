@@ -74,11 +74,12 @@ describe('单人动作、行为合并为状态', () => {
     expect(sit).toMatchObject({ name: '坐姿', positive: '(sitting:1.2), {chair|sofa}', negative: 'standing', note: '备注', tags: 'a,b', category: '单人' })
     // 双人动作、表情、全局等其他素材逐字节不变；主体位与子体位的关系不变
     for (const [key, text] of v.files) {
-      if ([v.ids.sit, v.ids.lean, v.ids.hug, v.ids.kiss].some((id) => key === `templates:${id}`)) continue
+      // 旧素材池动作卡（正常位）同时转换为模板动作卡，单独检查
+      if ([v.ids.sit, v.ids.lean, v.ids.hug, v.ids.kiss, v.ids.missionary].some((id) => key === `templates:${id}`)) continue
       expect(readFileSync(s.files!.entries.get(key)!.path, 'utf8')).toBe(text)
     }
     expect(s.get('templates', v.ids.legsUp)).toMatchObject({ kind: 'subposition', parent_id: v.ids.missionary })
-    expect(s.get('templates', v.ids.missionary)?.kind).toBe('position')
+    expect(s.get('templates', v.ids.missionary)).toMatchObject({ kind: 'position', name: '正常位', positive: 'missionary', card: { templates: true } })
     // 备份：data/backups/state-merge-*/ 下保存了 4 个原文件（相对路径相同，内容为迁移前）
     const backups = readdirSync(join(v.root, 'data', 'backups')).filter((d) => d.startsWith('state-merge-'))
     expect(backups.length).toBe(1)
@@ -90,7 +91,7 @@ describe('单人动作、行为合并为状态', () => {
     }
     expect(readFileSync(join(v.root, '.comfyengi', 'migration-log.jsonl'), 'utf8')).toContain('"count":4')
     // 没有丢失、没有重复 ID
-    const all = s.list('templates')
+    const all = s.list('templates').filter((t) => t.kind !== 'card_tpl')
     expect(all.length).toBe([...v.files.keys()].filter((k) => k.startsWith('templates:')).length)
     expect(new Set(all.map((t) => t.id)).size).toBe(all.length)
     expect(all.filter((t) => t.kind === 'state').map((t) => t.id).sort()).toEqual([v.ids.sit, v.ids.lean, v.ids.hug, v.ids.kiss].sort())
@@ -99,7 +100,8 @@ describe('单人动作、行为合并为状态', () => {
     // 再次打开不会重复迁移或重复备份
     const s2 = openVault(v.root)
     expect(readdirSync(join(v.root, 'data', 'backups')).filter((d) => d.startsWith('state-merge-')).length).toBe(1)
-    expect(s2.list('templates').length).toBe(all.length)
+    expect(s2.list('templates').filter((t) => t.kind !== 'card_tpl').length).toBe(all.length)
+    expect(s2.list('templates').filter((t) => t.kind === 'card_tpl').length).toBe(1)
     s2.close()
   })
 

@@ -280,7 +280,7 @@ export class FileLibrary {
     delete row._revision
     delete row._folder
     if (table === 'outfits' && !this.entries.has(`characters:${row.character_id}`)) throw new Error('服装角色不存在')
-    const dir = table === 'templates' ? `prompts/${({state:'states',pose:'poses',expression:'expressions',camera:'cameras',male:'male',global:'global',scene:'scenes',position:'positions',subposition:'positions',act:'acts'} as Row)[row.kind] || 'global'}` : table === 'workflows' ? 'workflows' : `prompts/${table}`
+    const dir = table === 'templates' ? `prompts/${({state:'states',pose:'poses',expression:'expressions',camera:'cameras',male:'male',global:'global',scene:'scenes',position:'positions',subposition:'positions',card_tpl:'card-templates',act:'acts'} as Row)[row.kind] || 'global'}` : table === 'workflows' ? 'workflows' : `prompts/${table}`
     mkdirSync(join(this.root,dir),{recursive:true})
     const newDir = table === 'characters' && opts.folder ? this.folderPath(opts.folder) : join(this.root,dir)
     const path = old?.path || (table === 'workflows' ? join(this.root,dir,`${id}-${randomUUID()}.json`) : this.freePath(newDir, this.baseName(row)))

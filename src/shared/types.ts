@@ -9,7 +9,7 @@
  * - scene：场景（环境、地点、背景）
  * - male / camera：兼容素材（旧版男性描述、镜头），不在素材库中显示；镜头已是素材库的独立分类
  */
-export type TemplateKind = 'global' | 'scene' | 'state' | 'pose' | 'position' | 'subposition' | 'act' | 'expression' | 'male' | 'camera'
+export type TemplateKind = 'global' | 'scene' | 'state' | 'pose' | 'position' | 'subposition' | 'act' | 'expression' | 'male' | 'camera' | 'card_tpl'
 
 export const TEMPLATE_KINDS: Record<TemplateKind, string> = {
   global: '全局 Prompt',
@@ -22,6 +22,7 @@ export const TEMPLATE_KINDS: Record<TemplateKind, string> = {
   expression: '表情',
   male: '男性描述',
   camera: '镜头',
+  card_tpl: '动作模板',
 }
 
 /** 合并为「状态」的旧类型 */
@@ -113,12 +114,22 @@ export interface LegacyPoolRule {
 export interface ActionCard {
   /** true = 单人动作卡（不使用第二角色与双人互动）；没有时为双人（旧主体位） */
   solo?: boolean
+  /**
+   * true = 模板动作卡：每张图从这张卡的 Prompt 模板（kind card_tpl，parent_id 指向本卡）中抽取一份完整模板，
+   * 用占位符填入全局、场景、镜头、角色与服装。没有时为旧版素材池动作卡（读取旧数据时仍按素材池展开）
+   */
+  templates?: boolean
+  /** 模板分类的显示顺序（也保存还没有模板的空分类）；模板的 category 不在列表中时排在后面 */
+  categories?: string[]
+  /** 新建模板时预填的正文（复制使用，不是继承：之后修改骨架不影响已有模板） */
+  skeleton?: string
   /** 各素材池的固定素材与随机候选（只保存 ID，不复制 Prompt） */
   pools?: Partial<Record<CardPoolKey, PoolConfig>>
 }
 /** 一张图片实际使用的素材（随计划冻结在运行记录中，用于查看来源） */
 export interface CardPick {
-  pool: CardPoolKey
+  /** template：模板动作卡抽到的 Prompt 模板 */
+  pool: CardPoolKey | 'template'
   id: number
   name: string
   random: boolean
@@ -280,6 +291,8 @@ export interface TaskItem {
   card_rules?: Partial<Record<CardPoolKey, PoolConfig | LegacyPoolRule>>
   /** 旧任务中禁止随机抽取的素材（继续生效，界面可以恢复，不再新增） */
   card_exclude?: number[]
+  /** 模板动作卡的抽取来源：没有时为这张卡的全部模板 */
+  card_pick?: CardTemplatePick
   /** 场景：null 时沿用任务的默认场景 */
   scene_id?: number | null
   /**
@@ -287,6 +300,16 @@ export interface TaskItem {
    * 有此字段时总张数为各尺寸之和（count 同步为总数，仅供显示）
    */
   sizes?: SizeCounts
+}
+
+/**
+ * 模板来源：categories 中的分类包含其中现在和以后的全部模板（'' 为未分类）；include 额外加入的模板；exclude 不参与抽取的模板。
+ * categories 没有时为全部分类
+ */
+export interface CardTemplatePick {
+  categories?: string[]
+  include?: number[]
+  exclude?: number[]
 }
 
 export type SizeKey = 'portrait' | 'landscape' | 'square'
@@ -435,6 +458,10 @@ export interface UnitMeta {
   variant?: string
   picks?: CardPick[]
   combo_seed?: number
+  /** 模板动作卡：抽到的模板名称、分类与表情标签 */
+  template?: string
+  template_category?: string
+  template_label?: string
   /** 入队时冻结的输出目录：完成后最终图片复制到这里（没有时不复制） */
   output_dir?: string
   /** 套图复刻：原图路径、保存时使用的文件名（不含扩展名）与替换记录 */
@@ -484,6 +511,8 @@ export interface PlanUnit {
   width?: number
   height?: number
   inputs?: InputValue[]
+  /** 正面 Prompt 来自 Prompt 模板（按占位符位置填入），不能再按模块拆分写入多个节点 */
+  from_template?: boolean
 }
 
 export interface PlanResult {

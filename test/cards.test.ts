@@ -333,24 +333,25 @@ describe('14. 旧素材与任务兼容', () => {
     s.close()
   })
 
-  it('Vault：打开工作区不改写旧主体位文件；动作卡配置以 JSON 保存在 frontmatter，重启后不变', () => {
+  it('Vault：旧主体位重新打开时转换为模板动作卡；动作卡配置以 JSON 保存在 frontmatter，重启后不变', () => {
     const root = tempDir()
     createVault(root)
     const s = openVault(root)
     const pos = s.save('templates', { kind: 'position', name: '旧主体位', positive: 'old_base' })
     const path = s.files!.entries.get(`templates:${pos}`)!.path
-    const text = readFileSync(path, 'utf8')
     s.close()
     const s2 = openVault(root)
-    expect(readFileSync(path, 'utf8')).toBe(text)
+    expect(s2.get('templates', pos)).toMatchObject({ name: '旧主体位', positive: 'old_base', card: { templates: true, categories: ['基础'] } })
     const st = s2.save('templates', { kind: 'state', name: '前倾', positive: 'leaning_forward', exclusive: '上身' })
-    s2.save('templates', { id: pos, card: normalizeCard({ solo: true, pools: { pose: { random: [st] } } }) })
+    s2.save('templates', { id: pos, card: normalizeCard({ templates: true, categories: ['基础'], solo: true, pools: { pose: { random: [st] } } }) })
+    const text = readFileSync(path, 'utf8')
     s2.close()
     const s3 = openVault(root)
-    expect(s3.get('templates', pos)!.card).toEqual({ solo: true, pools: { pose: { fixed: [], random: [st] } } })
+    expect(readFileSync(path, 'utf8')).toBe(text)
+    expect(s3.get('templates', pos)!.card).toEqual({ templates: true, categories: ['基础'], solo: true, pools: { pose: { fixed: [], random: [st] } } })
     expect(s3.get('templates', st)!.exclusive).toBe('上身')
     const plan = expandTask(normalizeTaskData({ ...s3.get('tasks', s3.save('tasks', { name: 't', data: { character_id: null, items: [{ ...newCardItem(pos), count: 2 }] } }))!.data }), loadPlanLibrary(s3), s3.settings())
-    expect(plan.units.map((u) => u.modules.content[0])).toEqual(['leaning_forward', 'leaning_forward'])
+    expect(plan.units.map((u) => u.positive)).toEqual(['old_base', 'old_base'])
     s3.close()
   })
 

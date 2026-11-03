@@ -163,8 +163,13 @@ export function buildWorkflowInputs(store: Store, wf: Workflow, units: PlanUnit[
   }
   checkLoraSlots(wf, units, errors, warnings, once, handled)
   // Prompt 节点只拼接部分模块时，检查有内容的模块是否都有去处
+  // 模板动作卡的正面 Prompt 是一整段（顺序由模板决定），不能再按模块拆到多个节点
+  const splitPos = wf.mapping.filter((m) => m.source === 'positive' && (m.modules ?? []).length)
+  if (splitPos.length && units.some((u) => u.from_template))
+    once(errors, `工作流「${wf.name}」的正面 Prompt 映射按模块拆分（节点 ${[...new Set(splitPos.map((m) => m.node))].join('、')}），模板动作卡需要写入完整的正面 Prompt。请在工作流的高级映射中改为完整 Prompt`)
   for (const src of ['positive', 'negative']) {
     const entries = wf.mapping.filter((m) => m.source === src)
+    if (src === 'positive' && units.some((u) => u.from_template)) continue
     if (!entries.length || entries.some((m) => !(m.modules ?? []).length)) continue
     const covered = new Set(entries.flatMap((m) => m.modules))
     const idx = src === 'positive' ? 0 : 1
