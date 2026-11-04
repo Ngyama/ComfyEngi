@@ -11,6 +11,7 @@ import type {
   CardPoolKey,
   Character,
   Lora,
+  LoraOverride,
   Modules,
   Outfit,
   PlanUnit,
@@ -245,6 +246,28 @@ function maleModule(
   ]
 }
 
+/**
+ * 角色库中的 LoRA + 任务中的调整（禁用、替换、权重）。没有任何调整时与角色库完全相同。
+ * 套图任务与套图复刻共用（同一份 lora_overrides 结构）。
+ */
+export function applyLoraOverrides(list: Lora[], overrides: Record<string, LoraOverride> | undefined, kind: 'lora' | 'second_lora'): Lora[] {
+  const ov = overrides ?? {}
+  const base = list.length ? list : ov[`${kind}1`]?.name ? [{ name: '', strength: 1 }] : []
+  return base.map((l, i) => {
+    const o = ov[`${kind}${i + 1}`]
+    if (!o) return l
+    const out: Lora = { ...l }
+    if (o.name) {
+      out.name = o.name
+      out.resource_id = o.resource_id
+    }
+    if (o.strength_model != null) out.strength = o.strength_model
+    if (o.strength_clip != null) out.strength_clip = o.strength_clip
+    if (!o.enabled) out.disabled = true
+    return out
+  })
+}
+
 export interface ExpandResult {
   units: PlanUnit[]
   errors: string[]
@@ -266,23 +289,7 @@ export function expandTask(data: TaskData, lib: PlanLibrary, settings: Settings,
   if (data.second_character_id && !char2) errors.push('所选第二角色已被删除')
   // LoRA：角色库中的 LoRA 是默认值，任务中的调整（禁用、替换、权重）覆盖它；任务级 LoRA 作用于整套图。
   // 没有任何调整时与角色库完全相同（旧任务的计划不变）
-  const withOverrides = (list: Lora[], kind: 'lora' | 'second_lora'): Lora[] => {
-    const ov = data.lora_overrides ?? {}
-    const base = list.length ? list : ov[`${kind}1`]?.name ? [{ name: '', strength: 1 }] : []
-    return base.map((l, i) => {
-      const o = ov[`${kind}${i + 1}`]
-      if (!o) return l
-      const out: Lora = { ...l }
-      if (o.name) {
-        out.name = o.name
-        out.resource_id = o.resource_id
-      }
-      if (o.strength_model != null) out.strength = o.strength_model
-      if (o.strength_clip != null) out.strength_clip = o.strength_clip
-      if (!o.enabled) out.disabled = true
-      return out
-    })
-  }
+  const withOverrides = (list: Lora[], kind: 'lora' | 'second_lora'): Lora[] => applyLoraOverrides(list, data.lora_overrides, kind)
   const loras2 = withOverrides(char2 ? (char2.loras ?? []).filter((l) => l.name) : [], 'second_lora')
   // 停用的任务 LoRA 也保留在计划中（disabled）：绑定的 Loader 要禁用它；任务中没有的槽位则保持工作流原值
   const taskLoras = (data.task_loras ?? []).map((t) => ({ name: t.name, resource_id: t.resource_id, strength: t.strength_model, strength_clip: t.strength_clip, slot: t.slot, label: t.label, ...(t.enabled ? {} : { disabled: true }) }))

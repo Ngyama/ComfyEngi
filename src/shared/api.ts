@@ -1,6 +1,6 @@
 // Renderer ↔ 主进程 的 IPC 契约。Preload 只暴露这里列出的方法，主进程逐个校验参数。
 
-import type { ParamRow, ReplacePart, ReplicaData, ReplicaImage, ReplicaRecord } from './replica'
+import type { ReplicaData, ReplicaImage, ReplicaPlanCore, ReplicaRecord, ReplicaRow, ReplicaUnitBrief } from './replica'
 import type { UpdateCheck } from './update'
 import type { DictionaryInfo, MiningImage, MiningParams, MiningResult, MiningSaveItem, MiningSaveOutcome, RawMeta, ScanResult } from './mining'
 import type { SavedSourceRule } from './prompt-source'
@@ -9,15 +9,16 @@ import type { ApiWorkflow, ExecutionDetail, ExecutionInspection, LoraResource, C
 export type SaveResult = { id: number }
 export type Plan = PlanResult & { units: PlanUnit[] }
 
+/** 套图复刻的计划（预览显示的内容就是入队时写入工作流的内容） */
 export interface ReplicaPlanView {
-  rows: { index: number; path: string; name: string; state: 'valid' | 'confirm' | 'invalid' | 'missing' | 'excluded'; reason: string; positive: string; negative: string; original_positive: string; original_negative: string; parts: ReplacePart[]; removed: string[]; manual: boolean; params: ParamRow[]; seed: number; seed_generated: boolean; width: number | null; height: number | null; output_name: string; outfit: string; outfit_source: 'default' | 'image'; unit: number | null }[]
+  rows: ReplicaRow[]
   errors: string[]
   warnings: string[]
   output_dir: string
-  loras: string[]
-  /** 新角色 LoRA 的名称、权重与实际写入位置 */
-  lora_info: { name: string; strength: number; placement: string; ok: boolean }[]
   units: number
+  unit_list: ReplicaUnitBrief[]
+  summary: ReplicaPlanCore['summary']
+  recognition: ReplicaPlanCore['recognition']
   workflow: { id: number; name: string } | null
   default_size: { width: unknown; height: unknown } | null
 }

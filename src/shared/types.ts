@@ -535,7 +535,20 @@ export interface UnitMeta {
   /** 套图复刻：原图路径、保存时使用的文件名（不含扩展名）与替换记录 */
   source_image?: string
   output_name?: string
-  replica?: { original_positive: string; original_negative: string; removed: string[]; manual: boolean; params: unknown[] }
+  replica?: {
+    original_positive: string
+    original_negative: string
+    removed: string[]
+    /** 保留片段是手动填写的（旧版记录为整段手改的最终 Prompt） */
+    manual: boolean
+    /** 旧版记录：原图参数的写入情况（新版不再继承原图参数） */
+    params?: unknown[]
+    /** 保留片段、被替换的开头，以及这是同一张原图的第几次生成 */
+    retained?: string
+    prefix?: string
+    variant?: number
+    variants?: number
+  }
   /** 第二角色出场时：角色名、服装、动作、表情 */
   character2?: string
   outfit2?: string

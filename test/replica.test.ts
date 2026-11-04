@@ -1,10 +1,10 @@
-// 套图复刻：Tag 统计与替换、参数恢复、每张图的计划、草稿、入队快照与输出。全部使用模拟 ComfyUI，不能代替真实环境验证。
+// 套图复刻：Tag 统计与替换、参数恢复（只作参考）、每张图的计划、草稿、入队快照与输出。全部使用模拟 ComfyUI，不能代替真实环境验证。
 
 import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { basename, join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { applyInputs, LM_TRIGGER_TOGGLE, newEntry, TRIGGER_DISABLE } from '@shared/mapping'
-import { applyTagReplacement, mergeNegative, normalizeReplicaData, normalizeReplicaImage, outputStems, recoverParams, tagStats, type ReplicaData, type ReplicaImage } from '@shared/replica'
+import { applyTagReplacement, normalizeReplicaData, normalizeReplicaImage, outputStems, REPLICA_VERSION, recoverParams, tagStats, type ReplicaData, type ReplicaImage } from '@shared/replica'
 import { nodeCategory, problemNodes } from '@shared/node-controls'
 import { defaultLoraConfig } from '@shared/lora-config'
 import { changeLines } from '@shared/workflow-analysis'
@@ -131,14 +131,6 @@ describe('Tag 替换', () => {
     expect(r.parts.find((p) => p.kind === 'remove')?.text).toBe('red hair')
     expect(r.parts.find((p) => p.kind === 'add')?.text).toBe('char_b')
   })
-
-  it('负面合并：默认保留原图并追加', () => {
-    expect(mergeNegative('lowres, ', 'bad hands', 'append')).toBe('lowres, bad hands')
-    expect(mergeNegative('', 'bad hands', 'append')).toBe('bad hands')
-    expect(mergeNegative('lowres', '', 'append')).toBe('lowres')
-    expect(mergeNegative('lowres', 'x', 'keep')).toBe('lowres')
-    expect(mergeNegative('lowres', 'x', 'replace')).toBe('x')
-  })
 })
 
 describe('Tag 统计', () => {
@@ -231,6 +223,7 @@ describe('计划与执行', () => {
   let wfId: number
   let charId: number
   let outfitId: number
+  const SEP = ',\n\n'
 
   const png = (name: string, texts: Record<string, string>) => {
     const p = join(srcDir, name)
@@ -248,12 +241,14 @@ describe('计划与执行', () => {
     const r = await scanner.scan([], [srcDir], false, () => {})
     return r.images.map((im) => imageFromScan(im))
   }
-  const replacedCfg = () => {
-    const cfg = defaultLoraConfig(SAMPLE_WORKFLOW, s.get('workflows', wfId)!.mapping)
+  const replacedCfg = (id = wfId) => {
+    const wf = s.get('workflows', id)!
+    const cfg = defaultLoraConfig(wf.api_json, wf.mapping)
     return { ...cfg, char_targets: { lora1: { node: '10', replace: cfg.entries[0].key } } }
   }
   const draft = (images: ReplicaImage[], over: Partial<ReplicaData> = {}) => {
-    const data = normalizeReplicaData({ images, removed_tags: ['red_hair', 'char_a'], character_id: charId, workflow_id: wfId, output: { dir: join(root, 'out-replica') }, ...over })
+    const w = over.workflow_id ?? wfId
+    const data = normalizeReplicaData({ version: REPLICA_VERSION, images, character_id: charId, workflow_id: w, seed_base: 500, lora_configs: over.lora_configs ?? { [String(w)]: replacedCfg(w) }, output: { dir: join(root, 'out-replica') }, ...over })
     const id = s.save('replicas', { name: '测试', data })
     return s.get('replicas', id)!
   }
@@ -272,9 +267,9 @@ describe('计划与执行', () => {
     wfId = s.save('workflows', { name: '测试工作流', api_json: SAMPLE_WORKFLOW, mapping })
     charId = s.save('characters', { name: '角色B', tag: 'b', positive: 'char_b, (pink hair:1.1)', negative: 'bad hands', loras: [{ name: 'charB.safetensors', strength: 0.8 }] })
     outfitId = s.save('outfits', { character_id: charId, name: '校服', positive: 'school uniform' })
-    png('001.png', comfyMeta('1girl, red hair, char_a, (smile:1.2), park', 'lowres', 111, 832))
-    png('002.png', comfyMeta('1girl, (Red_Hair:1.1), char_a, sitting, beach', 'blurry', 222, 1024))
-    png('003.png', { parameters: '1girl, red hair, running\nNegative prompt: worst\nSteps: 33, Sampler: Euler a, CFG scale: 4, Seed: 333, Size: 640x960' })
+    png('001.png', comfyMeta('1girl, red hair, char_a, from side, (smile:1.2), park', 'lowres', 111, 832))
+    png('002.png', comfyMeta('1girl, (Red_Hair:1.1), char_a, cowboy shot, sitting, beach', 'blurry', 222, 1024))
+    png('003.png', { parameters: '1girl, red hair, char_a, upper body, running\nNegative prompt: worst\nSteps: 33, Sampler: Euler a, CFG scale: 4, Seed: 333, Size: 640x960' })
     png('004.png', {})
   })
   afterEach(async () => {
@@ -284,7 +279,7 @@ describe('计划与执行', () => {
     s.close()
   })
 
-  it('批量导入：按文件名排序；读取失败不影响其他图片；可靠结果与失败分开', async () => {
+  it('批量导入：按文件名排序；读取失败不影响其他图片；原图参数只作参考', async () => {
     const images = await importAll()
     expect(images.map((im) => im.name)).toEqual(['001.png', '002.png', '003.png', '004.png'])
     expect(images.map((im) => im.status)).toEqual(['ok', 'ok', 'ok', 'error'])
@@ -292,109 +287,80 @@ describe('计划与执行', () => {
     expect(images[2].params.steps?.value).toBe(33)
   })
 
-  it('每张图有不同的 Prompt、Negative、Seed、尺寸；没有元数据的图不生成也不会被静默丢弃', async () => {
-    const plan = planForReplica(s, draft(await importAll(), { outfit_id: outfitId, lora_config: replacedCfg() }))
+  it('每张图保留自己的片段与尺寸；新角色、新服装与新工作流参数；没有元数据的图不生成也不会被静默丢弃', async () => {
+    const plan = planForReplica(s, draft(await importAll(), { outfit_id: outfitId }))
     expect(plan.errors).toEqual([])
     expect(plan.units).toHaveLength(3)
     const [a, b, c] = plan.units
-    expect(a.positive).toBe('1girl, char_b, (pink hair:1.1), school uniform, (smile:1.2), park')
-    expect(b.positive).toBe('1girl, char_b, (pink hair:1.1), school uniform, sitting, beach')
-    expect(c.positive).toBe('1girl, char_b, (pink hair:1.1), school uniform, running')
-    expect(a.negative).toBe('lowres, bad hands')
-    expect(b.negative).toBe('blurry, bad hands')
-    expect([a.seed, b.seed, c.seed]).toEqual([111, 222, 333])
+    const tail = `${SEP}char_b, (pink hair:1.1)${SEP}school uniform`
+    expect(a.positive).toBe(`from side, (smile:1.2), park${tail}`)
+    expect(b.positive).toBe(`cowboy shot, sitting, beach${tail}`)
+    expect(c.positive).toBe(`upper body, running${tail}`)
+    expect(a.negative).toBe('bad hands')
+    expect([a.seed, b.seed, c.seed]).toEqual([500, 501, 502])
     expect([a.width, b.width, c.width]).toEqual([832, 1024, 640])
     expect(plan.rows[3]).toMatchObject({ name: '004.png', state: 'invalid' })
     expect(plan.warnings.join()).toContain('1 张')
     const inp = (u: typeof a, node: string, input: string) => u.inputs!.find((x) => x.node === node && x.input === input)?.value
-    expect(inp(a, '3', 'seed')).toBe(111)
+    expect(inp(a, '3', 'seed')).toBe(500)
     expect(inp(b, '5', 'width')).toBe(1024)
-    expect(inp(c, '3', 'steps')).toBe(33)
-    expect(inp(c, '3', 'cfg')).toBe(4)
+    expect(inp(c, '3', 'steps')).toBeUndefined()
+    expect(inp(c, '3', 'cfg')).toBeUndefined()
     expect(inp(a, '6', 'text')).toBe(a.positive)
     expect(inp(a, '7', 'text')).toBe(a.negative)
+    expect(applyInputs(SAMPLE_WORKFLOW, c.inputs!)['3'].inputs).toMatchObject({ steps: 28, cfg: 5.5, sampler_name: 'euler_ancestral' })
+    // 第二次计划得到相同的结果（预览与入队一致）
+    expect(planForReplica(s, draft(await importAll(), { outfit_id: outfitId })).units.map((u) => [u.seed, u.positive])).toEqual(plan.units.map((u) => [u.seed, u.positive]))
   })
 
-  it('保留原始参数只承诺读取到并且能写入的：需要确认的值默认不写，接受后才写', async () => {
-    const images = await importAll()
-    const lora_config = replacedCfg()
-    const plan = planForReplica(s, draft(images, { lora_config }))
-    const row = plan.rows[2]
-    expect(row.params.find((p) => p.key === 'sampler')).toMatchObject({ value: 'euler_ancestral', state: 'confirm', applied: false })
-    expect(row.params.find((p) => p.key === 'steps')?.applied).toBe(true)
-    expect(plan.units[2].inputs!.some((x) => x.input === 'sampler_name')).toBe(false)
-    const accepted = planForReplica(s, draft(images, { accept_uncertain: true, lora_config }))
-    expect(accepted.units[2].inputs!.find((x) => x.input === 'sampler_name')?.value).toBe('euler_ancestral')
-    const off = planForReplica(s, draft(images, { keep: { seed: false, size: false, sampling: false }, lora_config }))
-    expect(off.units[0].seed).not.toBe(111)
-    expect(off.units[0].width).toBeUndefined()
-    expect(off.units[0].inputs!.some((x) => x.source === 'replica_param')).toBe(false)
-    // 第二次计划得到相同的 Seed（预览与入队一致）
-    expect(planForReplica(s, draft(images, { keep: { seed: false, size: false, sampling: false }, lora_config })).units[0].seed).toBe(off.units[0].seed)
-  })
-
-  it('缺失 Seed 不阻止生成；不支持映射的参数明确标记', async () => {
-    const images = await importAll()
-    images[0] = { ...images[0], params: { ...images[0].params, seed: { value: null, state: 'missing' } } }
-    const noSeedMap = s.save('workflows', { name: '无映射', api_json: SAMPLE_WORKFLOW, mapping: SAMPLE_MAPPING.filter((m) => !m.source.startsWith('lora1') && m.source !== 'seed') })
-    const plan = planForReplica(s, draft(images))
-    expect(plan.rows[0]).toMatchObject({ state: 'valid', seed_generated: true })
-    const p2 = planForReplica(s, draft(images, { workflow_id: noSeedMap }))
-    expect(p2.rows[1].params.find((p) => p.key === 'seed')).toMatchObject({ state: 'unmapped', applied: false })
-    expect(p2.rows[1].params.find((p) => p.key === 'width')).toMatchObject({ state: 'unmapped', applied: false })
-  })
-
-  it('已被节点覆盖或映射的输入不写原图参数', async () => {
+  it('已被节点覆盖的输入保持工作流的值', async () => {
     const wf = s.get('workflows', wfId)!
     s.save('workflows', { id: wfId, controls: { overrides: [{ node: '3', input: 'steps', class_type: 'KSampler', value: 12 }], bypass: [] } })
-    const plan = planForReplica(s, draft(await importAll(), { lora_config: replacedCfg() }))
+    const plan = planForReplica(s, draft(await importAll()))
     expect(plan.errors).toEqual([])
-    expect(plan.rows[2].params.find((p) => p.key === 'steps')?.state).toBe('unmapped')
     expect(plan.units[2].inputs!.filter((x) => x.input === 'steps').map((x) => x.value)).toEqual([12])
     expect(wf.api_json['3'].inputs.steps).toBe(28)
   })
 
-  it('需确认、括号不配对、动态语法中的图片不会自动提交，手动编辑或确认后才进入计划；普通组合可以自动处理', async () => {
+  it('需确认、括号不配对、动态语法中的图片不会自动提交，确认后才进入计划；普通组合可以自动处理', async () => {
     const images = await importAll()
     images[0] = { ...images[0], status: 'check', notes: ['不确定'] }
-    images[1] = { ...images[1], positive: '1girl, (red hair, sitting' }
-    images[2] = { ...images[2], positive: '{red hair|long hair}, running' }
+    images[1] = { ...images[1], positive: '1girl, char_a, (red hair, from side, sitting' }
+    images[2] = { ...images[2], positive: '1girl, char_a, from side, {red hair|long hair}, running' }
     const plan = planForReplica(s, draft(images))
     expect(plan.rows.map((r) => r.state)).toEqual(['confirm', 'confirm', 'confirm', 'invalid'])
     expect(plan.units).toHaveLength(0)
-    const fixed = [{ ...images[0], confirmed: true }, { ...images[1], manual_positive: '手动内容' }, images[2], images[3]]
+    const fixed = [{ ...images[0], confirmed: true }, { ...images[1], retained_manual: 'from side, sitting' }, images[2], images[3]]
     const p2 = planForReplica(s, draft(fixed))
     expect(p2.rows.map((r) => r.state)).toEqual(['valid', 'valid', 'confirm', 'invalid'])
-    expect(p2.units[1].positive).toBe('手动内容')
-    const grouped = planForReplica(s, draft([{ ...images[2], positive: '(red hair, long hair:1.2), running' }]))
+    expect(p2.units[1].positive.startsWith(`from side, sitting${SEP}`)).toBe(true)
+    const grouped = planForReplica(s, draft([{ ...images[2], positive: '1girl, char_a, red hair, from side, (red hair, smile:1.2), running' }]))
     expect(grouped.rows[0].state).toBe('valid')
-    expect(grouped.rows[0].positive).not.toMatch(/red hair/)
-    expect(grouped.rows[0].positive).toContain('(long hair:1.2), running')
+    expect(grouped.rows[0].retained).toBe('from side, (smile:1.2), running')
   })
 
-  it('Prompt 映射按模块拆分的工作流不能用于复刻（不会提交空 Prompt）', async () => {
-    const id = s.save('workflows', { name: '模块', api_json: SAMPLE_WORKFLOW, mapping: SAMPLE_MAPPING.map((m) => (m.source === 'positive' ? { ...m, modules: ['character'] } : m)).filter((m) => !m.source.startsWith('lora1')) })
-    expect(planForReplica(s, draft(await importAll(), { workflow_id: id })).errors.join()).toContain('按模块拆分')
+  it('Prompt 映射按模块拆分的工作流：保留片段放在镜头模块，各模块分别写入', async () => {
+    const mapping = [...SAMPLE_MAPPING.filter((m) => !m.source.startsWith('lora1') && m.source !== 'positive'), newEntry('positive', '6', 'text', ['camera', 'character'])]
+    const id = s.save('workflows', { name: '模块', api_json: SAMPLE_WORKFLOW, mapping })
+    const plan = planForReplica(s, draft(await importAll(), { workflow_id: id }))
+    expect(plan.errors).toEqual([])
+    expect(applyInputs(SAMPLE_WORKFLOW, plan.units[0].inputs!)['6'].inputs.text).toBe(`from side, (smile:1.2), park${SEP}char_b, (pink hair:1.1)`)
   })
 
-  it('LoRA：默认保留工作流 LoRA 并提示；可以替换指定的旧 LoRA；可以关闭不相关的', async () => {
+  it('LoRA：没有加载位置时报错；替换后写入角色 LoRA；可以调整权重或关闭', async () => {
     const images = await importAll()
     const cfg = defaultLoraConfig(SAMPLE_WORKFLOW, s.get('workflows', wfId)!.mapping)
     expect(cfg.entries[0].name).toBe('charA.safetensors')
-    const noTarget = planForReplica(s, draft(images))
-    expect(noTarget.errors.join()).toMatch(/LoRA/)
-    const replaced = planForReplica(s, draft(images, { lora_config: { ...cfg, char_targets: { lora1: { node: '10', replace: cfg.entries[0].key } } } }))
+    expect(planForReplica(s, draft(images, { lora_configs: { [String(wfId)]: cfg } })).errors.join()).toMatch(/LoRA/)
+    const replaced = planForReplica(s, draft(images))
     expect(replaced.errors).toEqual([])
     const json = applyInputs(SAMPLE_WORKFLOW, replaced.units[0].inputs!)
-    expect(json['10'].inputs.lora_name).toBe('charB.safetensors')
-    expect(json['10'].inputs.strength_model).toBe(0.8)
-    const stronger = planForReplica(s, draft(images, { lora: { enabled: true, name: null, resource_id: null, strength: 0.5 }, lora_config: { ...cfg, char_targets: { lora1: { node: '10', replace: cfg.entries[0].key } } } }))
-    expect(applyInputs(SAMPLE_WORKFLOW, stronger.units[0].inputs!)['10'].inputs.strength_model).toBe(0.5)
-    const off = planForReplica(s, draft(images, { lora: { enabled: false, name: null, resource_id: null, strength: null }, lora_config: { ...cfg, entries: cfg.entries.map((e) => ({ ...e, enabled: false })) } }))
+    expect(json['10'].inputs).toMatchObject({ lora_name: 'charB.safetensors', strength_model: 0.8, strength_clip: 0.8 })
+    const stronger = planForReplica(s, draft(images, { lora_overrides: { lora1: { enabled: true, strength_model: 0.5, strength_clip: 0.4 } } }))
+    expect(applyInputs(SAMPLE_WORKFLOW, stronger.units[0].inputs!)['10'].inputs).toMatchObject({ strength_model: 0.5, strength_clip: 0.4 })
+    const off = planForReplica(s, draft(images, { lora_overrides: { lora1: { enabled: false } }, lora_configs: { [String(wfId)]: { ...cfg, entries: cfg.entries.map((e) => ({ ...e, enabled: false })) } } }))
     expect(off.errors).toEqual([])
     expect(applyInputs(SAMPLE_WORKFLOW, off.units[0].inputs!)['10'].inputs.strength_model).toBe(0)
-    const kept = planForReplica(s, draft(images, { lora: { enabled: false, name: null, resource_id: null, strength: null } }))
-    expect(applyInputs(SAMPLE_WORKFLOW, kept.units[0].inputs!)['10'].inputs.lora_name).toBe('charA.safetensors')
   })
 
   it('TriggerWord Toggle：默认用 trigger_disable 关闭注入，节点不被绕过；可以选择保留', async () => {
@@ -408,29 +374,28 @@ describe('计划与执行', () => {
     const mapping = SAMPLE_MAPPING.filter((m) => !m.source.startsWith('lora1')).map((m) => (m.source === 'positive' ? { ...m, node: '30', input: 'value' } : m))
     const id = s.save('workflows', { name: 'trig', api_json: api, mapping })
     const images = await importAll()
-    const cfg = defaultLoraConfig(api, mapping)
-    const lora_config = { ...cfg, char_targets: { lora1: { node: '10', replace: cfg.entries[0].key } } }
-    const plan = planForReplica(s, draft(images, { workflow_id: id, lora_config }))
+    const plan = planForReplica(s, draft(images, { workflow_id: id }))
     expect(plan.errors).toEqual([])
     expect(plan.workflow!.mapping.some((m) => m.source === TRIGGER_DISABLE && m.node === '34')).toBe(true)
     const json = applyInputs(api, plan.units[0].inputs!)
     expect(json['34']).toBeTruthy()
     expect((json['34'].inputs.toggle_trigger_words as { __value__: { active: boolean }[] }).__value__.every((g) => !g.active)).toBe(true)
     expect(s.get('workflows', id)!.mapping.some((m) => m.source === TRIGGER_DISABLE)).toBe(false)
-    const keep = planForReplica(s, draft(images, { workflow_id: id, lora_config, disable_triggers: false }))
+    const keep = planForReplica(s, draft(images, { workflow_id: id, disable_triggers: false }))
     expect(keep.workflow!.mapping.some((m) => m.source === TRIGGER_DISABLE)).toBe(false)
     expect(keep.warnings.join()).toMatch(/触发词|TriggerWord/)
   })
 
   it('草稿保存与重新打开；图片丢失时列出，可以重新定位，不会静默移除', async () => {
     const images = await importAll()
-    const rec = draft(images, { outfit_id: outfitId, negative_mode: 'keep' })
+    const rec = draft(images, { outfit_id: outfitId, tag_fix: { park: 'keep' }, keep_source_negative: true, repeat: 3 })
     const again = s.get('replicas', rec.id!)!
     const d = normalizeReplicaData(again.data)
     expect(d.images).toHaveLength(4)
-    expect(d.removed_tags).toEqual(['red_hair', 'char_a'])
+    expect(d.tag_fix).toEqual({ park: 'keep' })
     expect(d.outfit_id).toBe(outfitId)
-    expect(d.negative_mode).toBe('keep')
+    expect(d.keep_source_negative).toBe(true)
+    expect(d.repeat).toBe(3)
     expect(d.images[0].params.seed?.value).toBe(111)
     // 移动一张图
     const moved = tempDir()
@@ -456,12 +421,12 @@ describe('计划与执行', () => {
   it('入队后冻结；提交的 JSON 与预览相同；输出与原图对应；原图没有改动；重试不混淆', async () => {
     const images = await importAll()
     const originals = new Map(readdirSync(srcDir).map((f) => [f, sha256(readFileSync(join(srcDir, f)))]))
-    const rec = draft(images, { lora_config: replacedCfg() })
+    const rec = draft(images)
     const previews = [0, 1, 2].map((i) => finalReplicaWorkflow(s, rec, i).json)
     const { runId, plan } = enqueueReplica(s, rec)
     expect(plan.errors).toEqual([])
     // 入队后修改草稿不影响已入队内容
-    s.save('replicas', { id: rec.id, data: { ...normalizeReplicaData(rec.data), removed_tags: [], character_id: null } })
+    s.save('replicas', { id: rec.id, data: { ...normalizeReplicaData(rec.data), tag_fix: { park: 'character' }, character_id: null } })
     const units = s.listUnits(runId!)
     expect(units.map((u) => u.positive)).toEqual(plan.units.map((u) => u.positive))
     runner = new Runner(s, { eventsFactory: null })
@@ -483,7 +448,7 @@ describe('计划与执行', () => {
     expect(done.map((u) => u.meta.source_image && basename(u.meta.source_image))).toEqual(['001.png', '002.png', '003.png'])
     for (const [f, sha] of originals) expect(sha256(readFileSync(join(srcDir, f)))).toBe(sha)
     // 第二次入队不覆盖已有文件
-    const again = enqueueReplica(s, draft(images, { lora_config: replacedCfg() }))
+    const again = enqueueReplica(s, draft(images))
     mock.deterministic = false
     runner = new Runner(s, { eventsFactory: null })
     runner.start()
@@ -495,10 +460,24 @@ describe('计划与执行', () => {
     for (const f of saved) expect(existsSync(join(root, 'out-replica', f))).toBe(true)
   })
 
+  it('重复生成：每个变体单独保存，文件名带变体编号', async () => {
+    const images = (await importAll()).slice(0, 2)
+    const { runId, plan } = enqueueReplica(s, draft(images, { repeat: 2 }))
+    expect(plan.errors).toEqual([])
+    runner = new Runner(s, { eventsFactory: null })
+    runner.start()
+    expect(await waitUntil(() => (s.runCounts(runId!).done ?? 0) === 4, 10000)).toBe(true)
+    runner.stop()
+    await runner.join()
+    runner = null
+    expect(readdirSync(join(root, 'out-replica')).sort()).toEqual(['001_v01.png', '001_v02.png', '002_v01.png', '002_v02.png'])
+    expect(new Set(mock.submitted.map(([, g]) => (g as ApiWorkflow)['3'].inputs.seed)).size).toBe(4)
+  })
+
   it('一百张独立单元', async () => {
     const base = await importAll()
-    const many = Array.from({ length: 100 }, (_, i) => normalizeReplicaImage({ ...base[0], path: join(srcDir, '001.png'), name: `${String(i + 1).padStart(3, '0')}.png`, positive: `1girl, red hair, scene_${i}`, params: { seed: { value: 1000 + i, state: 'ok' } } }))
-    const plan = planForReplica(s, draft(many, { lora_config: replacedCfg() }))
+    const many = Array.from({ length: 100 }, (_, i) => normalizeReplicaImage({ ...base[0], path: join(srcDir, '001.png'), name: `${String(i + 1).padStart(3, '0')}.png`, positive: `1girl, red hair, from side, scene_${i}` }))
+    const plan = planForReplica(s, draft(many))
     expect(plan.errors).toEqual([])
     expect(plan.units).toHaveLength(100)
     expect(new Set(plan.units.map((u) => u.positive)).size).toBe(100)

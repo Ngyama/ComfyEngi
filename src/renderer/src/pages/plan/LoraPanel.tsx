@@ -1,7 +1,8 @@
 // 套图任务的 LoRA 配置：LoRA 是工作流参数（写入 LoRA Loader 节点的 lora_name / strength_model / strength_clip），不拼入 Prompt。
 // 每张卡片是一个逻辑 LoRA 配置项（槽位）：角色 LoRA 默认来自角色库，可在本任务中调整权重、替换或停用；任务级 LoRA 直接在这里添加。
 // 一个配置项可以绑定多个 Loader 节点（例如两次采样），绑定保存在工作流的节点映射中（与设置页的映射是同一份数据）。
-// 界面只调整一个统一权重：同时写入 strength_model 与 strength_clip（底层两个字段保持不变）。
+// 界面默认只调整一个统一权重：同时写入 strength_model 与 strength_clip（底层两个字段保持不变）；
+// separateClip 时分别显示 Model 与 Clip 权重（套图复刻使用同一个面板，见 LoraPanelView）。
 
 import { useEffect, useState } from 'react'
 import { AlertCircle, Link2, Plus, Power, Replace, RotateCcw, Trash2 } from 'lucide-react'
@@ -14,7 +15,7 @@ import { LoraThumb, loraTitle } from '@/pages/LorasPage'
 import { findLoraLoaders, loraBindingEntries, parseLoraSource, stackBindingEntry, stackReplaceTarget, type LoraLoaderInfo } from '@shared/mapping'
 import { controllableLoaders, defaultLoraConfig, effectiveLoraConfig, mappedLoraNodes, roleMapped, rolePlacement, type CharRole, type RolePlacement, type WfLoraConfig, type WfLoraEntry } from '@shared/lora-config'
 import { loaderStages } from '@shared/workflow-analysis'
-import type { Lora, LoraOverride, LoraResource, MappingEntry, TaskLora, Workflow } from '@shared/types'
+import type { Lora, LoraOverride, LoraResource, MappingEntry, TaskData, TaskLora, Workflow } from '@shared/types'
 
 const SUPPORT: Record<LoraLoaderInfo['support'], [string, string]> = {
   standard: ['标准', 'bg-success/10 text-success'],
@@ -28,7 +29,7 @@ const SUPPORT: Record<LoraLoaderInfo['support'], [string, string]> = {
 const fileStem = (name: string) => (name.split(/[\\/]/).pop() ?? name).replace(/\.(safetensors|ckpt|pt|bin)$/i, '')
 
 /** 权重输入：失去焦点或回车时提交 */
-function Weight({ value, onChange, disabled }: { value: number; onChange: (v: number) => void; disabled?: boolean }) {
+function Weight({ value, onChange, disabled, label = '权重', title = '权重（同时用于 Model 与 Clip）', testid }: { value: number; onChange: (v: number) => void; disabled?: boolean; label?: string; title?: string; testid?: string }) {
   const [v, setV] = useState(String(value))
   useEffect(() => setV(String(value)), [value])
   const commit = () => {
@@ -45,8 +46,9 @@ function Weight({ value, onChange, disabled }: { value: number; onChange: (v: nu
       onChange={(e) => setV(e.target.value)}
       onBlur={commit}
       onKeyDown={(e) => e.key === 'Enter' && commit()}
-      aria-label="权重"
-      title="权重（同时用于 Model 与 Clip）"
+      aria-label={label}
+      title={title}
+      data-testid={testid}
       className="h-6 w-[60px] [appearance:textfield] rounded-md bg-tint/[0.04] px-2 text-right font-mono text-[11.5px] text-foreground tabular-nums ring-1 ring-tint/[0.112] outline-none focus:ring-primary/50 disabled:opacity-50 [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
     />
   )
@@ -174,11 +176,13 @@ interface CardProps {
   source: string
   /** 卡片状态标记：已调整等 */
   tag?: string
-  lora: { name: string; resource_id?: string; weight: number; enabled: boolean } | null
+  lora: { name: string; resource_id?: string; weight: number; clip?: number; enabled: boolean } | null
   resources: LoraResource[]
   onPick: (r: LoraResource) => void
   onEnabled: (v: boolean) => void
   onWeight: (v: number) => void
+  /** 提供时分别显示 Clip 权重（否则 onWeight 同时写入 Model 与 Clip） */
+  onClip?: (v: number) => void
   onReset?: () => void
   resetLabel?: string
   onRemove?: () => void
@@ -190,7 +194,7 @@ interface CardProps {
 }
 
 /** 紧凑的 LoRA 素材卡：封面、本地文件名、来源、统一权重、替换 / 启停 / 删除图标 */
-function LoraCard({ cardKey, source, tag, lora, resources, onPick, onEnabled, onWeight, onReset, resetLabel = '恢复默认', onRemove, removeLabel = '删除', extra, warn, bound }: CardProps) {
+function LoraCard({ cardKey, source, tag, lora, resources, onPick, onEnabled, onWeight, onClip, onReset, resetLabel = '恢复默认', onRemove, removeLabel = '删除', extra, warn, bound }: CardProps) {
   const stem = lora ? fileStem(lora.name).toLowerCase() : ''
   const r = lora ? (lora.resource_id ? resources.find((x) => x.id === lora.resource_id) : resources.find((x) => x.comfyName === lora.name || x.name === lora.name || fileStem(x.name).toLowerCase() === stem)) : undefined
   const has = !!lora?.name
@@ -224,7 +228,14 @@ function LoraCard({ cardKey, source, tag, lora, resources, onPick, onEnabled, on
         </div>
       </div>
       <div className="flex shrink-0 items-center gap-0.5">
-        <Weight value={lora?.weight ?? 1} onChange={onWeight} disabled={!has} />
+        {onClip ? (
+          <>
+            <Weight value={lora?.weight ?? 1} onChange={onWeight} disabled={!has} label="Model 权重" title="Model 权重（strength_model）。与 Clip 相同时，修改它会同时修改 Clip" testid="lora-weight" />
+            <Weight value={lora?.clip ?? lora?.weight ?? 1} onChange={onClip} disabled={!has} label="Clip 权重" title="Clip 权重（strength_clip）" testid="lora-clip" />
+          </>
+        ) : (
+          <Weight value={lora?.weight ?? 1} onChange={onWeight} disabled={!has} />
+        )}
         {extra}
         <LoraPicker resources={resources} onPick={onPick}>
           <IconBtn label={has ? '替换 LoRA' : '选择 LoRA'}>{has ? <Replace /> : <Plus />}</IconBtn>
@@ -280,10 +291,23 @@ function PlacementPopover({ cfg, loaders, current, placement, onSet }: { cfg: Wf
 const placementText = (p: RolePlacement, cfg: WfLoraConfig | null) =>
   p.kind === 'link' ? '已在工作流 LoRA 中' : p.kind === 'append' ? '追加到工作流 LoRA' : p.kind === 'replace' ? `替换工作流中的「${fileStem(cfg?.entries.find((e) => e.key === p.key)?.name ?? '')}」` : '工作流中没有加载位置'
 
+/** LoRA 面板使用的数据（套图任务的 TaskData，或套图复刻草稿中相同结构的字段） */
+export type LoraPanelData = Pick<TaskData, 'character_id' | 'workflow_id' | 'workflow_none' | 'second_character_id' | 'lora_overrides' | 'task_loras' | 'lora_configs'>
+
 export function LoraPanel() {
-  const lib = useLib((s) => s.lib)
   const { task, update } = usePlan()
+  if (!task) return null
+  return <LoraPanelView data={task.data} update={update} />
+}
+
+/**
+ * LoRA 面板本体：data 为当前数据，update 传入的函数直接修改一份副本（与 usePlan().update 相同的用法）。
+ * separateClip：分别显示 Model / Clip 权重；note：标题旁的说明。
+ */
+export function LoraPanelView({ data, update, separateClip = false, note }: { data: LoraPanelData; update: (fn: (x: LoraPanelData) => void) => void; separateClip?: boolean; note?: string }) {
+  const lib = useLib((s) => s.lib)
   const { rows: resources } = useLoraResources()
+  const task = { data }
   const wfId = task?.data.workflow_none ? null : (task?.data.workflow_id ?? lib?.settings.default_workflow_id ?? null)
   const [wf, setWf] = useState<Workflow | null>(null)
   const [nonce, setNonce] = useState(0)
@@ -295,7 +319,7 @@ export function LoraPanel() {
       live = false
     }
   }, [wfId, lib?.workflows, nonce])
-  if (!task || !lib) return null
+  if (!lib) return null
   const d = task.data
   const ov = d.lora_overrides ?? {}
   const setOv = (prefix: string, patch: Partial<LoraOverride> | null) =>
@@ -355,7 +379,9 @@ export function LoraPanel() {
       const prefix = `${kind}${i + 1}`
       const o = ov[prefix]
       const name = o?.name ?? l?.name ?? ''
-      const lora = name ? { name, resource_id: o?.name ? o.resource_id : l?.resource_id, weight: o?.strength_model ?? l?.strength ?? 1, enabled: o ? o.enabled : true } : null
+      const weight = o?.strength_model ?? l?.strength ?? 1
+      const clip = o?.strength_clip ?? l?.strength_clip ?? weight
+      const lora = name ? { name, resource_id: o?.name ? o.resource_id : l?.resource_id, weight, clip, enabled: o ? o.enabled : true } : null
       const role = prefix as CharRole
       const advanced = !wf || i > 0 || roleMapped(mapping, role)
       const bound = new Set(mapping.filter((m) => m.source === `${prefix}_name`).map((m) => String(m.node))).size
@@ -382,7 +408,8 @@ export function LoraPanel() {
           }
           onPick={(r) => setOv(prefix, { ...pickName(r), ...both(r.recommendedWeight) })}
           onEnabled={(v) => setOv(prefix, { enabled: v })}
-          onWeight={(w) => setOv(prefix, both(w))}
+          onWeight={(w) => setOv(prefix, separateClip && clip !== weight ? { strength_model: w } : both(w))}
+          onClip={separateClip ? (c) => setOv(prefix, { strength_model: weight, strength_clip: c }) : undefined}
           onReset={o ? () => setOv(prefix, null) : undefined}
           resetLabel="恢复角色库默认"
         />
@@ -422,11 +449,12 @@ export function LoraPanel() {
               cardKey={`wf:${e.key}`}
               source={e.orig == null ? '本任务添加' : '工作流'}
               tag={e.orig != null && modified ? '已修改' : undefined}
-              lora={{ name: e.name, resource_id: e.resource_id, weight: e.strength, enabled: e.enabled }}
+              lora={{ name: e.name, resource_id: e.resource_id, weight: e.strength, clip: e.clip, enabled: e.enabled }}
               resources={resources}
               onPick={(r) => setEntry(e.key, { name: r.comfyName || r.name, resource_id: r.id })}
               onEnabled={(v) => setEntry(e.key, { enabled: v })}
-              onWeight={(w) => setEntry(e.key, { strength: w, clip: w })}
+              onWeight={(w) => setEntry(e.key, separateClip && e.clip !== e.strength ? { strength: w } : { strength: w, clip: w })}
+              onClip={separateClip ? (c) => setEntry(e.key, { clip: c }) : undefined}
               onReset={e.orig != null && modified && def ? () => setEntry(e.key, { ...def }) : undefined}
               resetLabel="恢复工作流原值"
               onRemove={stack ? () => setEntry(e.key, null) : undefined}
@@ -444,7 +472,7 @@ export function LoraPanel() {
     <div className="@container px-6 pb-4">
       <div className="mb-1.5 flex items-center gap-2">
         <span className="text-[11px] font-medium tracking-wide text-muted-foreground uppercase">LoRA</span>
-        <span className="text-[11px] text-muted-foreground/70">{wf ? '修改只作用于本任务' : '选择工作流后显示工作流 LoRA'}</span>
+        <span className="text-[11px] text-muted-foreground/70">{note ?? (wf ? '修改只作用于本任务' : '选择工作流后显示工作流 LoRA')}</span>
         <div className="flex-1" />
         {saved && (
           <button type="button" data-testid="reset-lora-config" onClick={resetCfg} className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-[12px] text-muted-foreground hover:bg-tint/[0.05] hover:text-primary">

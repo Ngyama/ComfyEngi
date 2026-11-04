@@ -11,7 +11,7 @@ import { BrowserWindow, clipboard, dialog, ipcMain, nativeImage, shell, app } fr
 import { API_METHODS, INVOKE_CHANNEL, RUNNER_EVENT_CHANNEL, type Api, type ApiMethod } from '@shared/api'
 import { TRIGGER_CUT, BYPASS_REWIRE, checkAgainstObjectInfo, ComfyError, NODE_BYPASS, NODE_OVERRIDE, findLoraLoaders, loadApiWorkflow, mappingValues, primaryOutputIndex, sortNodeIds, validateMapping } from '@shared/mapping'
 import { normalizeCard } from '@shared/cards'
-import { normalizeTaskData } from '@shared/planner'
+import { normalizeTaskData, randomSeed } from '@shared/planner'
 import { diffWorkflow, findPromptInjectors, generationSize } from '@shared/workflow-analysis'
 import { checkFrozenControls, controlProblems, controlsOf, normalizeControls } from '@shared/node-controls'
 import { DEFAULT_SETTINGS, TEMPLATE_KINDS, type ApiWorkflow, type ExecutionInspection, type Library, type MappingEntry, type OutputFile, type RunUnit, type Settings } from '@shared/types'
@@ -372,12 +372,13 @@ export function registerIpc(ctx: IpcContext) {
     'replicas.get': (id) => {
       const r = store.get('replicas', int(id))
       if (!r) return null
-      const data = normalizeReplicaData(r.data)
+      // 旧版草稿在这里迁移为新版结构（迁移说明保存在 data.legacy 中）；界面保存后才写回数据库
+      const data = normalizeReplicaData(r.data, { defaultWorkflowId: store.getSetting('default_workflow_id') ?? null })
       // 只有草稿中的原图可以显示缩略图
       for (const im of data.images) if (existsSync(im.path)) scanner.allowed.add(im.path)
       return { ...r, data }
     },
-    'replicas.create': (name) => ({ id: store.save('replicas', record('replicas', { name: str(name), data: normalizeReplicaData(null) })) }),
+    'replicas.create': (name) => ({ id: store.save('replicas', record('replicas', { name: str(name), data: { ...normalizeReplicaData(null), seed_base: randomSeed() } })) }),
     'replicas.save': (rec) => ({ id: store.save('replicas', record('replicas', rec)) }),
     'replicas.remove': (id) => store.remove('replicas', int(id)),
     'replicas.addFiles': async () => {
@@ -395,7 +396,7 @@ export function registerIpc(ctx: IpcContext) {
       if (!rec) throw new BadArg('草稿不存在')
       const r = await dialog.showOpenDialog(ctx.window()!, { title: '原图现在所在的文件夹', properties: ['openDirectory'] })
       if (r.canceled || !r.filePaths.length) return null
-      const data = normalizeReplicaData(rec.data)
+      const data = normalizeReplicaData(rec.data, { defaultWorkflowId: store.getSetting('default_workflow_id') ?? null })
       const res = await relocateImages(data, r.filePaths[0])
       store.save('replicas', { id: rec.id, data: { ...data, images: res.images } })
       for (const im of res.images) if (existsSync(im.path)) scanner.allowed.add(im.path)
@@ -404,7 +405,7 @@ export function registerIpc(ctx: IpcContext) {
     'replicas.relocateFile': async (id, index) => {
       const rec = store.get('replicas', int(id))
       if (!rec) throw new BadArg('草稿不存在')
-      const data = normalizeReplicaData(rec.data)
+      const data = normalizeReplicaData(rec.data, { defaultWorkflowId: store.getSetting('default_workflow_id') ?? null })
       const im = data.images[int(index)]
       if (!im) throw new BadArg('图片不存在')
       const r = await dialog.showOpenDialog(ctx.window()!, { title: `定位 ${im.name}`, properties: ['openFile'], filters: [{ name: '图片', extensions: ['png', 'jpg', 'jpeg', 'webp'] }] })
@@ -421,7 +422,7 @@ export function registerIpc(ctx: IpcContext) {
       if (!rec) throw new BadArg('草稿不存在')
       const p = planForReplica(store, rec)
       const size = p.workflow ? generationSize(p.workflow.api_json ?? {}) : null
-      return { rows: p.rows, errors: p.errors, warnings: p.warnings, output_dir: p.output_dir, loras: p.loras, lora_info: p.lora_info, units: p.units.length, workflow: p.workflow ? { id: p.workflow.id!, name: p.workflow.name } : null, default_size: size ? { width: size.width, height: size.height } : null }
+      return { rows: p.rows, errors: p.errors, warnings: p.warnings, output_dir: p.output_dir, units: p.units.length, unit_list: p.unit_list, summary: p.summary, recognition: p.recognition, workflow: p.workflow ? { id: p.workflow.id!, name: p.workflow.name } : null, default_size: size ? { width: size.width, height: size.height } : null }
     },
     'replicas.finalWorkflow': (id, unit) => {
       const rec = store.get('replicas', int(id))

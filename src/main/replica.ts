@@ -1,63 +1,28 @@
-// 套图复刻（主进程部分）：草稿的图片读取、每张图的计划、入队与最终工作流。
-// 每张图是一个独立单元，进入现有的执行队列（暂停、重试、提交快照、输出复制都相同）。不修改原图。
+// 套图复刻（主进程部分）：草稿的图片读取、整套的计划、入队与最终工作流。
+// 复刻 = 保留每张原图的 Prompt 片段、尺寸与顺序，用新的工作流、角色、服装、LoRA 配置、全局 / 画风与场景 Prompt 重新生成。
+// 不继承原图的工作流、LoRA、Seed、Steps、CFG、Sampler、Scheduler、Denoise：这些全部来自新工作流（与套图任务相同的写入逻辑）。
+// 每张图可以生成多次（变体），每个变体是一个独立单元，进入现有的执行队列（暂停、重试、提交快照、输出复制都相同）。不修改原图。
 
 import { existsSync, readdirSync, statSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
-import { applyInputs, newEntry, toggleDisableInputs, TRIGGER_DISABLE } from '@shared/mapping'
+import { defaultLoraConfig, effectiveLoraConfig } from '@shared/lora-config'
+import { applyInputs, loraStem, newEntry, toggleDisableInputs, TRIGGER_DISABLE } from '@shared/mapping'
 import type { ScannedImage } from '@shared/mining'
 import { controlInputs, controlProblems, controlsOf, cutOf, isCut } from '@shared/node-controls'
-import { controllableLoaders, defaultLoraConfig, effectiveLoraConfig, roleMapped, rolePlacement } from '@shared/lora-config'
-import { loraStem } from '@shared/mapping'
+import { applyLoraOverrides, SEED_MOD } from '@shared/planner'
+import { compose, fillPlaceholders, joinParts, normalizedOrder, unescapeSeparator } from '@shared/prompt'
 import { matchRule, type SavedSourceRule } from '@shared/prompt-source'
+import { cameraKeysOf, recognizeDraft, type ImageRecognition } from '@shared/replica-recognize'
 import { parseToken, splitTopLevel } from '@shared/tags'
-import { applyTagReplacement, imageOutfitId, mergeNegative, normalizeReplicaData, normalizeReplicaImage, originalPositive, outputStems, paramPlan, replicaTargets, stableSeed, type ParamRow, type ReplacePart, type ReplicaData, type ReplicaImage, type ReplicaRecord } from '@shared/replica'
-import type { ApiWorkflow, Lora, Outfit, PlanUnit, Settings, UnitMeta, Workflow } from '@shared/types'
+import { expandOrder, imageOutfitId, imageSize, normalizeReplicaData, normalizeReplicaImage, originalPositive, outputStems, repeatOf, variantStem, type ReplicaData, type ReplicaImage, type ReplicaPlanCore, type ReplicaRecord, type ReplicaRow, type ReplicaUnitBrief, type RowState } from '@shared/replica'
+import type { ApiWorkflow, Lora, Modules, Outfit, PlanUnit, Settings, Template, UnitMeta, Workflow } from '@shared/types'
 import { diffWorkflow, findPromptInjectors, findTriggerPaths } from '@shared/workflow-analysis'
 import { buildWorkflowInputs, outputDirOf, resolveLoraName, type FullPlan } from './plan'
 import { scanImage } from './mining'
 import type { Store } from './store'
 
-/** 这张图的状态：valid 可以生成；confirm 需要用户确认；invalid 没有 Prompt；missing 原图不在原位置；excluded 用户排除 */
-export type RowState = 'valid' | 'confirm' | 'invalid' | 'missing' | 'excluded'
-export interface ReplicaRow {
-  index: number
-  path: string
-  name: string
-  state: RowState
-  reason: string
-  positive: string
-  negative: string
-  original_positive: string
-  original_negative: string
-  parts: ReplacePart[]
-  removed: string[]
-  manual: boolean
-  params: ParamRow[]
-  seed: number
-  seed_generated: boolean
-  width: number | null
-  height: number | null
-  output_name: string
-  /** 这张图实际使用的服装（空为不使用）；outfit_source：default 来自默认服装，image 为单独指定 */
-  outfit: string
-  outfit_source: 'default' | 'image'
-  /** 在单元列表中的位置（只有 valid 有） */
-  unit: number | null
-}
-/** 新角色 LoRA 的实际去向（与最终工作流使用同一份配置计算） */
-export interface ReplicaLoraInfo {
-  name: string
-  strength: number
-  /** 写入工作流的位置；没有位置时 ok 为 false（计划同时有错误） */
-  placement: string
-  ok: boolean
-}
-export interface ReplicaPlan extends FullPlan {
-  rows: ReplicaRow[]
-  output_dir: string
-  loras: string[]
-  lora_info: ReplicaLoraInfo[]
-}
+export type { ReplicaRow, ReplicaUnitBrief, RowState }
+export interface ReplicaPlan extends FullPlan, Omit<ReplicaPlanCore, 'units'> {}
 
 const MAX_CANDIDATES = 12
 const MAX_CANDIDATE_TEXT = 8000
@@ -96,15 +61,12 @@ export function imageFromScan(s: ScannedImage, rules: SavedSourceRule[] = []): R
 /** 原图的文件夹是否与输出目录相同（输出不能放到原图旁边） */
 const sameDir = (a: string, b: string) => resolve(a).toLowerCase() === resolve(b).toLowerCase()
 
-function rowState(im: ReplicaImage, status: string, grouped: string[]): { state: RowState; reason: string } {
+function rowState(im: ReplicaImage, rec: ImageRecognition): { state: RowState; reason: string } {
   if (im.exclude) return { state: 'excluded', reason: '已排除' }
   if (!existsSync(im.path)) return { state: 'missing', reason: '原图不在原来的位置，请重新定位或排除' }
-  if (im.manual_positive !== null) return { state: im.manual_positive.trim() ? 'valid' : 'invalid', reason: im.manual_positive.trim() ? '' : '手动编辑的 Prompt 为空' }
-  if (im.status === 'error' && !im.confirmed) return { state: 'invalid', reason: im.error || '没有读取到 Prompt，请手动填写' }
-  if (im.status === 'check' && !im.confirmed) return { state: 'confirm', reason: im.notes.at(-1) || '读取结果不确定，请确认来源' }
-  if (status === 'unsafe') return { state: 'confirm', reason: '括号不配对，无法安全替换，请手动编辑' }
-  if (status === 'group') return { state: 'confirm', reason: `${grouped.join('、')} 在动态语法或无法安全拆开的表达式里，没有自动移除，请手动编辑` }
-  if (!im.positive.trim()) return { state: 'invalid', reason: 'Prompt 为空' }
+  if (im.status === 'error' && !im.confirmed) return { state: 'invalid', reason: im.error || '没有读取到 Prompt，请在第 1 步手动填写' }
+  if (im.status === 'check' && !im.confirmed) return { state: 'confirm', reason: im.notes.at(-1) || '读取结果不确定，请在第 1 步确认来源' }
+  if (rec.needs_fix) return { state: 'confirm', reason: rec.issues[0] ?? '识别结果需要确认' }
   return { state: 'valid', reason: '' }
 }
 
@@ -131,16 +93,25 @@ function withTriggerOff(wf: Workflow, off: boolean): Workflow {
 
 const safeDirName = (s: string) => s.replace(/[<>:"/\\|?*\x00-\x1f]/g, '_').trim() || '未命名'
 
+/** 最终 Prompt 的模块：全局 / 画风 → 场景 → 保留片段（镜头位置）→ 角色 → 服装；顺序与连接符按设置中的 Prompt 组合规则 */
+export const REPLICA_MODULE_LABELS: Record<string, string> = { global: '全局 / 画风', scene: '场景', camera: '保留片段', character: '角色', outfit: '服装' }
+
 export function planForReplica(store: Store, rec: ReplicaRecord, settings?: Settings, dateStr?: string): ReplicaPlan {
   store.files?.scan()
   settings = settings ?? store.settings()
-  const data = normalizeReplicaData(rec.data)
+  const data = normalizeReplicaData(rec.data, { defaultWorkflowId: store.getSetting('default_workflow_id') ?? null })
   const name = rec.name || '未命名'
   const errors: string[] = []
   const warnings: string[] = []
+  const templates = store.list('templates')
+  const recog = recognizeDraft(data, cameraKeysOf(templates))
+
+  // ---- 新角色、服装、全局与场景
   const character = data.character_id ? store.get('characters', data.character_id) : null
-  if (!character) errors.push(data.character_id ? '选择的新角色已不在角色库中，请在第 3 步重新选择' : data.lora.name ? '请在第 3 步选择新角色：只选择 LoRA 不够，角色库中的角色提供基础 Prompt 与服装' : '请在第 3 步选择新角色')
-  // 服装：默认服装 + 按图片指定；都必须属于当前角色，不属于时报错而不是换成别的服装
+  if (!character) {
+    const loraHint = Object.values(data.lora_overrides).some((o) => o?.name) ? '（已调整的角色 LoRA 不代表选择了角色）' : ''
+    errors.push(data.character_id ? '选择的新角色已不在角色库中，请在第 3 步重新选择' : `请在第 3 步选择新角色：角色 Prompt 与角色 LoRA 都来自角色库中的角色${loraHint}`)
+  }
   const outfits = new Map<number, Outfit | null>()
   const outfitOf = (id: number | null): Outfit | null => {
     if (id === null) return null
@@ -153,48 +124,86 @@ export function planForReplica(store: Store, rec: ReplicaRecord, settings?: Sett
   if (data.outfit_id !== null && character && !outfitOf(data.outfit_id)) errors.push('默认服装已不存在或不属于当前角色，请在第 3 步重新选择')
   const badOutfit = data.images.map((im, i) => [im, i] as const).filter(([im]) => !im.exclude && im.outfit_id != null && character && !outfitOf(im.outfit_id))
   if (badOutfit.length) errors.push(`${badOutfit.slice(0, 5).map(([im, i]) => `图 ${i + 1}（${im.name}）`).join('、')}${badOutfit.length > 5 ? ` 等 ${badOutfit.length} 张` : ''}指定的服装已不存在或不属于当前角色，请在第 3 步重新分配`)
+  const tplOf = (id: number | null, kind: string, label: string): Template | null => {
+    if (id === null) return null
+    const t = templates.find((x) => x.id === id) ?? null
+    if (!t) errors.push(`所选${label}已被删除，请在第 3 步重新选择`)
+    else if (t.kind !== kind) errors.push(`所选${label}「${t.name}」不是${label}模板`)
+    return t && t.kind === kind ? t : null
+  }
+  const g = tplOf(data.global_id, 'global', '全局 Prompt')
+  const sc = tplOf(data.scene_id, 'scene', '场景')
   if (!data.images.length) errors.push('还没有导入图片')
   const wfBase = workflowOf(store, data)
-  if (!wfBase) errors.push('请选择工作流')
+  if (!wfBase) errors.push('请在第 3 步选择工作流')
   const wf = wfBase ? withTriggerOff(wfBase, data.disable_triggers) : null
 
-  const join2 = (a?: string, b?: string) => [a, b].map((s) => (s ?? '').trim()).filter(Boolean).join(', ')
-  const loras: Lora[] = data.lora.enabled ? structuredClone((character?.loras ?? []).filter((l) => l.name && !l.disabled)) : []
-  if (data.lora.enabled && data.lora.name) {
-    const replaced: Lora = { name: data.lora.name, resource_id: data.lora.resource_id ?? undefined, strength: data.lora.strength ?? loras[0]?.strength ?? 1 }
-    if (loras.length) loras[0] = replaced
-    else loras.push(replaced)
-  } else if (loras[0] && data.lora.strength !== null) {
-    loras[0].strength = data.lora.strength
-    loras[0].strength_clip = data.lora.strength
-  }
-  for (const l of loras) if (l.resource_id) resolveLoraName(store, l, errors)
+  const trim = settings.trim_modules ?? true
+  const posSep = unescapeSeparator(settings.pos_separator ?? ', ')
+  const negSep = unescapeSeparator(settings.neg_separator ?? ', ')
+  const fill = (s: string | undefined) => fillPlaceholders(s ?? '', character)
+  const globalMod: [string, string] = [joinParts([fill(g?.positive), fill(data.global_text)], posSep, trim), joinParts([fill(g?.negative)], negSep, trim)]
+  const sceneMod: [string, string] = [joinParts([fill(sc?.positive), fill(data.scene_text)], posSep, trim), joinParts([fill(sc?.negative)], negSep, trim)]
 
-  const controls = wf ? controlsOf(wf) : { overrides: [], bypass: [] }
-  const targets = wf ? replicaTargets(wf.api_json ?? {}, wf.mapping ?? [], controls) : {}
+  // ---- 角色 LoRA：角色库中的 LoRA + 本草稿的调整（与套图任务相同）；工作流中的 LoRA 由下面的 LoRA 配置控制
+  const loras: Lora[] = applyLoraOverrides((character?.loras ?? []).filter((l) => l.name), data.lora_overrides, 'lora')
+  if (store.files) for (const l of loras) if (l.resource_id && !l.disabled) resolveLoraName(store, l, errors)
+
+  // ---- 每张图、每个变体
   const stems = outputStems(data.images)
   const outDir = outputDirOf(store, data.output.dir || join('output', `复刻-${safeDirName(name)}${rec.id ? `-${rec.id}` : ''}`))
-  const rows: ReplicaRow[] = []
-  const loraInfo: ReplicaLoraInfo[] = []
-  const units: (PlanUnit & { extra: ReturnType<typeof paramPlan>['inputs'] })[] = []
-  const inserts: string[] = []
-  data.images.forEach((im, index) => {
+  const rows: ReplicaRow[] = data.images.map((im, index) => {
+    const r = recog.images[index]
     const outfit = outfitOf(imageOutfitId(im, data.outfit_id))
-    const insert = join2(character?.positive, outfit?.positive)
-    const charNegative = join2(character?.negative, outfit?.negative)
-    inserts.push(insert)
-    const orig = originalPositive(im)
-    const rep = applyTagReplacement(orig, data.removed_tags, insert)
-    const manual = im.manual_positive !== null
-    const { state, reason } = rowState(im, rep.status, rep.grouped)
-    const positive = manual ? im.manual_positive! : rep.text
-    const negative = im.manual_negative !== null ? im.manual_negative : mergeNegative(im.negative, charNegative, data.negative_mode)
-    const pp = paramPlan(im, targets, wf?.api_json ?? {}, data)
-    const seed = pp.seed ?? stableSeed(im.path)
-    const row: ReplicaRow = { index, path: im.path, name: im.name, state, reason, positive, negative, original_positive: orig, original_negative: im.negative, parts: manual ? [{ kind: 'keep', text: positive }] : rep.parts, removed: rep.removed, manual, params: pp.rows, seed, seed_generated: pp.seed === null, width: pp.width, height: pp.height, output_name: stems[index], outfit: outfit?.name ?? '', outfit_source: im.outfit_id === undefined ? 'default' : 'image', unit: null }
-    rows.push(row)
-    if (state !== 'valid') return
-    row.unit = units.length
+    const modules: Modules = {
+      global: globalMod,
+      scene: sceneMod,
+      camera: [r.retained, data.keep_source_negative ? im.negative : ''],
+      character: [character?.positive ?? '', character?.negative ?? ''],
+      outfit: [outfit?.positive ?? '', outfit?.negative ?? ''],
+    }
+    const [positive, negative] = compose(modules, settings!)
+    const { state, reason } = rowState(im, r)
+    const repeat = repeatOf(im, data)
+    return {
+      index,
+      path: im.path,
+      name: im.name,
+      state,
+      reason,
+      issues: r.issues,
+      original_positive: originalPositive(im),
+      original_negative: im.negative,
+      prefix: r.prefix,
+      cut: r.cut,
+      cut_reason: r.cut_reason,
+      removed_character: r.removed_character,
+      removed_outfit: r.removed_outfit,
+      removed_other: r.removed_other,
+      retained: r.retained,
+      retained_parts: r.retained_parts,
+      manual: r.manual,
+      positive,
+      negative,
+      positive_parts: composeParts(modules, settings!),
+      size: imageSize(im),
+      repeat,
+      outfit: outfit?.name ?? '',
+      outfit_source: im.outfit_id === undefined ? 'default' : 'image',
+      output_name: variantStem(stems[index], 0, repeat),
+      units: [],
+      _modules: modules,
+    } as ReplicaRow & { _modules: Modules }
+  })
+  const live = rows.filter((r) => r.state === 'valid')
+  const order = expandOrder(rows.map((r) => (r.state === 'valid' ? r.repeat : 0)), data.repeat_order)
+  const base = data.seed_base
+  const units: PlanUnit[] = order.map(({ image, variant }, i) => {
+    const row = rows[image] as ReplicaRow & { _modules: Modules }
+    const im = data.images[image]
+    const seed = (((base + i) % SEED_MOD) + SEED_MOD) % SEED_MOD
+    row.units.push(i)
+    const output_name = variantStem(stems[image], variant, row.repeat)
     const meta: UnitMeta = {
       task: name,
       character: character?.name ?? '',
@@ -202,81 +211,119 @@ export function planForReplica(store: Store, rec: ReplicaRecord, settings?: Sett
       genre: '',
       section: '复刻',
       item: im.name,
-      item_no: index + 1,
-      outfit: outfit?.name ?? '',
+      item_no: image + 1,
+      outfit: row.outfit,
       expression: '',
       camera: '',
       male: false,
       male_templates: [],
-      n: 1,
-      of: 1,
+      ...(sc ? { scene: sc.name } : {}),
+      n: variant + 1,
+      of: row.repeat,
+      index: i + 1,
+      seed,
       source_image: im.path,
-      output_name: stems[index],
-      replica: { original_positive: orig, original_negative: im.negative, removed: rep.removed, manual, params: pp.rows },
+      output_name,
+      replica: { original_positive: row.original_positive, original_negative: im.negative, removed: [...row.removed_character, ...row.removed_outfit, ...row.removed_other], manual: row.manual, retained: row.retained, prefix: row.prefix, variant: variant + 1, variants: row.repeat },
     }
-    units.push({ section: 'replica', item_index: index, item_label: im.name, sub_index: 0, modules: {}, positive, negative, loras: structuredClone(loras), meta, index: units.length, seed, ...(pp.width ? { width: pp.width } : {}), ...(pp.height ? { height: pp.height } : {}), extra: pp.inputs })
+    return {
+      section: 'replica',
+      item_index: image,
+      item_label: row.repeat > 1 ? `${im.name} · 第 ${variant + 1}/${row.repeat} 次` : im.name,
+      sub_index: variant,
+      modules: row._modules,
+      positive: row.positive,
+      negative: row.negative,
+      loras,
+      meta,
+      index: i,
+      seed,
+      ...(row.size.width && row.size.height ? { width: row.size.width, height: row.size.height } : {}),
+    }
   })
+  for (const r of rows) delete (r as Partial<ReplicaRow & { _modules: Modules }>)._modules
 
+  let seedMapped = false
+  let sizeMapped = false
   if (wf) {
-    const split = wf.mapping.filter((m) => (m.source === 'positive' || m.source === 'negative') && (m.modules ?? []).length)
-    if (split.length) errors.push(`工作流「${wf.name}」的 Prompt 映射按模块拆分（节点 ${[...new Set(split.map((m) => m.node))].join('、')}），复刻需要写入完整的 Prompt。请在工作流的高级映射中改为完整 Prompt`)
     if (!wf.mapping.some((m) => m.source === 'positive')) errors.push(`工作流「${wf.name}」没有映射正向 Prompt，无法写入每张图的 Prompt`)
     if (!wf.mapping.some((m) => m.source === 'negative') && units.some((u) => u.negative.trim())) warnings.push(`工作流「${wf.name}」没有映射负面 Prompt，负面内容不会提交`)
-    const cfg = data.lora_config ?? undefined
-    // 没有调整过 LoRA 配置时同样提示：工作流里可能固定着原角色的 LoRA
-    const eff = effectiveLoraConfig(cfg, wf.api_json ?? {}, wf.mapping ?? [])
+    seedMapped = wf.mapping.some((m) => m.source === 'seed')
+    sizeMapped = wf.mapping.some((m) => m.source === 'width') && wf.mapping.some((m) => m.source === 'height')
+    // LoRA：与套图任务完全相同的写入（标准 Loader、Lora Loader (LoraManager) 列表、高级映射槽位），配置按工作流保存在草稿中
+    const savedCfg = data.lora_configs[String(wfBase!.id)]
+    // 没有调整过 LoRA 配置时同样提示：新工作流里可能固定着其他角色的 LoRA
+    const eff = effectiveLoraConfig(savedCfg, wf.api_json ?? {}, wf.mapping ?? [])
     const defaults = defaultLoraConfig(wf.api_json ?? {}, wf.mapping ?? []).entries
     const touched = eff.entries.some((e) => !e.enabled && defaults.find((d) => d.key === e.key)?.enabled)
-    if (eff.char_targets?.lora1?.replace && !loras.length) warnings.push(`已设置替换工作流中的「${loraStem(eff.entries.find((e) => e.key === eff.char_targets!.lora1!.replace)?.name ?? '')}」，但没有新角色 LoRA（未启用或角色没有 LoRA），替换不会生效，原 LoRA 继续加载`)
-    if (loras.length && !eff.char_targets?.lora1?.replace && !touched) {
+    const activeLoras = loras.filter((l) => !l.disabled)
+    if (eff.char_targets?.lora1?.replace && !activeLoras.length) warnings.push(`已设置替换工作流中的「${loraStem(eff.entries.find((e) => e.key === eff.char_targets!.lora1!.replace)?.name ?? '')}」，但没有启用的角色 LoRA，替换不会生效，工作流中的这个 LoRA 继续加载`)
+    if (activeLoras.length && !eff.char_targets?.lora1?.replace && !touched) {
       const kept = eff.entries.filter((e) => e.enabled).map((e) => e.name)
-      if (kept.length) warnings.push(`工作流原有的 LoRA（${kept.join('、')}）都会继续加载。如果其中有原角色的 LoRA，请替换或关闭它`)
+      if (kept.length) warnings.push(`工作流原有的 LoRA（${kept.join('、')}）都会继续加载。如果其中有其他角色的 LoRA，请在第 3 步替换或关闭它`)
     }
-    buildWorkflowInputs(store, wf, units, { savedCfg: cfg, settings, dateStr, errors, warnings })
-    // 显示用：与 buildWorkflowInputs 相同的配置与位置规则（第一个 LoRA 按角色位置加载，其余需要映射绑定）
-    const loaders = controllableLoaders(wf.api_json ?? {}, wf.mapping ?? [])
-    loras.forEach((l, i) => {
-      const role = `lora${i + 1}`
-      const mapped = (wf.mapping ?? []).filter((m) => m.source === `${role}_name`).map((m) => `#${m.node}`)
-      let placement = mapped.length ? `按映射写入 ${[...new Set(mapped)].join('、')}` : ''
-      if (!placement && i === 0 && !roleMapped(wf.mapping ?? [], 'lora1')) {
-        const p = rolePlacement(eff, loaders, 'lora1', l.name)
-        placement = p.kind === 'link' ? `使用工作流 #${p.node} 中的同名条目` : p.kind === 'append' ? `追加到 #${p.node} 的 LoRA 列表` : p.kind === 'replace' ? `替换 #${p.node} 中的「${loraStem(eff.entries.find((e) => e.key === p.key)?.name ?? '')}」` : ''
-      }
-      loraInfo.push({ name: l.name, strength: l.strength, placement: placement || '没有加载位置', ok: !!placement })
-    })
+    buildWorkflowInputs(store, wf, units, { savedCfg, settings, dateStr, errors, warnings })
     const prefixDir = `ComfyEngi复刻/${safeDirName(name)}`
-    for (const u of units) {
-      if (!u.inputs) continue
-      u.inputs = [...u.inputs.map((x) => (x.source === 'filename_prefix' ? { ...x, value: `${prefixDir}/${u.meta.output_name}` } : x)), ...u.extra]
-    }
+    if (units.length && !wf.mapping.some((m) => m.source === 'filename_prefix')) warnings.push(`工作流「${wf.name}」没有映射「输出文件前缀」：ComfyUI 中的文件名不区分变体（复制到输出目录时仍按原图名称与变体编号保存）`)
+    for (const u of units) if (u.inputs) u.inputs = u.inputs.map((x) => (x.source === 'filename_prefix' ? { ...x, value: `${prefixDir}/${u.meta.output_name}` } : x))
+    if (!seedMapped && units.some((u) => (u.meta.of ?? 1) > 1)) warnings.push(`工作流「${wf.name}」没有映射 Seed：同一张图的多个变体会使用工作流中固定的 Seed，结果可能完全相同。请在工作流映射中添加 Seed`)
+    if (!sizeMapped && units.some((u) => u.width)) warnings.push(`工作流「${wf.name}」没有映射「生成宽度 / 高度」：每张图的原图尺寸不会生效（使用工作流默认尺寸）。可在工作流页面用「自动识别」添加`)
   }
   if (outDir) {
     for (const u of units) u.meta.output_dir = outDir
     const clash = [...new Set(data.images.filter((im) => !im.exclude).map((im) => dirname(im.path)))].find((d) => sameDir(d, outDir))
     if (clash) errors.push(`输出目录不能是原图所在的文件夹（${clash}），请换一个目录`)
   }
-  const live = rows.filter((r) => r.state === 'valid')
-  const withSyntax = live.filter((r) => /<lora:/i.test(r.positive)).length
-  if (withSyntax) warnings.push(`有 ${withSyntax} 张图的 Prompt 含有 <lora:…> 文字：ComfyUI 不会因此加载或替换 LoRA，这段文字可能属于原角色。可以在「替换」步骤选中删除`)
-  // 只提示不删除：Tag 替换保证未选中的内容逐字保留
+  const removedLora = live.filter((r) => r.removed_other.some((t) => /^<lora:/i.test(t))).length
+  if (removedLora) warnings.push(`有 ${removedLora} 张图的原 Prompt 含有 <lora:…> 文字，已从保留片段中删除：LoRA 只按第 3 步的配置加载`)
+  const withSyntax = live.filter((r) => /<lora:/i.test(r.retained)).length
+  if (withSyntax) warnings.push(`有 ${withSyntax} 张图的保留片段含有 <lora:…> 文字：ComfyUI 不会因此加载 LoRA，这段文字可能属于原角色`)
+  // 保留片段与新角色、服装 Prompt 重复：只提示，不删除
+  const insertKeys = new Set(splitTopLevel([character?.positive, ...[...outfits.values()].map((o) => o?.positive)].filter(Boolean).join(', ')).map((p) => parseToken(p)?.key).filter(Boolean))
   const dupes = new Set<string>()
   let dupeRows = 0
   for (const r of live) {
-    if (r.manual) continue
-    const insertKeys = new Set(splitTopLevel(inserts[r.index]).map((p) => parseToken(p)?.key).filter(Boolean))
-    const hit = r.parts.filter((p) => p.kind === 'keep').map((p) => parseToken(p.text)?.key).filter((k): k is string => !!k && insertKeys.has(k))
+    const hit = splitTopLevel(r.retained).map((p) => parseToken(p)?.key).filter((k): k is string => !!k && insertKeys.has(k))
     if (hit.length) dupeRows++
     hit.forEach((k) => dupes.add(k))
   }
-  const manualRows = live.filter((r) => r.manual).length
-  if (manualRows) warnings.push(`有 ${manualRows} 张图使用手动编辑的 Prompt：第 2 步的 Tag 选择与第 3 步的角色、服装不会改变这些图片，需要时在预览中「恢复自动替换」`)
-  if (dupeRows) warnings.push(`有 ${dupeRows} 张图保留的内容与角色或服装 Prompt 重复（${[...dupes].slice(0, 5).join('、')}），可能是原服装残留。需要时请在「替换」步骤选中删除`)
+  if (dupeRows) warnings.push(`有 ${dupeRows} 张图的保留片段与新角色或服装 Prompt 重复（${[...dupes].slice(0, 5).join('、')}），可能是原角色 / 服装残留。需要时在第 2 步标记删除`)
+  const uncertainSize = live.filter((r) => r.size.state === 'confirm').length
+  if (uncertainSize) warnings.push(`有 ${uncertainSize} 张图的尺寸只来自图片实际像素（可能经过放大），请在第 2 步确认或修改`)
+  const noSize = live.filter((r) => r.size.state === 'missing').length
+  if (noSize) warnings.push(`有 ${noSize} 张图没有尺寸信息，使用工作流默认尺寸`)
   const blocked = rows.filter((r) => r.state !== 'valid' && r.state !== 'excluded').length
-  if (!units.length && data.images.length && !errors.length) errors.push('没有可以生成的图片')
-  if (blocked) warnings.push(`有 ${blocked} 张图片还不能生成，入队时不包含它们`)
-  const plainUnits: PlanUnit[] = units.map(({ extra: _extra, ...u }) => u)
-  return { units: plainUnits, errors, warnings, workflow: wf, rows, output_dir: outDir, loras: loras.map((l) => l.name), lora_info: loraInfo }
+  if (!units.length && data.images.length && !errors.length) errors.push(blocked ? `没有可以生成的图片：${blocked} 张需要处理（见第 2 步）` : '没有可以生成的图片')
+  if (blocked && units.length) warnings.push(`有 ${blocked} 张图片还需要处理，入队时不包含它们`)
+
+  const defaultOutfit = outfitOf(data.outfit_id)
+  return {
+    units,
+    errors,
+    warnings,
+    workflow: wf,
+    rows,
+    output_dir: outDir,
+    unit_list: units.map((u) => ({ index: u.index, image: u.item_index, variant: u.sub_index, of: u.meta.of, seed: u.seed, output_name: u.meta.output_name ?? '' })),
+    summary: {
+      character: character ? { name: character.name, positive: character.positive ?? '', negative: character.negative ?? '' } : null,
+      outfit: defaultOutfit ? { name: defaultOutfit.name, positive: defaultOutfit.positive ?? '' } : null,
+      global: g || data.global_text.trim() ? { name: g?.name ?? '', positive: globalMod[0] } : null,
+      scene: sc || data.scene_text.trim() ? { name: sc?.name ?? '', positive: sceneMod[0] } : null,
+      loras: loras.map((l) => ({ name: l.name, strength: l.strength, clip: l.strength_clip ?? l.strength, enabled: !l.disabled })),
+      images: data.images.length,
+      valid: live.length,
+      repeat: data.repeat,
+      seed_mapped: seedMapped,
+      size_mapped: sizeMapped,
+    },
+    recognition: { prefix_raw: recog.prefix_raw, prefix_auto: recog.prefix_auto, prefix_matches: recog.prefix_matches, usable: recog.usable, character: recog.character, outfit: recog.outfit, kept: recog.kept },
+  }
+}
+
+/** 最终 Prompt 按模块分段（与 compose 使用相同的顺序与过滤规则；只用于显示来源） */
+function composeParts(modules: Modules, settings: Settings): { module: string; text: string }[] {
+  return normalizedOrder(settings.compose_order).map((m) => ({ module: m, text: (modules[m]?.[0] ?? '').trim() })).filter((p) => p.text)
 }
 
 /** 冻结为一个执行队列项：之后修改草稿不影响已入队的内容 */
@@ -288,7 +335,7 @@ export function enqueueReplica(store: Store, rec: ReplicaRecord, settings?: Sett
   return { runId, plan }
 }
 
-/** 入队前预览某张图的最终工作流（与提交时相同的构建方式） */
+/** 入队前预览某个单元的最终工作流（与提交时相同的构建方式） */
 export function finalReplicaWorkflow(store: Store, rec: ReplicaRecord, unitIndex: number) {
   const plan = planForReplica(store, rec)
   if (!plan.workflow) throw new Error('请选择工作流')

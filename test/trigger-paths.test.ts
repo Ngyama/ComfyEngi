@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { defaultLoraConfig, effectiveLoraConfig, loraConfigProblems } from '@shared/lora-config'
 import { applyInputs, newEntry, TRIGGER_CUT, TRIGGER_DISABLE } from '@shared/mapping'
 import { controlInputs, controlProblems, controlsOf, cutOf, inputControl, mergeControlInputs, normalizeControls, withTriggerCuts } from '@shared/node-controls'
-import { normalizeReplicaData, normalizeReplicaImage, type ReplicaData } from '@shared/replica'
+import { normalizeReplicaData, normalizeReplicaImage, REPLICA_VERSION, type ReplicaData } from '@shared/replica'
 import type { ApiWorkflow, MappingEntry, WorkflowControls } from '@shared/types'
 import { changeLines, diffWorkflow, findPromptInjectors, findTriggerPaths } from '@shared/workflow-analysis'
 import { enqueueReplica, finalReplicaWorkflow, planForReplica, relocateImages, workflowPreview } from '../src/main/replica'
@@ -180,19 +180,20 @@ describe('与其他控制的关系', () => {
 })
 
 describe('计划、预览与队列', () => {
+  const SEP = ',\n\n'
   let root: string
   let s: Store
   let srcDir: string
   let charId: number
   const MAPPING: MappingEntry[] = [newEntry('positive', '3', 'populated_text'), newEntry('negative', '4', 'populated_text')]
   const saveWf = (api: ApiWorkflow, controls: WorkflowControls | null = null) => s.save('workflows', { name: 'wf', api_json: api, mapping: MAPPING, controls })
-  const image = (name: string, prompt = 'red_hair, smile') => {
+  const image = (name: string, prompt = '1girl, red_hair, from side, smile') => {
     const p = join(srcDir, name)
     writeFileSync(p, makePng({ parameters: `${prompt}\nNegative prompt: bad\nSteps: 20, Sampler: Euler a, CFG scale: 7, Seed: 5, Size: 512x512` }))
     return normalizeReplicaImage({ path: p, name, status: 'ok', positive: prompt, negative: 'bad', source: 'a1111' })
   }
   const draft = (wid: number, images: ReturnType<typeof image>[], over: Partial<ReplicaData> = {}) => {
-    const id = s.save('replicas', { name: '复刻', data: normalizeReplicaData({ images, removed_tags: ['red_hair'], character_id: charId, workflow_id: wid, output: { dir: join(root, 'out') }, ...over }) })
+    const id = s.save('replicas', { name: '复刻', data: normalizeReplicaData({ version: REPLICA_VERSION, images, tag_fix: { red_hair: 'character' }, character_id: charId, workflow_id: wid, output: { dir: join(root, 'out') }, ...over }) })
     return s.get('replicas', id)!
   }
   beforeEach(() => {
@@ -234,7 +235,7 @@ describe('计划、预览与队列', () => {
     expect(plan.errors).toEqual([])
     const json = finalReplicaWorkflow(s, rec, 0).json
     expect(json['45'].inputs.string_a).toBe('')
-    expect(json['3'].inputs.populated_text).toBe('new girl, smile')
+    expect(json['3'].inputs.populated_text).toBe(`from side, smile${SEP}new girl`)
     expect(json['46'].inputs.model).toEqual(g['46'].inputs.model)
     expect(s.get('workflows', wid)!.controls).toBeNull()
   })
@@ -249,16 +250,17 @@ describe('计划、预览与队列', () => {
     expect(plan.warnings.join()).toContain('BlueArchiveStyle_illus_1884029')
   })
   it('每张图保留自己的内容', () => {
-    const rec = draft(saveWf(direct()), [image('a.png', 'red_hair, smile'), image('b.png', 'sit, red_hair')])
-    expect(finalReplicaWorkflow(s, rec, 0).json['3'].inputs.populated_text).toBe('new girl, smile')
-    expect(finalReplicaWorkflow(s, rec, 1).json['3'].inputs.populated_text).toBe('sit, new girl')
+    const rec = draft(saveWf(direct()), [image('a.png', '1girl, red_hair, from side, smile'), image('b.png', '1girl, red_hair, from above, sit')])
+    expect(finalReplicaWorkflow(s, rec, 0).json['3'].inputs.populated_text).toBe(`from side, smile${SEP}new girl`)
+    expect(finalReplicaWorkflow(s, rec, 1).json['3'].inputs.populated_text).toBe(`from above, sit${SEP}new girl`)
   })
-  it('Prompt 中的 LoRA 文字与重复 Tag 只提示，不改内容', () => {
-    const rec = draft(saveWf(direct()), [image('a.png', 'red_hair, new girl, <lora:old_char:0.8>')])
+  it('Prompt 中的 LoRA 文字从保留片段中删除并提示；重复 Tag 只提示，不改内容', () => {
+    const rec = draft(saveWf(direct()), [image('a.png', '1girl, red_hair, from side, new girl, <lora:old_char:0.8>')])
     const plan = planForReplica(s, rec)
     expect(plan.warnings.join()).toContain('<lora:')
     expect(plan.warnings.join()).toContain('重复')
-    expect(plan.rows[0].positive).toBe('new girl, new girl, <lora:old_char:0.8>')
+    expect(plan.rows[0].removed_other).toEqual(['<lora:old_char:0.8>'])
+    expect(plan.rows[0].positive).toBe(`from side, new girl${SEP}new girl`)
   })
   it('关闭一个 LoRA 不影响已绕过的节点，保存映射也不影响节点控制', () => {
     const g = direct()
@@ -268,7 +270,7 @@ describe('计划、预览与队列', () => {
     expect(s.get('workflows', wid)!.controls?.bypass).toEqual(bypass)
     const cfg = defaultLoraConfig(g, MAPPING)
     cfg.entries[0].enabled = false
-    const json = finalReplicaWorkflow(s, draft(wid, [image('a.png')], { lora_config: cfg, disable_triggers: false }), 0).json
+    const json = finalReplicaWorkflow(s, draft(wid, [image('a.png')], { lora_configs: { [String(wid)]: cfg }, disable_triggers: false }), 0).json
     expect(json['48']).toBeUndefined()
     const stack = (json['5'].inputs.loras as { __value__: { name: string; active: boolean }[] }).__value__
     expect(stack.find((e) => e.name === cfg.entries[0].name)?.active).toBe(false)
@@ -278,7 +280,7 @@ describe('计划、预览与队列', () => {
     const im = image('a.png')
     const other = tempDir()
     writeFileSync(join(other, 'a.png'), makePng({}))
-    const data = normalizeReplicaData({ images: [{ ...im, path: join(srcDir, 'moved.png') }] })
+    const data = normalizeReplicaData({ version: REPLICA_VERSION, images: [{ ...im, path: join(srcDir, 'moved.png') }] })
     const r = await relocateImages(data, other)
     expect(r.relocated).toBe(0)
     expect(r.mismatched).toEqual(['a.png'])

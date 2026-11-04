@@ -1,5 +1,5 @@
-// 套图复刻端到端测试：在真实窗口中完成「导入 → 勾选 Tag → 选角色 → 预览 → 生成」，提交到模拟 ComfyUI，
-// 验证每张图提交的 JSON、输出文件名与原图对应、草稿重新打开、原图不变。模拟 ComfyUI 不能代替真实环境验证。
+// 套图复刻端到端测试：在真实窗口中完成「导入 → 识别 / 筛选 → 配置 → 预览 → 入队」，提交到模拟 ComfyUI，
+// 验证保留片段、新角色、LoRA 替换、重复生成的变体、提交的 JSON 与预览相同、草稿重新打开、原图不变。模拟 ComfyUI 不能代替真实环境验证。
 //
 // 用法：npx electron-vite build && node --experimental-strip-types --no-warnings scripts/e2e-replica.mjs [--shots <目录>]
 
@@ -38,9 +38,10 @@ const graph = (pos, neg, seed, width) => ({
   7: { class_type: 'SaveImage', inputs: { filename_prefix: 'x', images: ['6', 0] } },
 })
 const write = (name, texts) => writeFileSync(join(imgDir, name), makePng(texts))
-write('001.png', { prompt: JSON.stringify(graph('1girl, (red hair:1.2), char_a, smile, park', 'lowres', 1001, 832)) })
-write('002.png', { prompt: JSON.stringify(graph('1girl, Red_Hair, char_a, sitting, beach', 'blurry', 1002, 1024)) })
-write('003.png', { parameters: '1girl, red hair, char_a, running\nNegative prompt: worst\nSteps: 33, Sampler: Euler a, CFG scale: 4, Seed: 1003, Size: 640x960' })
+write('001.png', { prompt: JSON.stringify(graph('1girl, (red hair:1.2), char_a, from side, smile, park', 'lowres', 1001, 832)) })
+write('002.png', { prompt: JSON.stringify(graph('1girl, Red_Hair, char_a, cowboy shot, sitting, beach', 'blurry', 1002, 1024)) })
+// 没有镜头 Tag：识别会标记为需要处理，在界面中手动指定保留起点
+write('003.png', { parameters: '1girl, red hair, char_a, running, street\nNegative prompt: worst\nSteps: 33, Sampler: Euler a, CFG scale: 4, Seed: 1003, Size: 640x960' })
 write('004.png', {})
 
 const sha = (p) => createHash('sha256').update(readFileSync(p)).digest('hex')
@@ -104,67 +105,68 @@ try {
   check('数量：读取成功 3，失败 1', (await tid('replica-count-ok').innerText()).includes('3') && (await tid('replica-count-error').innerText()).includes('1'))
   await win.locator('[data-testid=replica-card][data-name="001.png"]').click()
   await win.waitForTimeout(300)
-  check('单张详情：参数标明状态', (await win.locator('[data-testid=replica-param][data-key=seed]').getAttribute('data-state')) === 'ok' && (await win.locator('[data-testid=replica-param][data-key=seed]').innerText()).includes('1001'))
+  check('单张详情：显示原图尺寸', (await tid('replica-image-size').innerText()).includes('832'))
+  check('单张详情：原图参数与 LoRA 只作参考', (await tid('replica-image-detail').innerText()).includes('参考'))
   await shot('r1-import')
 
-  // 2. 勾选 Tag
+  // 2. 识别 / 筛选
   await step(1)
-  await win.waitForSelector('[data-testid=tag-row]')
-  check('Tag 按频率排序、合并不同写法', (await win.locator('[data-testid=tag-row][data-key=red_hair]').getAttribute('data-count')) === '3')
-  await win.locator('[data-testid=tag-row][data-key=red_hair] [data-testid=tag-open]').click()
-  await win.waitForTimeout(200)
-  check('可以查看写法与权重', (await tid('tag-detail').innerText()).includes('(red hair:1.2)'))
-  await win.locator('[data-testid=tag-row][data-key=red_hair] [data-testid=tag-check]').check()
-  await win.locator('[data-testid=tag-row][data-key=char_a] [data-testid=tag-check]').check()
-  await win.waitForTimeout(800)
-  check('高频的 1girl 没有被自动选中', !(await win.locator('[data-testid=tag-row][data-key="1girl"] [data-testid=tag-check]').isChecked()))
-  await shot('r2-tags')
-
-  // 3. 新角色
-  await step(2)
-  await win.waitForSelector('[data-testid=replica-character]')
-  await win.locator('[data-testid=replica-character]', { hasText: '复刻角色' }).click()
-  await win.waitForTimeout(300)
-  check('显示角色 Prompt', (await tid('replica-character-prompt').innerText()).includes('char_b'))
-  await win.locator('[data-testid=replica-character-step] section', { hasText: '工作流' }).first().locator('select').first().selectOption({ label: '复刻工作流' })
-  await win.waitForTimeout(800)
-  await win.locator('[data-testid=replica-wf-lora-replace]').first().click()
-  await win.waitForTimeout(800)
-  check('替换后显示 原 LoRA → 新 LoRA', (await win.locator('[data-testid=replica-wf-lora]').first().getAttribute('data-replaced')) !== null && (await win.locator('[data-testid=replica-wf-lora-target]').first().innerText()).includes('charB'))
-  // 取消替换不会白屏，状态恢复；再次替换供后续步骤使用
-  await win.locator('[data-testid=replica-wf-lora-replace]').first().click()
+  await win.waitForSelector('[data-testid=recog-row]')
   await win.waitForTimeout(500)
-  check('取消替换后页面正常、状态恢复', (await win.locator('[data-testid=replica-crashed]').count()) === 0 && (await win.locator('[data-testid=replica-wf-lora]').first().getAttribute('data-replaced')) === null)
-  await win.locator('[data-testid=replica-wf-lora-replace]').first().click()
+  const recogRow = (n) => win.locator(`[data-testid=recog-row][data-name="${n}"]`)
+  const charTags = await win.locator('[data-testid=recog-character-tags] [data-testid=recog-tag]').evaluateAll((els) => els.map((e) => e.dataset.key))
+  check('识别出旧角色 Tag（合并不同写法）', charTags.includes('red_hair') && charTags.includes('char_a'), charTags.join(','))
+  check('保留片段从镜头 Tag 开始', (await recogRow('001.png').locator('[data-testid=recog-retained]').innerText()).includes('from side, smile, park'))
+  check('显示被替换的开头与删除的旧角色 Tag', (await recogRow('002.png').locator('[data-testid=recog-prefix-text]').innerText()).includes('1girl') && (await recogRow('002.png').locator('[data-testid=recog-removed-character]').innerText()).includes('Red_Hair'))
+  check('没有镜头 Tag 的图片标记为需要处理', (await recogRow('003.png').getAttribute('data-needs-fix')) !== null)
+  await shot('r2-recognize')
+  // 手动指定 003 的保留起点
+  await recogRow('003.png').locator('[data-testid=recog-seg]', { hasText: 'running' }).first().click()
+  await win.locator('[data-testid=seg-cut]').click()
   await win.waitForTimeout(800)
-  await shot('r3-character')
+  check('手动指定保留起点后不再需要处理', (await recogRow('003.png').getAttribute('data-needs-fix')) === null && (await recogRow('003.png').locator('[data-testid=recog-retained]').innerText()).includes('running, street'))
+  check('最终 Prompt 预览显示新角色位置', (await recogRow('001.png').locator('[data-testid=recog-final]').count()) === 1)
+
+  // 3. 配置：工作流、角色、LoRA、重复次数
+  await step(2)
+  await win.waitForSelector('[data-testid=replica-configure]')
+  check('未选择角色时明确提示', (await tid('replica-character-missing').count()) === 1)
+  await win.locator('[data-testid=replica-workflow] [data-testid=workflow-menu]').click()
+  await win.locator('[role=dialog] button, [data-radix-popper-content-wrapper] button', { hasText: '复刻工作流' }).first().click()
+  await win.waitForTimeout(600)
+  await tid('replica-pick-character').click()
+  await win.locator('[role=dialog] button', { hasText: '复刻角色' }).first().click()
+  await win.waitForTimeout(600)
+  check('显示角色 Prompt', (await tid('replica-character-prompt').innerText()).includes('char_b'))
+  // 角色 LoRA 替换工作流中的 charA
+  await win.locator('[data-testid=replica-lora] [data-testid=lora-placement]').first().click()
+  await win.locator('[data-testid=placement-option]', { hasText: '替换「charA」' }).click()
+  await win.waitForTimeout(800)
+  check('LoRA 面板显示替换', (await tid('replica-lora').innerText()).includes('替换'))
+  await tid('replica-repeat-input').fill('2')
+  await win.waitForTimeout(800)
+  await shot('r3-configure')
 
   // 4. 预览
   await step(3)
-  await win.waitForSelector('[data-testid=replica-row]')
+  await win.waitForSelector('[data-testid=replica-unit]')
   await win.waitForTimeout(600)
-  const row = (n) => win.locator(`[data-testid=replica-row][data-name="${n}"]`)
-  check('汇总：总数 4，可生成 3，不能生成 1', (await tid('sum-total').innerText()).includes('4') && (await tid('sum-valid').innerText()).includes('3') && (await tid('sum-invalid').innerText()).includes('1'))
-  check('替换结果保留未选中内容与位置', (await row('001.png').locator('[data-testid=replica-parts]').innerText()).includes('smile, park') && (await row('001.png').locator('[data-testid=part-add]').innerText()).includes('char_b'))
-  check('移除的 Tag 以原写法标记', (await row('001.png').locator('[data-testid=part-remove]').first().innerText()) === '(red hair:1.2)')
-  check('新角色显示「待生成」，不是假结果', (await row('001.png').locator('[data-testid=replica-pending]').innerText()).includes('待生成'))
-  check('输出文件名与原图对应', (await row('002.png').locator('[data-testid=replica-output-name]').innerText()).includes('002.png'))
-  check('没有元数据的图片明确标记', (await row('004.png').getAttribute('data-state')) === 'invalid')
+  const outputs = await win.locator('[data-testid=replica-unit]').evaluateAll((els) => els.map((e) => e.dataset.output))
+  check('3 张 × 2 次 = 6 个单元，变体名称可以区分', outputs.join() === '001_v01,002_v01,003_v01,001_v02,002_v02,003_v02', outputs.join())
+  check('汇总显示单元数', (await tid('replica-units-summary').innerText()).includes('6'))
+  const unit = (o) => win.locator(`[data-testid=replica-unit][data-output="${o}"]`)
+  check('最终 Prompt：保留片段 + 新角色', (await unit('001_v01').locator('[data-testid=replica-unit-positive]').innerText()).includes('from side, smile, park') && (await unit('001_v01').locator('[data-testid=replica-unit-positive]').innerText()).includes('char_b'))
+  check('最终 Prompt 不含旧角色 Tag', !(await unit('002_v01').locator('[data-testid=replica-unit-positive]').innerText()).includes('Red_Hair'))
   await shot('r4-preview')
-  // 手动编辑一张
-  await row('003.png').locator('[data-testid=replica-row-edit]').click()
-  await row('003.png').locator('[data-testid=replica-edit-positive]').fill('手动, char_b, running')
-  await row('003.png').locator('[data-testid=replica-edit-save]').click()
-  await win.waitForTimeout(800)
-  check('手动编辑写入最终 Prompt', (await row('003.png').locator('[data-testid=replica-parts]').innerText()).includes('手动'))
   // 最终工作流
-  await row('001.png').locator('[data-testid=replica-row-json]').click()
+  await unit('001_v01').locator('[data-testid=replica-unit-json]').click()
   await win.waitForSelector('[data-testid=final-workflow]')
   await win.waitForTimeout(500)
   const changes = await tid('final-workflow-changes').innerText()
-  check('最终工作流默认显示可读的变化', changes.includes('Steps') && changes.includes('28') && changes.includes('21') && changes.includes('charB'), changes.slice(0, 300))
+  check('最终工作流显示可读的变化：LoRA 替换', changes.includes('charB'), changes.slice(0, 300))
   await tid('final-workflow-show-json').click()
   const previewJson = JSON.parse(await tid('final-workflow-json').innerText())
+  check('不继承原图的 Steps / CFG / Sampler', previewJson['3'].inputs.steps === 28 && previewJson['3'].inputs.cfg === 5.5 && previewJson['3'].inputs.sampler_name === 'dpmpp_2m')
   await win.keyboard.press('Escape')
   await win.waitForTimeout(300)
 
@@ -175,13 +177,13 @@ try {
   await tid('replica-open').first().click()
   await win.waitForSelector('[data-testid=replica-editor]')
   await win.waitForTimeout(600)
-  check('重新打开草稿：图片与选择都保留', (await tid('replica-count-all').innerText()).includes('4'))
-  await step(3)
-  await win.waitForSelector('[data-testid=replica-row]')
+  check('重新打开草稿：图片都保留', (await tid('replica-count-all').innerText()).includes('4'))
+  await step(1)
+  await win.waitForSelector('[data-testid=recog-row]')
   await win.waitForTimeout(500)
-  check('重新打开后手动修改还在', (await row('003.png').locator('[data-testid=replica-parts]').innerText()).includes('手动'))
+  check('重新打开后手动修正还在', (await recogRow('003.png').locator('[data-testid=recog-retained]').innerText()).includes('running, street'))
 
-  // 5. 生成
+  // 5. 入队
   await step(4)
   await win.waitForTimeout(500)
   const outDir = (await tid('replica-output-dir').innerText()).replace(/^保存到 /, '').split('，')[0]
@@ -192,18 +194,21 @@ try {
   // 工作区中可能还有其他排队的内容：只看这次复刻提交的
   const mine = () => mock.submitted.filter(([, g]) => String(g['9']?.inputs?.filename_prefix ?? '').startsWith('ComfyEngi复刻/'))
   for (let i = 0; i < 240; i++) {
-    if (mine().length >= 3 && existsSync(outDir) && readdirSync(outDir).length >= 3) break
+    if (mine().length >= 6 && existsSync(outDir) && readdirSync(outDir).length >= 6) break
     await win.waitForTimeout(250)
   }
   const submitted = mine()
-  check('三张图都提交了', submitted.length === 3, String(submitted.length))
+  check('六个单元都提交了', submitted.length === 6, String(submitted.length))
+  const SEP = ',\n\n'
   const texts = submitted.map(([, g]) => g['6'].inputs.text)
-  check('每张图的 Prompt 不同，未选中内容不变', texts[0] === '1girl, char_b, (pink hair:1.1), smile, park' && texts[1] === '1girl, char_b, (pink hair:1.1), sitting, beach' && texts[2] === '手动, char_b, running', texts.join(' | '))
-  check('每张图的 Seed 与尺寸不同', submitted.map(([, g]) => g['3'].inputs.seed).join() === '1001,1002,1003' && submitted.map(([, g]) => g['5'].inputs.width).join() === '832,1024,640')
-  check('负面保留原图并追加角色负面', submitted[0][1]['7'].inputs.text === 'lowres, bad hands')
+  const tail = `${SEP}char_b, (pink hair:1.1)`
+  check('每张图的 Prompt = 保留片段 + 新角色', texts[0] === `from side, smile, park${tail}` && texts[1] === `cowboy shot, sitting, beach${tail}` && texts[2] === `running, street${tail}` && texts[3] === texts[0], texts.join(' | '))
+  check('Seed 来自新工作流的逻辑，每个单元不同', new Set(submitted.map(([, g]) => g['3'].inputs.seed)).size === 6 && !submitted.some(([, g]) => [1001, 1002, 1003].includes(g['3'].inputs.seed)))
+  check('尺寸按原图', submitted.slice(0, 3).map(([, g]) => g['5'].inputs.width).join() === '832,1024,640')
+  check('负面只用角色负面（默认不保留原图负面）', submitted[0][1]['7'].inputs.text === 'bad hands')
   check('LoRA 已替换', submitted.every(([, g]) => g['10'].inputs.lora_name === 'charB.safetensors' && g['10'].inputs.strength_model === 0.7))
   check('提交的 JSON 与预览相同', JSON.stringify(submitted[0][1]) === JSON.stringify(previewJson))
-  check('输出文件与原图同名', readdirSync(outDir).sort().join() === '001.png,002.png,003.png', readdirSync(outDir).join())
+  check('输出文件按原图名称与变体编号', readdirSync(outDir).sort().join() === '001_v01.png,001_v02.png,002_v01.png,002_v02.png,003_v01.png,003_v02.png', readdirSync(outDir).join())
   await nav('运行记录')
   await win.waitForTimeout(500)
   check('运行记录中可以看到这次复刻', (await win.locator('main').innerText()).includes('复刻'))
