@@ -3,6 +3,7 @@
 import { useMemo, useState } from 'react'
 import {
   AlertCircle,
+  BookmarkPlus,
   BookOpen,
   Camera,
   Check,
@@ -10,6 +11,7 @@ import {
   Copy,
   Eye,
   GripVertical,
+  Library as LibraryIcon,
   ListPlus,
   Pencil,
   Play,
@@ -33,13 +35,15 @@ import { confirm, reloadLib, templatesOf, useLib, useNav, usePlan, useRunner } f
 import { cn } from '@/lib/utils'
 import { defaultItemCount, defaultSizes, expandTask, itemCameraIds, itemStateIds, newCardItem, newItem, newTaskWithDefaults, setItemSizes, sizeCount } from '@shared/planner'
 import type { Plan } from '@shared/api'
-import { DEFAULT_SETTINGS, SIZE_PRESETS, type Library, type PlanUnit, type TaskData, type TaskItem } from '@shared/types'
+import { DEFAULT_SETTINGS, SIZE_PRESETS, type Library, type PlanUnit, type Preset, type TaskData, type TaskItem } from '@shared/types'
 import { PlanPreviewDialog, TaskSettingsDialog } from './dialogs'
 import { LoraPanel } from './LoraPanel'
 import { CharacterPicker, GlobalPicker, PosePicker, StoryPicker, WorkflowMenu, type NewAction } from './pickers'
 import { isTemplateCard } from '@shared/card-templates'
 import { CardItemDetail } from './CardDetail'
-import { subpositionsOf } from './TemplateSource'
+import { posesOf } from './TemplateSource'
+import { insertItems, itemSummary } from '@shared/presets'
+import { PresetDialog, SavePresetDialog, type ImportMode } from './presets'
 import { PoseDetail } from './PoseDetail'
 
 /** 新建任务：套用设置 → 生成默认值；角色和工作流沿用当前任务 */
@@ -225,7 +229,7 @@ function PoseCard({
   const isCard = item.card_id != null
   const templated = isTemplateCard(card)
   const tuned = isCard && !templated && (!!Object.keys(item.card_rules ?? {}).length || !!(item.card_exclude ?? []).length)
-  const subInfo = templated && card ? subpositionsOf(lib, card, item.card_pick) : null
+  const poseInfo = templated && card ? posesOf(lib, card, item.card_pick) : null
   const label = isCard
     ? (card?.name ?? '（动作卡已删除）')
     : item.position_id
@@ -242,6 +246,10 @@ function PoseCard({
   const exprs = item.expression_ids.map((e) => T(e)?.name ?? '（已删除）')
   const cameras = itemCameraIds(item).map((id) => T(id)?.name ?? '（已删除）')
   const per = exprs.length && item.count % exprs.length === 0 ? item.count / exprs.length : null
+  // 模板动作卡：固定表情 + 行为候选（每张随机 0～1 个）
+  const cardExpr = templated && item.expression_id != null ? (T(item.expression_id)?.name ?? '（表情已删除）') : null
+  const behaviors = templated ? (item.behavior_ids ?? []).map((b) => T(b)?.name ?? '（已删除）') : []
+  const summary = templated ? itemSummary(item, (x) => T(x), outfit?.name).join(' | ') : undefined
   const sizeText = item.sizes
     ? SIZE_PRESETS.filter((p) => sizeCount(item.sizes, p.key))
         .map((p) => `${p.label[0]}${sizeCount(item.sizes, p.key)}`)
@@ -254,6 +262,8 @@ function PoseCard({
       {...s.attributes}
       {...s.listeners}
       onClick={onSelect}
+      title={summary}
+      data-summary={summary}
       className={cn(
         'group flex cursor-pointer items-center gap-3 rounded-xl bg-card px-3 py-3 ring-1 ring-tint/[0.08] transition-[background,box-shadow] outline-none hover:bg-accent/70',
         selected && 'bg-accent/80 ring-primary/60',
@@ -276,9 +286,14 @@ function PoseCard({
               已调整组合
             </span>
           )}
-          {subInfo && (
-            <span className={cn('min-w-0 truncate text-[11px]', subInfo.names.length ? 'text-muted-foreground' : 'text-destructive')} title={item.card_pick ? '只使用部分子体位或模板' : '使用全部子体位'} data-testid="card-subs">
-              {subInfo.names.length ? `${subInfo.names.join('、')} · ${subInfo.combos} 种组合${item.card_pick ? '（部分）' : ''}` : '没有选中子体位'}
+          {poseInfo && (
+            <span className={cn('min-w-0 truncate text-[11px]', poseInfo.picked ? 'text-muted-foreground' : 'text-destructive')} title={poseInfo.names.join('、')} data-testid="card-subs">
+              {poseInfo.picked ? `${poseInfo.picked}${poseInfo.picked !== poseInfo.total ? ` / ${poseInfo.total}` : ''} 个姿态` : '没有启用姿态模板'}
+            </span>
+          )}
+          {behaviors.length > 0 && (
+            <span className="shrink-0 truncate rounded-md bg-violet-500/10 px-1.5 py-0.5 text-[10.5px] text-violet-600" title="行为：每张图在「无」和这些候选之间随机抽取一个" data-testid="behavior-badge">
+              {behaviors.join('/')}随机
             </span>
           )}
           {!isCard && item.position_id && states.length > 0 && <span className="shrink-0 truncate text-[11px] text-muted-foreground">+ {states.map((t) => t?.name ?? '（已删除）').join(' + ')}</span>}
@@ -314,9 +329,9 @@ function PoseCard({
             <Shirt className="size-3 shrink-0" />
             <span className="truncate">{outfit?.name ?? '未指定服装'}</span>
           </span>
-          <span className={cn('inline-flex min-w-0 items-center gap-1', !exprs.length && !isCard && 'opacity-60')}>
+          <span className={cn('inline-flex min-w-0 items-center gap-1', (templated ? !cardExpr : !exprs.length && !isCard) && 'opacity-60')} data-testid="row-expression">
             <Smile className="size-3 shrink-0" />
-            <span className="truncate">{isCard ? '姿态、表情、互动按动作卡规则抽取' : exprs.length ? exprs.join('、') : '无表情'}</span>
+            <span className="truncate">{templated ? (cardExpr ?? '未选择表情') : isCard ? '姿态、表情、互动按动作卡规则抽取' : exprs.length ? exprs.join('、') : '无表情'}</span>
           </span>
         </div>
         {error && (
@@ -349,9 +364,9 @@ export default function PlanPage() {
   const lib = useLib((s) => s.lib)
   const planLib = useLib((s) => s.planLib)
   const go = useNav((s) => s.go)
-  const { task, update, selected, select, saving } = usePlan()
+  const { task, update, selected, select, saving, load } = usePlan()
   const runner = useRunner((s) => s.status)
-  const [picker, setPicker] = useState<null | 'global' | 'char' | 'char2' | 'story' | 'pose' | 'settings'>(null)
+  const [picker, setPicker] = useState<null | 'global' | 'char' | 'char2' | 'story' | 'pose' | 'settings' | 'presets' | 'save-set'>(null)
   const [plan, setPlan] = useState<Plan | null>(null)
   const [previewOpen, setPreviewOpen] = useState(false)
   // 卡片的稳定 key（拖拽需要），与 items 一一对应
@@ -405,6 +420,27 @@ export default function PlanPage() {
   const outfitsOf = (cid: number | null | undefined) => (lib?.outfits ?? []).filter((o) => o.character_id === cid).length
 
   const setKeysAfter = (fn: (k: string[]) => string[]) => setKeys(fn(itemKeys))
+  const newKey = () => Math.random().toString(36).slice(2)
+
+  /** 从预设导入：追加、插入到选中动作之后、明确替换全部，或新建任务（沿用当前任务的角色与工作流） */
+  const importPreset = async (added: TaskItem[], mode: ImportMode, preset: Preset) => {
+    if (mode === 'new') {
+      const d = { ...newTaskFor(lib, task?.data), items: added }
+      const r = await call(api['tasks.create'](preset.name || '套图任务', d))
+      if (!r) return
+      await reloadLib()
+      await load(r.id)
+      toast.success(`已用「${preset.name}」新建任务`, { description: `${added.length} 个动作` })
+      return
+    }
+    const at = mode === 'after' && selected !== null && selected < items.length ? selected : null
+    update((x) => (x.items = insertItems(x.items, added, mode, at)))
+    if (mode === 'replace') setKeys(added.map(newKey))
+    else setKeysAfter((k) => insertItems(k, added.map(newKey), mode, at))
+    const first = mode === 'replace' ? 0 : at !== null ? at + 1 : items.length
+    select(first)
+    toast.success(`已导入「${preset.name}」`, { description: `${added.length} 个动作${mode === 'replace' ? '（已替换原有动作）' : ''}` })
+  }
 
   const addPoses = (ids: NewAction[]) => {
     const at = selected !== null && selected < items.length ? selected + 1 : items.length
@@ -609,6 +645,12 @@ export default function PlanPage() {
           <span className="text-[11px] font-medium tracking-wide text-muted-foreground uppercase">动作序列</span>
           <span className="text-[11px] text-muted-foreground/70">按此顺序生成 · 拖动调整</span>
           <div className="flex-1" />
+          <Button size="sm" variant="ghost" onClick={() => setPicker('presets')} data-testid="open-presets">
+            <LibraryIcon /> 从预设添加
+          </Button>
+          <Button size="sm" variant="ghost" disabled={!items.length} onClick={() => setPicker('save-set')} data-testid="save-set">
+            <BookmarkPlus /> 保存套图模板
+          </Button>
           <Button size="sm" variant="ghost" onClick={() => setPicker('pose')}>
             <Plus /> 添加动作
           </Button>
@@ -738,6 +780,8 @@ export default function PlanPage() {
         onOutfit={(id) => update((x) => (x.story_outfit_id = id))}
       />
       <PosePicker open={picker === 'pose'} onOpenChange={(o) => setPicker(o ? 'pose' : null)} onAdd={addPoses} insertAfter={selected !== null && selected < items.length ? selected : null} />
+      <PresetDialog open={picker === 'presets'} onOpenChange={(o) => setPicker(o ? 'presets' : null)} insertAfter={selected !== null && selected < items.length ? selected : null} onImport={(a, m, p) => void importPreset(a, m, p)} />
+      <SavePresetDialog open={picker === 'save-set'} onOpenChange={(o) => setPicker(o ? 'save-set' : null)} kind="set" from={0} to={Math.max(0, items.length - 1)} />
       <GlobalPicker open={picker === 'global'} onOpenChange={(o) => setPicker(o ? 'global' : null)} value={d.global_id} onPick={(id) => update((x) => (x.global_id = id))} />
       <TaskSettingsDialog open={picker === 'settings'} onOpenChange={(o) => setPicker(o ? 'settings' : null)} />
       <PlanPreviewDialog open={previewOpen} onOpenChange={setPreviewOpen} plan={plan} onEnqueue={enqueue} taskId={task.id} />

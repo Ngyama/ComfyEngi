@@ -4,7 +4,7 @@
 // 多表情时按选择顺序依次生成，每个表情张数相同；不能整除时报错，由用户修改张数。
 
 import { drawCamera, drawPool, effectivePool, fixedConflicts, isSoloCard, poolsOf, resolvePool, unitRandom } from './cards'
-import { APPENDED, cardTemplates, categoryLabel, drawTemplate, fillTemplate, groupBySubposition, isTemplateCard, pickedTemplates, splitBySubposition, TEMPLATE_SLOTS, templateCombos, templatePlaceholders } from './card-templates'
+import { APPENDED, cardTemplates, categoryLabel, drawBehavior, drawTemplate, fillTemplate, isTemplateCard, legacyExpressionIds, pickedTemplates, TEMPLATE_SLOTS, templatePlaceholders } from './card-templates'
 import { compose, fillPlaceholders, joinParts, unescapeSeparator } from './prompt'
 import type {
   CardPick,
@@ -553,8 +553,9 @@ export function expandTask(data: TaskData, lib: PlanLibrary, settings: Settings,
   }
 
   /**
-   * 模板动作卡：每张图抽取一份完整的 Prompt 模板，占位符按位置填入全局、场景、镜头、角色与服装。
-   * 负面 Prompt 仍按模块拼接（模板只有正面）；动作卡自己的负面 Prompt 作为动作的负面
+   * 模板动作卡：每张图从启用的姿态模板中轮流抽取一份完整的 Prompt，占位符按位置填入全局、场景、镜头、角色、服装、表情与行为。
+   * 表情为动作序列的固定表情（每张相同）；行为每张在「无」和各候选之间等概率抽取一个。
+   * 负面 Prompt 仍按模块拼接（模板只有正面）；动作卡自己的负面 Prompt 与所抽行为的负面作为行为模块的负面
    */
   const expandTemplateCard = (it: TaskItem, pi: number, card: Template) => {
     const solo = isSoloCard(card)
@@ -568,9 +569,18 @@ export function expandTask(data: TaskData, lib: PlanLibrary, settings: Settings,
     const all = cardTemplates(card, lib.templates.values())
     const list = pickedTemplates(all, it.card_pick)
     const known = new Set(all.map((t) => t.id))
-    if ([...(it.card_pick?.include ?? []), ...(it.card_pick?.exclude ?? [])].some((x) => !known.has(x))) onceWarn(`${where}：选中的模板中有模板已被删除，生成时跳过`)
-    if (!all.length) return void errors.push(`${where}：体位还没有 Prompt 模板，请在「素材库 → 体位」中添加`)
-    if (!list.length) return void errors.push(`${where}：没有选中任何子体位，请在动作详情的「子体位」中勾选`)
+    if ([...(it.card_pick?.include ?? []), ...(it.card_pick?.exclude ?? [])].some((x) => !known.has(x))) onceWarn(`${where}：排除的姿态模板中有模板已被删除`)
+    if (!all.length) return void errors.push(`${where}：动作卡还没有姿态模板，请在「素材库 → 动作卡」中添加`)
+    if (!list.length) return void errors.push(`${where}：没有启用任何姿态模板，请在动作详情的「姿态模板」中勾选`)
+    // 表情与行为都是引用：被删除时报错，不自动替换或跳过
+    const expr = it.expression_id != null ? tpl(it.expression_id) : null
+    if (it.expression_id != null && !expr) errors.push(`${where}：所选表情已被删除，请重新选择`)
+    const expr2 = second && it.second_expression_id != null ? tpl(it.second_expression_id) : null
+    if (second && it.second_expression_id != null && !expr2) errors.push(`${where}：第二角色的表情已被删除，请重新选择`)
+    const behaviorIds = it.behavior_ids ?? []
+    const behaviors = behaviorIds.map((x) => tpl(x)).filter((t): t is Template => !!t)
+    if (behaviors.length !== behaviorIds.length) errors.push(`${where}：有行为候选已被删除，请在动作详情中重新选择`)
+    if (it.expression_id == null && legacyExpressionIds(card, list).length) onceWarn(`${where}：动作卡「${card.name}」中有旧版的模板表情设置，新版本不再自动组合表情；请在动作详情中选择表情，并可在素材库中清除旧设置`)
     const sized = !!it.sizes
     const count = sized ? sizeTotal(it.sizes) : toInt(it.count)
     if (count <= 0) {
@@ -581,35 +591,33 @@ export function expandTask(data: TaskData, lib: PlanLibrary, settings: Settings,
       const { unknown } = templatePlaceholders(t.positive)
       if (unknown.length) errors.push(`${where}：模板「${t.name || '（未命名）'}」中有无法识别的占位符 ${unknown.join(' ')}`)
     }
-    // 张数按子体位平分，子体位内「模板 × 表情」组合轮流使用
-    const groups = groupBySubposition(card, list).map((g) => {
-      const { combos, missing } = templateCombos(g.templates, card, (id) => tpl(id))
-      if (missing) onceWarn(`${where}：有 ${missing} 个表情已被删除，生成时跳过`)
-      return { ...g, combos }
-    })
-    const split = splitBySubposition(groups.length, count, comboSeed, pi)
     const slots = sized ? sizeSchedule(it.sizes, 0).map((s) => s.size) : Array.from({ length: count }, () => undefined)
     slots.forEach((size, k) => {
-      const g = groups[split[k].group]
-      const { template: t, expression: expr } = drawTemplate(g.combos, comboSeed, pi, split[k].index, split[k].group)!
+      const t = drawTemplate(list, comboSeed, pi, k)!
       const camera = drawCamera(cameras, comboSeed, pi, k)
+      const behavior = drawBehavior(behaviors, comboSeed, pi, k)
       const m = baseModules(outfit)
       m.camera = filled(camera, char)
       m.scene = scene ? filled(scene, char) : ['', '']
-      m.expression = expr ? filled(expr, char) : ['', '']
-      m.interaction = ['', fillPlaceholders(card.negative ?? '', char)]
+      m.expression = filled(expr, char)
+      const act = filled(behavior, char)
+      m.interaction = [act[0], joinParts([fillPlaceholders(card.negative ?? '', char), act[1]], unescapeSeparator(settings.neg_separator ?? ', '), trimAll)]
       m.extra = [fillPlaceholders(it.extra_positive ?? '', char), fillPlaceholders(it.extra_negative ?? '', char)]
       if (second) {
         m.character2 = pair(char2)
         m.outfit2 = pair(outfit2)
+        m.expression2 = filled(expr2, char2)
       }
-      // 有内容却没有写占位符的模块不会出现在 Prompt 中：提示（表情、附加除外，它们会追加在末尾）
+      // 有内容却没有写占位符的模块不会出现在 Prompt 中：提示（表情、行为、第二角色表情、附加除外，它们有默认位置）
       const have = templatePlaceholders(t.positive).modules
       for (const s of TEMPLATE_SLOTS) {
         if (APPENDED.includes(s.module) || have.has(s.module) || !(m[s.module]?.[0] ?? '').trim()) continue
         onceWarn(`${where}：模板「${t.name || '（未命名）'}」没有 {${s.names[0]}}，${s.label}不会写入正面 Prompt`)
       }
       const positive = fillTemplate(fillPlaceholders(t.positive, char), Object.fromEntries(Object.entries(m).map(([key, v]) => [key, v[0]])))
+      const picks: CardPick[] = [{ pool: 'template', id: t.id, name: t.name, random: list.length > 1 }]
+      if (expr) picks.push({ pool: 'expression', id: expr.id, name: expr.name, random: false })
+      if (behavior) picks.push({ pool: 'behavior', id: behavior.id, name: behavior.name, random: true })
       const meta: UnitMeta = {
         task: taskName,
         character: charName,
@@ -619,7 +627,7 @@ export function expandTask(data: TaskData, lib: PlanLibrary, settings: Settings,
         item: card.name,
         item_no: pi + 1,
         outfit: outfit?.name ?? '',
-        expression: expr?.name ?? t.tags ?? '',
+        expression: expr?.name ?? '',
         camera: camera?.name ?? '',
         male: false,
         male_templates: [],
@@ -627,16 +635,18 @@ export function expandTask(data: TaskData, lib: PlanLibrary, settings: Settings,
         of: count,
         card: card.name,
         card_type: solo ? 'solo' : 'duo',
-        picks: [{ pool: 'template', id: t.id, name: t.name, random: g.combos.length > 1 }, ...(expr ? [{ pool: 'expression' as const, id: expr.id, name: expr.name, random: g.combos.length > 1 }] : [])],
+        picks,
         combo_seed: comboSeed,
         template: t.name,
         template_category: categoryLabel(t.category ?? ''),
       }
-      if (expr || t.tags) meta.template_label = expr?.name ?? t.tags
+      if (t.tags) meta.template_label = t.tags
+      if (behavior) meta.acts = [behavior.name]
       if (scene) meta.scene = scene.name
       if (second) {
         meta.character2 = char2!.name
         if (outfit2) meta.outfit2 = outfit2.name
+        if (expr2) meta.expression2 = expr2.name
       }
       if (size) {
         meta.size = size.label

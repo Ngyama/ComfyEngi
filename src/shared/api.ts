@@ -4,7 +4,7 @@ import type { ParamRow, ReplacePart, ReplicaData, ReplicaImage, ReplicaRecord } 
 import type { UpdateCheck } from './update'
 import type { DictionaryInfo, MiningImage, MiningParams, MiningResult, MiningSaveItem, MiningSaveOutcome, RawMeta, ScanResult } from './mining'
 import type { SavedSourceRule } from './prompt-source'
-import type { ApiWorkflow, ExecutionDetail, ExecutionInspection, LoraResource, Character, Library, Message, Outfit, PlanResult, PlanUnit, Run, RunnerEvent, RunnerStatus, RunUnit, Settings, Story, Task, TaskData, Template, TemplateKind, Workflow, InputChange, ObjectInfo } from './types'
+import type { ApiWorkflow, ExecutionDetail, ExecutionInspection, LoraResource, Character, Library, Message, Outfit, PlanResult, PlanUnit, Run, RunnerEvent, RunnerStatus, RunUnit, Settings, Story, Task, TaskData, Template, TemplateKind, Preset, PresetData, PresetKind, Workflow, InputChange, ObjectInfo } from './types'
 
 export type SaveResult = { id: number }
 export type Plan = PlanResult & { units: PlanUnit[] }
@@ -78,6 +78,10 @@ export interface Api {
   'tasks.duplicate'(id: number): SaveResult
 
   'workflows.preview'(id: number): { json: ApiWorkflow; errors: string[]; changes: InputChange[]; unchanged: number }
+  'presets.list'(): Preset[]
+  'presets.save'(rec: { id?: number; kind?: PresetKind; name?: string; data?: PresetData; sort?: number }): SaveResult
+  'presets.remove'(id: number): void
+  'presets.duplicate'(id: number): SaveResult
   'replicas.list'(): { id: number; name: string; count: number; updated_at: number | null }[]
   'replicas.get'(id: number): ReplicaRecord | null
   'replicas.create'(name: string): SaveResult
@@ -169,7 +173,7 @@ export const API_METHODS: ApiMethod[] = [
   'workflows.get', 'workflows.import', 'workflows.reimport', 'workflows.save', 'workflows.remove', 'workflows.onlineCheck', 'workflows.objectInfo',
   'tasks.get', 'tasks.create', 'tasks.save', 'tasks.remove', 'tasks.duplicate',
   'plan.forTask', 'plan.finalWorkflow', 'plan.exportWorkflow',
-  'workflows.preview', 'replicas.list', 'replicas.get', 'replicas.create', 'replicas.save', 'replicas.remove', 'replicas.addFiles', 'replicas.addFolder', 'replicas.relocateFolder', 'replicas.relocateFile', 'replicas.plan', 'replicas.finalWorkflow', 'replicas.exportWorkflow', 'replicas.enqueue',
+  'workflows.preview', 'presets.list', 'presets.save', 'presets.remove', 'presets.duplicate', 'replicas.list', 'replicas.get', 'replicas.create', 'replicas.save', 'replicas.remove', 'replicas.addFiles', 'replicas.addFolder', 'replicas.relocateFolder', 'replicas.relocateFile', 'replicas.plan', 'replicas.finalWorkflow', 'replicas.exportWorkflow', 'replicas.enqueue',
   'queue.enqueue', 'queue.list', 'queue.units', 'queue.reorder', 'queue.remove', 'queue.delete', 'queue.retry', 'queue.retrySave', 'queue.pendingSummary',
   'runner.status', 'runner.precheck', 'runner.start', 'runner.pause', 'runner.stop', 'runner.interrupt', 'runner.logs',
   'history.list', 'history.image', 'history.openImage', 'history.showInFolder', 'history.execution', 'history.attempt', 'history.exportAttempt',

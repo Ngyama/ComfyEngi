@@ -124,8 +124,8 @@ export interface ActionCard {
   /** 新建模板时预填的正文（复制使用，不是继承：之后修改骨架不影响已有模板） */
   skeleton?: string
   /**
-   * 表情（素材库「表情」中的条目 ID，按顺序）：体位上为默认表情，模板上为这个模板单独的表情（有时代替默认）。
-   * 每个模板与它的每个表情组成一种组合，生成时轮流使用；没有表情时模板单独成一种组合
+   * 旧版：动作卡 / 姿态模板上设置的表情（模板 × 表情组合）。新版本由动作序列选择一个固定表情，这里的设置不再参与生成，
+   * 只保留数据以便在素材库中提示和清除
    */
   expressions?: number[]
   /** 各素材池的固定素材与随机候选（只保存 ID，不复制 Prompt） */
@@ -134,7 +134,7 @@ export interface ActionCard {
 /** 一张图片实际使用的素材（随计划冻结在运行记录中，用于查看来源） */
 export interface CardPick {
   /** template：模板动作卡抽到的 Prompt 模板 */
-  pool: CardPoolKey | 'template' | 'expression'
+  pool: CardPoolKey | 'template' | 'expression' | 'behavior'
   id: number
   name: string
   random: boolean
@@ -307,6 +307,13 @@ export interface TaskItem {
    * 有此字段时总张数为各尺寸之和（count 同步为总数，仅供显示）
    */
   sizes?: SizeCounts
+  /** 模板动作卡：主角色的固定表情（本动作的每张图都使用它；需要两种表情时复制一个动作序列） */
+  expression_id?: number | null
+  /**
+   * 模板动作卡：行为候选（状态素材 ID）。每张图在「无行为」和各候选之间等概率抽取一个，写入 {行为}；不选则不加行为。
+   * 旧方式动作的 act_ids 仍按原来的固定叠加展开
+   */
+  behavior_ids?: number[]
 }
 
 /**
@@ -382,6 +389,52 @@ export interface TaskData {
   lora_configs?: Record<string, import('./lora-config').WfLoraConfig>
   /** 输出：dir 为最终图片的复制目录（默认工作区 output/）；prefix 为 ComfyUI 的文件名前缀模板（空则使用工作流映射中的模板） */
   output?: TaskOutput
+}
+
+// ---------------------------------------------------------------- 动作序列预设 / 套图模板
+/**
+ * 保存的服装槽位：预设不直接绑定某个角色的服装。second 为第二角色的服装。
+ * 导入时每个槽位选择一次当前角色的服装，应用到所有使用该槽位的动作
+ */
+export interface OutfitSlot {
+  key: number
+  second?: boolean
+  /** 保存时的服装（导入到同一角色时默认沿用） */
+  outfit_id: number | null
+  name: string
+}
+
+/** 预设中的动作：引用素材 ID，不保存展开后的 Prompt；服装换成槽位 */
+export type PresetItem = Omit<TaskItem, 'prompt_edits' | 'outfit_id' | 'second_outfit_id'> & {
+  outfit_slot?: number | null
+  second_outfit_slot?: number | null
+}
+
+/** 保存时引用素材的内容指纹，用于提示素材已修改或删除 */
+export interface RefStamp {
+  name: string
+  kind: string
+  hash: string
+  /** 动作卡：保存时的姿态模板 ID */
+  templates?: number[]
+}
+
+export interface PresetData {
+  items: PresetItem[]
+  slots: OutfitSlot[]
+  refs: Record<string, RefStamp>
+  /** 保存来源（只作说明） */
+  source?: { task?: string; character?: string; from?: number; to?: number }
+}
+
+/** kind：action 为单个动作序列预设，set 为整组套图模板 */
+export type PresetKind = 'action' | 'set'
+export interface Preset extends Timestamps {
+  id: number
+  kind: PresetKind
+  name: string
+  data: PresetData
+  sort: number
 }
 
 export interface TaskOutput {

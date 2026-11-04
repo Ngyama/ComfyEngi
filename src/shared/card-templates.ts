@@ -1,6 +1,7 @@
-// 模板体位：体位（动作卡）→ 子体位（分类）→ Prompt 模板。每个模板是人工写好的完整 Prompt，生成时整份使用，不再临时拼接素材池。
-// 模板中的占位符（{全局}、{女特征}、{表情} 等）在生成时替换为对应内容，位置由模板决定；其余文字原样保留。
-// 张数先按选中的子体位平分（除不尽的几张由组合 Seed 随机分给其中几个子体位），子体位内的「模板 × 表情」组合轮流使用。
+// 动作卡（如「正常位」）→ 姿态模板。每个姿态模板是人工写好的完整 Prompt，生成时整份使用，不再临时拼接素材池。
+// 模板中的占位符（{全局}、{女特征}、{表情}、{行为} 等）在生成时替换为对应内容，位置由模板决定；其余文字（换行、权重、动态语法）原样保留。
+// 动作卡只负责姿态：表情、行为由动作序列选择。每张图从启用的姿态模板中按组合 Seed 轮流抽取一个（每轮打乱一次）。
+// 模板的 category 字段是旧版「子体位」，只用于排序，不再参与抽取或分配张数。
 
 import { cardPool, mixSeed, resolvePool, seededRandom } from './cards'
 import { CARD_POOLS, type ActionCard, type CardPoolKey, type CardTemplatePick, type Template } from './types'
@@ -8,13 +9,16 @@ import { CARD_POOLS, type ActionCard, type CardPoolKey, type CardTemplatePick, t
 /** 占位符 → 模块。同一模块可以有多个写法（女特征 / 主角色） */
 export const TEMPLATE_SLOTS: { module: string; names: string[]; label: string }[] = [
   { module: 'global', names: ['全局'], label: '全局 Prompt（画质 / 画风）' },
+  { module: 'style', names: ['画风'], label: '画风（已合并到 {全局}，这里始终留空）' },
   { module: 'scene', names: ['场景'], label: '场景' },
   { module: 'camera', names: ['镜头'], label: '镜头' },
   { module: 'character', names: ['女特征', '主角色'], label: '主角色基础 Prompt（含 LoRA 触发词）' },
   { module: 'outfit', names: ['女服装', '主角色服装'], label: '主角色服装' },
-  { module: 'expression', names: ['表情'], label: '表情（模板没有 {表情} 时写在 {女服装} 之后）' },
+  { module: 'expression', names: ['表情', '女表情'], label: '主角色表情（动作序列中选择；模板没有 {表情} 时写在 {女服装} 之后）' },
+  { module: 'interaction', names: ['行为'], label: '行为（每张从动作序列的行为候选中随机 0～1 个；模板没有 {行为} 时写在 {男特征} 之前）' },
   { module: 'character2', names: ['男特征', '第二角色'], label: '第二角色基础 Prompt' },
   { module: 'outfit2', names: ['男服装', '第二角色服装'], label: '第二角色服装' },
+  { module: 'expression2', names: ['男表情', '第二角色表情'], label: '第二角色表情（模板没有 {男表情} 时写在 {男服装} 之后）' },
   { module: 'extra', names: ['附加'], label: '动作的附加 Prompt（模板中没有时追加在末尾）' },
 ]
 const SLOT_OF = new Map(TEMPLATE_SLOTS.flatMap((s) => s.names.map((n) => [n, s.module] as const)))
@@ -24,9 +28,9 @@ const OTHER_NAMES = new Set(['角色名', '角色标签'])
 export const UNCATEGORIZED = ''
 export const categoryLabel = (c: string) => c || '未分类'
 
-/** 新建模板的默认正文：双人卡含第二角色一行；中间空行写动作 */
+/** 新建模板的默认正文：双人卡含第二角色一行；中间空行写姿态 */
 export function defaultSkeleton(solo: boolean): string {
-  return ['{全局},', '{场景}, {镜头},', '{女特征}, {女服装}, {表情},', '', ...(solo ? [] : ['{男特征}, {男服装},']), '{附加}'].join('\n')
+  return ['{全局},', '{场景}, {镜头},', '{女特征}, {女服装}, {表情},', '', '{行为},', ...(solo ? [] : ['{男特征}, {男服装}, {男表情},']), '{附加}'].join('\n')
 }
 export const skeletonOf = (card: Pick<Template, 'card'> | null | undefined) => card?.card?.skeleton ?? defaultSkeleton(!!card?.card?.solo)
 
@@ -44,43 +48,77 @@ export function templatePlaceholders(body: string): { modules: Set<string>; unkn
 }
 
 const S = '\u0000'
-/** 模板没有写占位符时追加在末尾的模块（其他模块没有占位符就不写入） */
-export const APPENDED = ['expression', 'extra']
+/**
+ * 模板没有写对应占位符时仍会写入的模块及其默认位置（按顺序找第一个存在的锚点；都没有时追加在末尾）。
+ * 其他模块没有占位符就不写入（规划时提示）
+ */
+const ANCHORS: Record<string, { after?: string[]; before?: string[] }> = {
+  expression: { after: ['outfit', 'character'] },
+  expression2: { after: ['outfit2', 'character2'] },
+  interaction: { before: ['character2'] },
+  extra: {},
+}
+export const APPENDED = Object.keys(ANCHORS)
 const clean = (v: string | undefined) => (v ?? '').trim().replace(/[,，\s]+$/, '')
+const slotRe = (mod: string) => new RegExp(`\\{\\s*(?:${TEMPLATE_SLOTS.find((s) => s.module === mod)!.names.join('|')})\\s*\\}`)
 
-/** 表情的默认位置：模板没有 {表情} 时紧跟在主角色服装之后（没有服装占位符时在主角色之后，都没有时追加在末尾） */
-export function expressionAnchor(body: string): { index: number } | null {
-  if (templatePlaceholders(body).modules.has('expression')) return null
-  for (const mod of ['outfit', 'character']) {
-    const names = TEMPLATE_SLOTS.find((s) => s.module === mod)!.names
-    const m = new RegExp(`\\{\\s*(?:${names.join('|')})\\s*\\}`).exec(body ?? '')
-    if (m) return { index: m.index + m[0].length }
+/** 模块的默认插入位置：模板已有该占位符时为 null；index 为插入位置，before 表示插在锚点前 */
+export function moduleAnchor(body: string, mod: string): { index: number; before: boolean } | null {
+  const a = ANCHORS[mod]
+  if (!a || templatePlaceholders(body).modules.has(mod)) return null
+  for (const m of a.after ?? []) {
+    const hit = slotRe(m).exec(body ?? '')
+    if (hit) return { index: hit.index + hit[0].length, before: false }
+  }
+  for (const m of a.before ?? []) {
+    const hit = slotRe(m).exec(body ?? '')
+    if (hit) return { index: hit.index, before: true }
   }
   return null
 }
 
+/** 表情的默认位置：模板没有 {表情} 时紧跟在主角色服装之后（没有服装占位符时在主角色之后，都没有时追加在末尾） */
+export const expressionAnchor = (body: string): { index: number } | null => moduleAnchor(body, 'expression')
+
 /**
  * 按占位符位置填入模块内容。空内容的占位符连同相邻的一个逗号一起去掉；整行只剩占位符时删除这一行。
- * 模板中没有 {表情} 时写在主角色服装之后（见 expressionAnchor）；没有 {附加} 而内容不为空时追加在末尾。其他文字（权重、换行、动态语法）原样保留
+ * 模板中没有 {表情} / {男表情} / {行为} 而内容不为空时写在默认位置（见 moduleAnchor），没有 {附加} 时追加在末尾。
+ * 其他文字（权重、换行、动态语法）原样保留
  */
 export function fillTemplate(body: string, values: Partial<Record<string, string>>): string {
   const used = new Set<string>()
-  const at = clean(values.expression) ? expressionAnchor(body) : null
-  const source = at ? `${body.slice(0, at.index)}, {表情}${body.slice(at.index)}` : (body ?? '')
+  let source = body ?? ''
+  for (const mod of APPENDED) {
+    if (!clean(values[mod])) continue
+    const at = moduleAnchor(source, mod)
+    if (!at) continue
+    const ph = `{${TEMPLATE_SLOTS.find((s) => s.module === mod)!.names[0]}}`
+    source = `${source.slice(0, at.index)}${at.before ? `${ph}, ` : `, ${ph}`}${source.slice(at.index)}`
+  }
   const replaced = source.replace(/\{([^{}|]*)\}/g, (all, raw: string) => {
     const mod = SLOT_OF.get(raw.trim())
     if (!mod) return all
     used.add(mod)
     return clean(values[mod]) || S
   })
-  const lines = replaced.split('\n').flatMap((line) => {
-    if (!line.includes(S)) return [line]
-    const l = line
-      .replace(new RegExp(`${S}[ \\t]*[,，][ \\t]*`, 'g'), '')
-      .replace(new RegExp(`[ \\t]*[,，]?[ \\t]*${S}`, 'g'), '')
-      .replace(/[ \t]+$/, '')
-    return l.trim() ? [l] : []
-  })
+  // 整行删除后，原本分隔它的两侧空行只保留一个（模板自己写的空行不变）
+  const lines: string[] = []
+  let removed = false
+  for (const line of replaced.split('\n')) {
+    const l = line.includes(S)
+      ? line
+          .replace(new RegExp(`${S}[ \\t]*[,，][ \\t]*`, 'g'), '')
+          .replace(new RegExp(`[ \\t]*[,，]?[ \\t]*${S}`, 'g'), '')
+          .replace(/[ \t]+$/, '')
+      : line
+    if (line.includes(S) && !l.trim()) {
+      removed = true
+      continue
+    }
+    if (removed && !l.trim() && lines.length && !lines[lines.length - 1].trim()) continue
+    removed = false
+    lines.push(l)
+  }
   let text = lines.join('\n').trim()
   for (const mod of APPENDED) {
     const v = clean(values[mod])
@@ -102,15 +140,9 @@ export function categoryOrder(card: ActionCard | null | undefined, tpls: Pick<Te
   return out
 }
 
-/** 一张动作卡的全部模板，按分类顺序、分类内的手动顺序排列 */
+/** 一张动作卡的全部姿态模板，按手动顺序排列（旧版子体位分类不再影响顺序） */
 export function cardTemplates(card: Pick<Template, 'id' | 'card'>, all: Iterable<Template>): Template[] {
-  const own = [...all].filter((t) => t.kind === 'card_tpl' && t.parent_id === card.id)
-  const order = categoryOrder(card.card, own)
-  const rank = (c: string) => {
-    const i = order.indexOf(c ?? '')
-    return i < 0 ? order.length : i
-  }
-  return own.sort((a, b) => rank(a.category) - rank(b.category) || (a.sort ?? 0) - (b.sort ?? 0) || a.id - b.id)
+  return [...all].filter((t) => t.kind === 'card_tpl' && t.parent_id === card.id).sort((a, b) => (a.sort ?? 0) - (b.sort ?? 0) || a.id - b.id)
 }
 
 /** 动作序列实际参与抽取的模板（顺序与 cardTemplates 相同） */
@@ -125,45 +157,22 @@ export function pickedTemplates(tpls: Template[], pick: CardTemplatePick | null 
 /** 一个模板是否参与抽取（界面勾选状态，与 pickedTemplates 一致） */
 export const isPicked = (t: Template, pick: CardTemplatePick | null | undefined) => pickedTemplates([t], pick).length === 1
 
-/** 勾选 / 取消一个分类：之前单独加入或排除的这个分类的模板恢复跟随分类 */
-export function toggleCategory(tpls: Template[], pick: CardTemplatePick | null | undefined, cat: string, on: boolean): CardTemplatePick {
-  const all = categoryOrder(null, tpls)
-  const cats = new Set(pick?.categories ?? all)
-  if (on) cats.add(cat)
-  else cats.delete(cat)
-  const inCat = new Set(tpls.filter((t) => (t.category ?? '') === cat).map((t) => t.id))
-  return simplify(tpls, { categories: [...cats], include: (pick?.include ?? []).filter((x) => !inCat.has(x)), exclude: (pick?.exclude ?? []).filter((x) => !inCat.has(x)) })
+/**
+ * 勾选 / 取消姿态模板（ids 为要改变的模板）。结果只用 exclude 表示「不参与的模板」，之后新增的模板默认参与；
+ * 旧任务中按分类（子体位）的选择在第一次修改时转换为等价的排除列表。全部启用时返回 undefined
+ */
+export function setPicked(tpls: Template[], pick: CardTemplatePick | null | undefined, ids: number[], on: boolean): CardTemplatePick | undefined {
+  const change = new Set(ids)
+  const exclude = tpls.filter((t) => (change.has(t.id) ? !on : !isPicked(t, pick))).map((t) => t.id)
+  return exclude.length ? { exclude } : undefined
 }
 
-/** 勾选 / 取消一个模板 */
-export function toggleTemplate(tpls: Template[], pick: CardTemplatePick | null | undefined, t: Template, on: boolean): CardTemplatePick {
-  const cats = new Set(pick?.categories ?? categoryOrder(null, tpls))
-  const follows = cats.has(t.category ?? '')
-  const include = (pick?.include ?? []).filter((x) => x !== t.id)
-  const exclude = (pick?.exclude ?? []).filter((x) => x !== t.id)
-  if (on && !follows) include.push(t.id)
-  if (!on && follows) exclude.push(t.id)
-  return simplify(tpls, { categories: [...cats], include, exclude })
-}
-
-/** 全部勾选时去掉多余字段（等于默认：全部模板，之后新增的模板也参与） */
-function simplify(tpls: Template[], p: CardTemplatePick): CardTemplatePick {
-  const all = categoryOrder(null, tpls)
-  const known = new Set(tpls.map((t) => t.id))
-  const out: CardTemplatePick = {}
-  const cats = (p.categories ?? []).filter((c, i, a) => a.indexOf(c) === i)
-  if (!all.every((c) => cats.includes(c))) out.categories = cats
-  const include = (p.include ?? []).filter((x) => known.has(x))
-  const exclude = (p.exclude ?? []).filter((x) => known.has(x))
-  if (include.length) out.include = include
-  if (exclude.length) out.exclude = exclude
-  return out
-}
+/** 旧任务的模板来源是否还在使用分类（子体位）选择 */
+export const legacyPick = (pick: CardTemplatePick | null | undefined) => !!(pick?.categories || pick?.include?.length)
 
 // ---------------------------------------------------------------- 抽取
 const TEMPLATE_STREAM = 0x74706c
-
-const SPLIT_STREAM = 0x737562
+const BEHAVIOR_STREAM = 0x626876
 
 function shuffled(n: number, rnd: () => number): number[] {
   const order = Array.from({ length: n }, (_, i) => i)
@@ -174,7 +183,7 @@ function shuffled(n: number, rnd: () => number): number[] {
   return order
 }
 
-/** 第 k 张图片的组合：第 r 轮（k / n）把全部组合打乱后依次使用，同样的组合 Seed 得到同样的顺序。stream 区分同一动作中的不同子体位 */
+/** 第 k 张图片的姿态模板：第 r 轮（k / n）把全部模板打乱后依次使用，同样的组合 Seed 得到同样的顺序 */
 export function drawTemplate<T>(list: T[], comboSeed: number, itemIndex: number, k: number, stream = 0): T | null {
   const n = list.length
   if (!n) return null
@@ -183,55 +192,18 @@ export function drawTemplate<T>(list: T[], comboSeed: number, itemIndex: number,
   return list[order[k % n]]
 }
 
-/** 模板使用的表情 ID：模板单独设置的优先，没有时使用体位的默认表情 */
-export const templateExpressionIds = (t: Pick<Template, 'card'>, card: Pick<Template, 'card'> | null | undefined): number[] => (t.card?.expressions?.length ? t.card.expressions : card?.card?.expressions) ?? []
-
-export interface TemplateCombo {
-  template: Template
-  expression: Template | null
+/** 第 k 张图片的行为：在「无行为」和每个候选之间等概率抽取（每张独立），没有候选时始终为 null */
+export function drawBehavior<T>(candidates: T[], comboSeed: number, itemIndex: number, k: number): T | null {
+  if (!candidates.length) return null
+  const i = Math.floor(seededRandom(mixSeed(comboSeed, itemIndex, k, BEHAVIOR_STREAM))() * (candidates.length + 1))
+  return i === 0 ? null : candidates[i - 1]
 }
 
-/** 模板 × 表情：每个模板与它的每个表情组成一种组合；没有表情时模板单独成一种。已删除的表情跳过并计入 missing */
-export function templateCombos(list: Template[], card: Pick<Template, 'card'> | null | undefined, getExpr: (id: number) => Template | null | undefined): { combos: TemplateCombo[]; missing: number } {
-  let missing = 0
-  const combos = list.flatMap((t): TemplateCombo[] => {
-    const ids = templateExpressionIds(t, card)
-    if (!ids.length) return [{ template: t, expression: null }]
-    const ex = ids.map((id) => getExpr(id)).filter((e): e is Template => !!e)
-    missing += ids.length - ex.length
-    return ex.length ? ex.map((e) => ({ template: t, expression: e })) : [{ template: t, expression: null }]
-  })
-  return { combos, missing }
-}
-
-/** 选中的模板按子体位分组（顺序与 categoryOrder 相同；没有选中模板的子体位不出现） */
-export function groupBySubposition(card: Pick<Template, 'card'> | null | undefined, list: Template[]): { category: string; templates: Template[] }[] {
-  return categoryOrder(card?.card, list)
-    .map((c) => ({ category: c, templates: list.filter((t) => (t.category ?? '') === c) }))
-    .filter((g) => g.templates.length)
-}
-
-/**
- * 张数在 n 个子体位之间平分；除不尽的 r 张由组合 Seed 随机分给 r 个子体位。
- * 返回每张图片属于第几个子体位、是该子体位的第几张；各子体位交错排列（多尺寸时每种尺寸都有各个子体位）
- */
-export function splitBySubposition(n: number, total: number, comboSeed: number, itemIndex: number): { group: number; index: number }[] {
-  if (n <= 0 || total <= 0) return []
-  const quota = Array.from({ length: n }, () => Math.floor(total / n))
-  const order = shuffled(n, seededRandom(mixSeed(comboSeed, itemIndex, 0, SPLIT_STREAM)))
-  for (let i = 0; i < total % n; i++) quota[order[i]]++
-  const used = quota.map(() => 0)
-  const out: { group: number; index: number }[] = []
-  for (let r = 0; out.length < total; r++) for (let g = 0; g < n; g++) if (r < quota[g]) out.push({ group: g, index: used[g]++ })
-  return out
-}
-
-/** 界面说明：每个子体位多少张 */
-export function splitSummary(n: number, total: number): string {
-  if (!n) return '没有选中子体位'
-  const per = Math.floor(total / n)
-  const rest = total % n
-  return n === 1 ? `${total} 张` : `每个子体位 ${per}${rest ? `～${per + 1}` : ''} 张${rest ? `（多出的 ${rest} 张随机分配）` : ''}`
+/** 旧版在动作卡 / 姿态模板上设置的表情 ID（新版本不再使用，只用于提示和清除） */
+export function legacyExpressionIds(card: Pick<Template, 'card'> | null | undefined, tpls: Pick<Template, 'card'>[]): number[] {
+  const out = new Set<number>(card?.card?.expressions ?? [])
+  for (const t of tpls) for (const id of t.card?.expressions ?? []) out.add(id)
+  return [...out]
 }
 
 // ---------------------------------------------------------------- 显示

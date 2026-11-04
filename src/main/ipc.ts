@@ -1,3 +1,4 @@
+import { normalizePresetData } from '@shared/presets'
 import { normalizeReplicaData } from '@shared/replica'
 import { enqueueReplica, finalReplicaWorkflow, imageFromScan, planForReplica, relocateImages, relocateOne, workflowPreview } from './replica'
 import { LoraManager, pathKey } from './lora-manager'
@@ -89,8 +90,12 @@ function record(table: TableName, v: unknown): Record<string, unknown> {
         throw new BadArg((e as Error).message)
       }
     } else if (c === 'api_json' || c === 'data') {
-      out[c] = c === 'data' ? (table === 'replicas' ? normalizeReplicaData(plain(val, 'data') as never) : normalizeTaskData(plain(val, 'data') as never)) : plain(val, c)
+      out[c] = c === 'data' ? (table === 'replicas' ? normalizeReplicaData(plain(val, 'data') as never) : table === 'presets' ? normalizePresetData(plain(val, 'data') as never) : normalizeTaskData(plain(val, 'data') as never)) : plain(val, c)
     }
+  }
+  if (table === 'presets') {
+    if ('kind' in out && out.kind !== 'action' && out.kind !== 'set') throw new BadArg(`未知的预设类型 ${out.kind}`)
+    return out
   }
   if ('kind' in out && !(out.kind as string in TEMPLATE_KINDS)) throw new BadArg(`未知的模板类型 ${out.kind}`)
   // 「单人动作」「行为」已合并为「状态」：旧类型名一律按状态保存
@@ -359,6 +364,10 @@ export function registerIpc(ctx: IpcContext) {
       if (!w) throw new BadArg('工作流不存在')
       return workflowPreview(w)
     },
+    'presets.list': () => store.list('presets'),
+    'presets.save': (rec) => ({ id: store.save('presets', record('presets', rec)) }),
+    'presets.remove': (id) => store.remove('presets', int(id)),
+    'presets.duplicate': (id) => ({ id: store.duplicate('presets', int(id)) }),
     'replicas.list': () => store.list('replicas').map((r) => ({ id: r.id!, name: r.name ?? '', count: r.data?.images?.length ?? 0, updated_at: (r as unknown as { updated_at?: number }).updated_at ?? null })),
     'replicas.get': (id) => {
       const r = store.get('replicas', int(id))

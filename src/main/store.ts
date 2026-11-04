@@ -25,6 +25,7 @@ import {
   type Task,
   type Template,
   type UnitMeta,
+  type Preset,
   type Workflow,
 } from '@shared/types'
 
@@ -32,6 +33,9 @@ const SCHEMA = `
 CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT);
 CREATE TABLE IF NOT EXISTS replicas (
     id INTEGER PRIMARY KEY, name TEXT NOT NULL DEFAULT '', data TEXT NOT NULL DEFAULT '{}',
+    sort INTEGER NOT NULL DEFAULT 0, created_at REAL, updated_at REAL);
+CREATE TABLE IF NOT EXISTS presets (
+    id INTEGER PRIMARY KEY, kind TEXT NOT NULL DEFAULT 'action', name TEXT NOT NULL DEFAULT '', data TEXT NOT NULL DEFAULT '{}',
     sort INTEGER NOT NULL DEFAULT 0, created_at REAL, updated_at REAL);
 CREATE TABLE IF NOT EXISTS templates (
     id INTEGER PRIMARY KEY, kind TEXT NOT NULL, name TEXT NOT NULL DEFAULT '',
@@ -89,7 +93,7 @@ BEGIN SELECT RAISE(ABORT, '提交快照不可修改'); END;
  * 0 = 旧版 Python 程序创建的数据库；1 = Electron 版（表结构相同，仅登记版本）。
  * 将来需要改表结构时在 MIGRATIONS 中追加步骤；每次迁移前都会先自动备份。
  */
-export const SCHEMA_VERSION = 7
+export const SCHEMA_VERSION = 8
 const MIGRATIONS: Record<number, (db: DatabaseSync) => void> = {
   1: () => {
     /* v0 → v1：结构不变 */
@@ -121,6 +125,8 @@ const MIGRATIONS: Record<number, (db: DatabaseSync) => void> = {
   },
   // v6 → v7：套图复刻草稿 replicas（由 SCHEMA 建表；已有数据不变）
   7: () => {},
+  // v7 → v8：动作序列预设与套图模板 presets（由 SCHEMA 建表；已有数据不变）
+  8: () => {},
 }
 
 export const TABLES = {
@@ -131,9 +137,10 @@ export const TABLES = {
   workflows: { cols: ['name', 'api_json', 'mapping', 'controls', 'note', 'sort'], json: ['api_json', 'mapping', 'controls'] },
   tasks: { cols: ['name', 'data', 'sort'], json: ['data'] },
   replicas: { cols: ['name', 'data', 'sort'], json: ['data'] },
+  presets: { cols: ['kind', 'name', 'data', 'sort'], json: ['data'] },
 } as const
 export type TableName = keyof typeof TABLES
-type RowOf = { templates: Template; characters: Character; outfits: Outfit; stories: Story; workflows: Workflow; tasks: Task; replicas: ReplicaRecord }
+type RowOf = { templates: Template; characters: Character; outfits: Outfit; stories: Story; workflows: Workflow; tasks: Task; replicas: ReplicaRecord; presets: Preset }
 
 const UNIT_JSON = ['meta', 'modules', 'inputs', 'outputs'] as const
 type SqlValue = string | number | null
@@ -391,6 +398,11 @@ export class Store {
         if (v === id || (Array.isArray(v) && v.includes(id))) hit = true
       }
       if (hit) names.push(t.name)
+    }
+    // 动作预设与套图模板也引用素材（服装保存为槽位，不在这里）
+    for (const p of this.list('presets')) {
+      const items = ((p.data ?? {}) as unknown as { items?: Record<string, unknown>[] }).items ?? []
+      if (items.some((it) => it[field] === id || (Array.isArray(it[field]) && (it[field] as unknown[]).includes(id)))) names.push(`${p.kind === 'set' ? '套图模板' : '动作预设'}「${p.name}」`)
     }
     return names
   }

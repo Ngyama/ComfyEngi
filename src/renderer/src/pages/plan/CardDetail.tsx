@@ -1,8 +1,9 @@
-// 动作卡条目的详细设置：日常只需要动作卡、服装、场景和各尺寸张数；局部姿态、表情、双人互动按动作卡保存的默认规则自动抽取。
-// 「高级组合设置」默认折叠，可以按池覆盖规则或禁止某些素材，只对当前任务生效（不修改素材库中的动作卡），可一键恢复默认。
+// 动作卡条目（动作序列）的详细设置：动作卡与参与的姿态模板、服装、固定表情、行为候选、场景、镜头、各尺寸张数、附加 Prompt。
+// 每张图从启用的姿态模板中轮流抽取一个；表情每张相同（需要两种表情时复制动作）；行为每张在「无」和各候选之间等概率抽取一个。
+// 旧版素材池动作卡保留「高级组合设置」（按池覆盖规则，只对当前任务生效）。可以把这个动作保存为预设，在其他任务中复用。
 
 import { useMemo, useState } from 'react'
-import { MapPin, RotateCcw, Shirt, Users, X } from 'lucide-react'
+import { BookmarkPlus, Heart, MapPin, RotateCcw, Shirt, Smile, Users, X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Disclosure, NumberStepper, PromptField } from '@/components/common'
 import { CardPools, PickSources } from '@/components/card-pools'
@@ -18,8 +19,9 @@ import { MaterialPicker } from './MaterialPicker'
 import { CameraField, PickField, Section, SizeCards } from './PoseDetail'
 import { TemplateSource } from './TemplateSource'
 import { UnitPrompt } from './UnitPrompt'
+import { SavePresetDialog } from './presets'
 
-type PickerKey = 'card' | 'scene' | 'outfit' | 'outfit2'
+type PickerKey = 'card' | 'scene' | 'outfit' | 'outfit2' | 'expression' | 'expression2' | 'behavior'
 
 export function CardItemDetail({ index, units, onClose }: { index: number; units: PlanUnit[]; onClose: () => void }) {
   const lib = useLib((s) => s.lib)
@@ -27,7 +29,10 @@ export function CardItemDetail({ index, units, onClose }: { index: number; units
   const item = task?.data.items[index]
   const [picker, setPicker] = useState<PickerKey | null>(null)
   const [shown, setShown] = useState(0)
+  const [saving, setSaving] = useState(false)
   const cards = templatesOf(lib, 'position')
+  const exprs = templatesOf(lib, 'expression')
+  const states = templatesOf(lib, 'state')
   const scenes = templatesOf(lib, 'scene')
   const charId = task?.data.character_id
   const char2Id = task?.data.second_character_id ?? null
@@ -72,12 +77,15 @@ export function CardItemDetail({ index, units, onClose }: { index: number; units
 
   const outfitOpts = (list: typeof outfits): MaterialOption[] => list.map((o) => ({ id: o.id, name: o.name, positive: o.positive }))
   const single = (v: number | null | undefined) => (v ? [v] : [])
-  const pickers: Record<PickerKey, { title: string; items: MaterialOption[]; value: number[]; noneLabel?: string; onChange: (ids: number[]) => void; description?: string; empty?: string }> = {
+  const pickers: Record<PickerKey, { title: string; items: MaterialOption[]; value: number[]; noneLabel?: string; onChange: (ids: number[]) => void; description?: string; empty?: string; multi?: boolean }> = {
     // 换成另一张动作卡时，本任务对原卡的覆盖不再适用
-    card: { title: '体位', items: cards, value: single(item.card_id), onChange: (ids) => ids[0] && ids[0] !== item.card_id && update((d) => Object.assign(d.items[index], { card_id: ids[0], card_rules: undefined, card_exclude: undefined, card_pick: undefined })), empty: '还没有体位，可在「素材库 → 体位」中添加' },
+    card: { title: '动作卡', items: cards, value: single(item.card_id), onChange: (ids) => ids[0] && ids[0] !== item.card_id && update((d) => Object.assign(d.items[index], { card_id: ids[0], card_rules: undefined, card_exclude: undefined, card_pick: undefined })), empty: '还没有动作卡，可在「素材库 → 动作卡」中添加' },
     scene: { title: '场景', items: scenes, value: single(item.scene_id), noneLabel: defaultScene ? `任务默认：${defaultScene.name}` : '不指定', onChange: (ids) => set({ scene_id: ids[0] ?? null }), empty: '场景库为空，可在「素材库 → 场景」中添加' },
     outfit: { title: `主角色服装（${char?.name ?? ''}）`, items: outfitOpts(outfits), value: single(item.outfit_id), noneLabel: '不指定', onChange: (ids) => set({ outfit_id: ids[0] ?? null }), empty: charId ? '该角色还没有服装' : '先选择主角色' },
     outfit2: { title: `第二角色服装（${char2?.name ?? ''}）`, items: outfitOpts(outfits2), value: single(item.second_outfit_id), noneLabel: '不指定', onChange: (ids) => set({ second_outfit_id: ids[0] ?? null }) },
+    expression: { title: '主角色表情', items: exprs, value: single(item.expression_id), noneLabel: '不加表情', onChange: (ids) => set({ expression_id: ids[0] ?? null }), description: '本动作的每张图都使用这个表情，写入模板中 {表情} 的位置。需要两种表情时复制这个动作，分别选择。', empty: '表情库为空，可在「素材库 → 表情」中添加' },
+    expression2: { title: `第二角色表情（${char2?.name ?? ''}）`, items: exprs, value: single(item.second_expression_id), noneLabel: '不加表情', onChange: (ids) => set({ second_expression_id: ids[0] ?? null }), description: '写入模板中 {男表情} 的位置（没有时写在 {男服装} 之后）。', empty: '表情库为空，可在「素材库 → 表情」中添加' },
+    behavior: { title: '行为候选', items: states, value: item.behavior_ids ?? [], multi: true, onChange: (ids) => set({ behavior_ids: ids.length ? ids : undefined }), description: '每张图在「无行为」和这些候选之间等概率抽取一个（最多一个），写入模板中 {行为} 的位置。不选则不加行为。', empty: '还没有状态素材，可在「素材库 → 状态」中添加（例如 Kiss、Hug）' },
   }
   const cur = picker ? pickers[picker] : null
 
@@ -90,6 +98,9 @@ export function CardItemDetail({ index, units, onClose }: { index: number; units
         </span>
         {card && <span className={cn('shrink-0 rounded-md px-1.5 py-0.5 text-[10.5px]', solo ? 'bg-emerald-500/10 text-emerald-700' : 'bg-sky-500/10 text-sky-700')}>{solo ? '单人' : '双人'}</span>}
         <span className="shrink-0 text-xs text-muted-foreground tabular-nums">{total} 张</span>
+        <Button variant="ghost" size="xs" onClick={() => setSaving(true)} title="把这个动作序列保存为预设，在其他任务中复用" data-testid="save-action-preset">
+          <BookmarkPlus /> 保存为预设
+        </Button>
         <Button variant="ghost" size="icon-sm" onClick={onClose} aria-label="关闭">
           <X />
         </Button>
@@ -97,7 +108,19 @@ export function CardItemDetail({ index, units, onClose }: { index: number; units
 
       <div className="min-h-0 flex-1 space-y-3 overflow-y-auto px-4 pb-6">
         <Section title="画面内容" testId="detail-scene">
-          <PickField label="体位" names={nameOf(item.card_id, cards)} placeholder="选择体位" onOpen={() => setPicker('card')} testId="pick-card" hint={card ? (templated ? '张数按下方选中的子体位平分，子体位内的「模板 × 表情」组合轮流使用' : '基础 Prompt、子体位、局部姿态、表情和互动按动作卡的默认规则自动组合') : undefined} />
+          <PickField label="动作卡" names={nameOf(item.card_id, cards)} placeholder="选择动作卡" onOpen={() => setPicker('card')} testId="pick-card" hint={card ? (templated ? '每张图从下方启用的姿态模板中轮流抽取一个' : '旧版动作卡：基础 Prompt、子体位、局部姿态、表情和互动按动作卡的默认规则自动组合') : undefined} />
+          {templated && (
+            <PickField
+              label="行为"
+              icon={<Heart />}
+              names={(item.behavior_ids ?? []).map((id) => T(id)?.name ?? '（已删除）')}
+              placeholder="不加行为"
+              onOpen={() => setPicker('behavior')}
+              onClear={() => set({ behavior_ids: undefined })}
+              testId="pick-behavior"
+              hint={item.behavior_ids?.length ? `每张在「无」和 ${item.behavior_ids.length} 个候选之间随机抽取一个` : undefined}
+            />
+          )}
           <PickField label="场景" icon={<MapPin />} names={nameOf(item.scene_id, scenes)} placeholder={defaultScene ? `任务默认：${defaultScene.name}` : '不指定'} onOpen={() => setPicker('scene')} onClear={() => set({ scene_id: null })} testId="pick-scene" />
           <CameraField item={item} onChange={set} />
         </Section>
@@ -107,6 +130,7 @@ export function CardItemDetail({ index, units, onClose }: { index: number; units
             主角色：{charId ? (char?.name ?? '（已删除）') : '先在页面顶部选择主角色'}
           </div>
           <PickField label="服装" icon={<Shirt />} names={nameOf(item.outfit_id, outfits)} placeholder="不指定" onOpen={() => setPicker('outfit')} onClear={() => set({ outfit_id: null })} testId="pick-outfit" />
+          {templated && <PickField label="表情" icon={<Smile />} names={nameOf(item.expression_id, exprs)} placeholder="不加表情" onOpen={() => setPicker('expression')} onClear={() => set({ expression_id: null })} testId="pick-expression" hint="本动作每张图使用同一个表情" />}
           <div className="flex items-center gap-2 border-t border-tint/[0.06] pt-2.5">
             <Users className="size-3.5 text-muted-foreground" />
             <span className="text-[12.5px] font-medium" data-testid="role-second">
@@ -117,6 +141,7 @@ export function CardItemDetail({ index, units, onClose }: { index: number; units
             </span>
           </div>
           {!solo && char2 && <PickField label="服装" icon={<Shirt />} names={nameOf(item.second_outfit_id, outfits2)} placeholder="不指定" onOpen={() => setPicker('outfit2')} onClear={() => set({ second_outfit_id: null })} testId="second-outfit" />}
+          {templated && !solo && char2 && <PickField label="表情" icon={<Smile />} names={nameOf(item.second_expression_id, exprs)} placeholder="不加表情" onOpen={() => setPicker('expression2')} onClear={() => set({ second_expression_id: null })} testId="second-expression" />}
         </Section>
 
         <Section title="生成设置" right={<span className="text-xs text-muted-foreground tabular-nums">本动作共 {total} 张</span>} testId="detail-generate">
@@ -164,7 +189,7 @@ export function CardItemDetail({ index, units, onClose }: { index: number; units
           </Disclosure>
         </Section>
 
-        {card && templated && <TemplateSource card={card} pick={item.card_pick} total={total} onChange={(p) => set({ card_pick: p })} />}
+        {card && templated && <TemplateSource card={card} pick={item.card_pick} onChange={(p) => set({ card_pick: p })} />}
 
         {card && !templated && (
           <Disclosure
@@ -197,9 +222,12 @@ export function CardItemDetail({ index, units, onClose }: { index: number; units
           noneLabel={cur.noneLabel}
           onChange={cur.onChange}
           empty={cur.empty}
+          multi={cur.multi}
+          numbered={cur.multi}
           testId="material-picker"
         />
       )}
+      <SavePresetDialog open={saving} onOpenChange={setSaving} kind="action" from={index} to={index} defaultName={[card?.name, nameOf(item.expression_id, exprs)[0]].filter(Boolean).join(' · ')} />
     </div>
   )
 }

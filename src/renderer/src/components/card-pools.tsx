@@ -311,7 +311,7 @@ export function CardPools({
   )
 }
 
-const POOL_LABEL = { ...Object.fromEntries(CARD_POOLS.map((p) => [p.key, p.label])), template: 'Prompt 模板', expression: '表情' } as Record<CardPick['pool'], string>
+const POOL_LABEL = { ...Object.fromEntries(CARD_POOLS.map((p) => [p.key, p.label])), template: '姿态模板', expression: '表情', behavior: '行为' } as Record<CardPick['pool'], string>
 
 /** 一张图片实际使用的素材：按池列出，标明固定 / 随机（来自冻结的计划，与 Prompt 一致） */
 export function PickSources({ picks, card, camera }: { picks?: CardPick[]; card?: string; camera?: string }) {

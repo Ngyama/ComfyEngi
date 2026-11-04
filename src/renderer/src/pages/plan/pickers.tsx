@@ -14,7 +14,7 @@ import { cn } from '@/lib/utils'
 import { pickRandomStory } from '@shared/planner'
 import { isTemplateCard } from '@shared/card-templates'
 import type { CardTemplatePick, Story } from '@shared/types'
-import { SubpositionPicker, subpositionsOf } from './TemplateSource'
+import { PoseTemplatePicker, posesOf } from './TemplateSource'
 
 // ---------------------------------------------------------------- 角色
 export function CharacterPicker({
@@ -238,7 +238,7 @@ export function StoryPicker({
 }
 
 // ---------------------------------------------------------------- 动作
-/** 新增的动作：体位（每个体位一个动作，带选中的子体位），或旧方式的状态（多个状态合并为一个动作） */
+/** 新增的动作：动作卡（每张卡一个动作，带启用的姿态模板），或旧方式的状态（多个状态合并为一个动作） */
 export type NewAction = { card_id: number; card_pick?: CardTemplatePick } | { state_ids: number[] }
 
 export function PosePicker({ open, onOpenChange, onAdd, insertAfter }: { open: boolean; onOpenChange: (o: boolean) => void; onAdd: (items: NewAction[]) => void; insertAfter: number | null }) {
@@ -250,7 +250,7 @@ export function PosePicker({ open, onOpenChange, onAdd, insertAfter }: { open: b
   const [mode, setMode] = useState<'card' | 'state'>('card')
   const [q, setQ] = useState('')
   const [picked, setPicked] = useState<string[]>([])
-  // 体位：当前在右侧选择子体位的体位，以及各体位选中的子体位（没有时为全部）
+  // 动作卡：当前在右侧选择姿态模板的卡，以及各卡启用的姿态模板（没有时为全部）
   const [focus, setFocus] = useState<number | null>(null)
   const [picks, setPicks] = useState<Record<number, CardTemplatePick | undefined>>({})
   useEffect(() => {
@@ -264,8 +264,8 @@ export function PosePicker({ open, onOpenChange, onAdd, insertAfter }: { open: b
   }, [open])
   const stateList = states.filter((p) => matchesName(p, q))
   const tpls = templatesOf(lib, 'card_tpl')
-  // 体位按名称、子体位或模板名称搜索
-  const cardList = cards.filter((p) => matchesName(p, q) || subs.some((s) => s.parent_id === p.id && matchesName(s, q)) || tpls.some((t) => t.parent_id === p.id && (matchesName(t, q) || (!!q && (t.category ?? '').includes(q)))))
+  // 动作卡按名称或姿态模板名称搜索
+  const cardList = cards.filter((p) => matchesName(p, q) || subs.some((s) => s.parent_id === p.id && matchesName(s, q)) || tpls.some((t) => t.parent_id === p.id && matchesName(t, q)))
   const toggle = (key: string) => setPicked((p) => (p.includes(key) ? p.filter((x) => x !== key) : [...p, key]))
   // 每张动作卡一个动作（按点选顺序）；旧方式点选的多个状态合并为同一个动作
   const toActions = (keys: string[]): NewAction[] => {
@@ -315,7 +315,7 @@ export function PosePicker({ open, onOpenChange, onAdd, insertAfter }: { open: b
         <DialogHeader>
           <DialogTitle>添加动作</DialogTitle>
           <DialogDescription>
-            {mode === 'card' ? '每个体位添加为一个动作：在右侧选择要生成的子体位，张数按子体位平分。' : '旧方式：点选的多个状态合并为一个动作，同一张图片中一起使用。'}
+            {mode === 'card' ? '每张动作卡添加为一个动作：在右侧取消不想用的姿态模板（默认全部启用），表情和行为在动作详情中选择。' : '旧方式：点选的多个状态合并为一个动作，同一张图片中一起使用。'}
             {insertAfter === null ? '添加到序列末尾' : `插入到第 ${insertAfter + 1} 个动作之后`}。双击可直接添加单个。
           </DialogDescription>
         </DialogHeader>
@@ -323,7 +323,7 @@ export function PosePicker({ open, onOpenChange, onAdd, insertAfter }: { open: b
           <div className="flex rounded-xl bg-tint/[0.04] p-1">
             {(
               [
-                ['card', '体位'],
+                ['card', '动作卡'],
                 ['state', '状态（旧方式）'],
               ] as const
             ).map(([k, l]) => (
@@ -340,7 +340,7 @@ export function PosePicker({ open, onOpenChange, onAdd, insertAfter }: { open: b
               {cardList.map((c) => {
                 const key = `c:${c.id}`
                 const on = picked.includes(key)
-                const info = isTemplateCard(c) ? subpositionsOf(lib, c, picks[c.id]) : null
+                const info = isTemplateCard(c) ? posesOf(lib, c, picks[c.id]) : null
                 return (
                   <div
                     key={key}
@@ -363,21 +363,21 @@ export function PosePicker({ open, onOpenChange, onAdd, insertAfter }: { open: b
                     </div>
                     <div className="mt-0.5 truncate text-[10.5px] text-muted-foreground">
                       <span className={c.card?.solo ? 'text-emerald-700' : 'text-sky-700'}>{c.card?.solo ? '单人' : '双人'}</span>
-                      {info ? ` · ${info.names.length ? `${info.names.join('、')} · ${info.combos} 种组合` : '没有选中子体位'}` : ' · 旧版动作卡'}
+                      {info ? ` · ${info.picked ? `${info.picked}${info.picked !== info.total ? ` / ${info.total}` : ''} 个姿态模板` : '没有启用姿态模板'}` : ' · 旧版动作卡'}
                     </div>
                   </div>
                 )
               })}
             </div>
-            <div className="min-w-0 flex-1 overflow-y-auto rounded-xl bg-tint/[0.02] p-3 ring-1 ring-tint/[0.07]" data-testid="card-subpositions">
+            <div className="min-w-0 flex-1 overflow-y-auto rounded-xl bg-tint/[0.02] p-3 ring-1 ring-tint/[0.07]" data-testid="card-poses">
               {(() => {
                 const c = cardList.find((x) => x.id === focus) ?? null
-                if (!c) return <div className="pt-8 text-center text-xs text-muted-foreground">点击左侧的体位，在这里选择要生成的子体位。默认使用全部子体位。</div>
+                if (!c) return <div className="pt-8 text-center text-xs text-muted-foreground">点击左侧的动作卡，在这里选择参与的姿态模板。默认全部启用。</div>
                 if (!isTemplateCard(c)) return <div className="text-xs text-muted-foreground">旧版动作卡：按卡片的默认组合规则生成。</div>
                 return (
                   <div className="space-y-2">
-                    <div className="text-[13px] font-medium">{c.name} · 子体位</div>
-                    <SubpositionPicker
+                    <div className="text-[13px] font-medium">{c.name} · 姿态模板</div>
+                    <PoseTemplatePicker
                       card={c}
                       pick={picks[c.id]}
                       onChange={(p) => {
@@ -397,15 +397,15 @@ export function PosePicker({ open, onOpenChange, onAdd, insertAfter }: { open: b
             <div className="col-span-3">
               <EmptyState
                 icon={<Sparkles />}
-                title={q ? '没有匹配的素材' : mode === 'card' ? '还没有体位' : '还没有状态素材'}
-                description={mode === 'card' ? '体位在「素材库 → 体位」中管理：子体位与 Prompt 模板只需配置一次。' : '状态在「素材库 → 状态」中管理。'}
+                title={q ? '没有匹配的素材' : mode === 'card' ? '还没有动作卡' : '还没有状态素材'}
+                description={mode === 'card' ? '动作卡在「素材库 → 动作卡」中管理：姿态模板只需写一次。' : '状态在「素材库 → 状态」中管理。'}
               />
             </div>
           )}
         </div>
         <DialogFooter className="sm:justify-between">
           <Button variant="ghost" onClick={() => (onOpenChange(false), go('library'))}>
-            管理体位
+            管理动作卡
           </Button>
           <Button disabled={!picked.length} onClick={() => commit(picked)}>
             <Plus /> 添加 {nNew || ''} 个动作

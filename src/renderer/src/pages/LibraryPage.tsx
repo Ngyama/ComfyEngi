@@ -1,6 +1,6 @@
 // 素材库：全局 / 场景 / 状态 / 表情 / 镜头视角 / 动作卡。卡片浏览 + 右侧编辑，修改自动保存。
 // 状态（旧版单人动作与行为合并而来）、表情、场景、镜头只编辑名称、正面 Prompt、显示优先级与可选的互斥组；它们是全局共享素材。
-// 动作卡（旧版主体位）= 基础 Prompt + 子体位（结构变体）+ 各素材池的固定素材与随机候选（只保存 ID）；套图任务中只需选择动作卡。
+// 动作卡 = 若干完整 Prompt 的姿态模板；表情、行为（状态素材）在套图任务的动作序列中选择。
 // 优先级只影响选择列表中的排列（高 → 普通 → 低，同级保持手动排序），不影响 Prompt。
 // 旧文件中的分类、标签、适用对象、备注等字段不在界面中显示，保存时也不会写入（原值保留）。
 // 旧版男性描述不在素材库中显示：数据与任务引用保持不变。
@@ -28,7 +28,7 @@ const TABS: [Tab, string][] = [
   ['state', '状态'],
   ['expression', '表情'],
   ['camera', '镜头视角'],
-  ['cards', '体位'],
+  ['cards', '动作卡'],
 ]
 const STATE_HINT = '状态素材（局部姿态、手部动作、双人互动等，旧版「单人动作」与「行为」都在这里）。全局共享：动作卡只记录各素材池使用哪些状态，不复制 Prompt。'
 const HINTS: Record<TemplateKind, string> = {
@@ -36,16 +36,16 @@ const HINTS: Record<TemplateKind, string> = {
   scene: '可复用的环境 Prompt（卧室、教室、街道等）。与剧情库不同：场景只描述环境，在任务中按动作选择。',
   state: STATE_HINT,
   pose: STATE_HINT,
-  position: '体位代表一个大的动作类别（正常位、骑乘位……），下面按子体位管理完整的 Prompt 模板。套图任务中选择体位和子体位，张数按子体位平分，子体位内的「模板 × 表情」组合轮流使用。',
-  card_tpl: '体位中的完整 Prompt 模板。',
+  position: '动作卡代表一个动作（正常位、骑乘位……），里面放 5～10 个写好完整 Prompt 的姿态模板。套图任务的动作序列中选择动作卡和参与的姿态模板，每张图轮流抽取一个；表情、行为在动作序列中选择。',
+  card_tpl: '动作卡中的姿态模板（完整 Prompt）。',
   subposition: '子体位是动作卡的结构变体（例如标准、前倾、反向），生成时拼在基础 Prompt 之后，可以只写差异部分。',
   act: STATE_HINT,
-  expression: '表情 Prompt（全局共享）。在「体位」中为模板勾选可用的表情，同一个表情可以在不同体位之间复用；生成时写入模板中 {表情} 的位置。',
+  expression: '表情 Prompt（全局共享）。在套图任务的动作序列中为主角色、第二角色各选一个固定表情，可以在不同动作之间复用；生成时写入模板中 {表情} / {男表情} 的位置。',
   male: '男性描述（兼容素材）：分类为「基础」的可作为任务的男性基础描述；旧版的男性动作 / 表情模板仍可在任务的男性设置中选择。',
   camera: '视角、景别、构图等镜头 Prompt（全局共享）。在套图任务的动作详情中多选：选 1 个时每张图片都使用它，选多个时每张图片随机抽取 1 个。POV 不会自动启用男性出场。',
 }
 /** 状态可能被引用的位置：主角色 / 第二角色的状态、双人动作的行为，以及旧任务中的单选动作字段 */
-const STATE_REFS = ['state_ids', 'second_state_ids', 'act_ids', 'pose_id', 'second_pose_id', 'male_pose_ids']
+const STATE_REFS = ['state_ids', 'second_state_ids', 'act_ids', 'pose_id', 'second_pose_id', 'male_pose_ids', 'behavior_ids']
 const REF_FIELDS: Record<TemplateKind, string[]> = {
   global: ['global_id'],
   scene: ['scene_id'],
@@ -54,12 +54,12 @@ const REF_FIELDS: Record<TemplateKind, string[]> = {
   position: ['position_id', 'card_id'],
   subposition: ['subposition_id'],
   act: STATE_REFS,
-  expression: ['expression_ids', 'male_expression_ids', 'second_expression_id'],
+  expression: ['expression_ids', 'male_expression_ids', 'second_expression_id', 'expression_id'],
   male: ['male_base_id', 'male_ids'],
   camera: ['camera_id', 'camera_ids'],
   card_tpl: [],
 }
-/** 使用某个素材的体位（旧版素材池的固定素材或随机候选；体位或其模板的表情） */
+/** 使用某个素材的动作卡（旧版素材池的固定素材或随机候选；动作卡或其模板上旧版的表情设置） */
 function cardsUsing(lib: Library | null, id: number): string[] {
   const tpls = templatesOf(lib, 'card_tpl')
   return templatesOf(lib, 'position')
