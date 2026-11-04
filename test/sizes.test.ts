@@ -5,7 +5,7 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { applyInputs } from '@shared/mapping'
-import { defaultSizes, expandTask, setItemSizes, sizeSchedule, sizeTotal, stepSize } from '@shared/planner'
+import { defaultSizes, expandTask, parseCount, setItemSizes, sizeSchedule, sizeTotal, stepSize } from '@shared/planner'
 import { compose, joinModules } from '@shared/prompt'
 import { DEFAULT_SETTINGS, type ApiWorkflow, type MappingEntry, type TaskItem } from '@shared/types'
 import { analyzeWorkflow, findLatentGenerators, mergeMapping } from '@shared/workflow-analysis'
@@ -21,17 +21,18 @@ const sized = (lib: Lib, pose: string, sizes: TaskItem['sizes'], exprs: number[]
 }
 
 describe('尺寸张数', () => {
-  it('每次加减 5 张，最小 0；总数为三者之和；新动作默认放在竖图', () => {
-    expect(stepSize(0, 1)).toBe(5)
-    expect(stepSize(5, 1)).toBe(10)
-    expect(stepSize(5, -1)).toBe(0)
+  it('每次加减 1 张（Shift 时 5 张），最小 0；可直接输入；总数为三者之和；新动作默认放在竖图', () => {
+    expect(stepSize(0, 1)).toBe(1)
+    expect(stepSize(7, 1)).toBe(8)
+    expect(stepSize(7, -1, 5)).toBe(2)
+    expect(stepSize(2, -1, 5)).toBe(0)
     expect(stepSize(0, -1)).toBe(0)
-    expect(stepSize(7, -1)).toBe(2) // 旧数据转换来的非 5 倍数也能正常加减
-    expect(stepSize(2, -1)).toBe(0)
+    expect([parseCount('13'), parseCount('2.9'), parseCount('-4'), parseCount('abc'), parseCount('100000')]).toEqual([13, 2, 0, 0, 9999])
     expect(sizeTotal({ portrait: 5, landscape: 10, square: 0 })).toBe(15)
     expect(sizeTotal({ portrait: -5, landscape: 2.7 as number })).toBe(2)
     expect(defaultSizes(10)).toEqual({ portrait: 10, landscape: 0, square: 0 })
-    expect(defaultSizes(4)).toEqual({ portrait: 5, landscape: 0, square: 0 })
+    expect(defaultSizes(4)).toEqual({ portrait: 4, landscape: 0, square: 0 })
+    expect(defaultSizes(0)).toEqual({ portrait: 1, landscape: 0, square: 0 })
     const it = { count: 0 } as TaskItem
     setItemSizes(it, { portrait: 5, landscape: 10 })
     expect(it).toEqual({ count: 15, sizes: { portrait: 5, landscape: 10, square: 0 } })

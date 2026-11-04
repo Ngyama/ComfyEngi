@@ -167,6 +167,10 @@ export function buildWorkflowInputs(store: Store, wf: Workflow, units: PlanUnit[
   const splitPos = wf.mapping.filter((m) => m.source === 'positive' && (m.modules ?? []).length)
   if (splitPos.length && units.some((u) => u.from_template))
     once(errors, `工作流「${wf.name}」的正面 Prompt 映射按模块拆分（节点 ${[...new Set(splitPos.map((m) => m.node))].join('、')}），模板动作卡需要写入完整的正面 Prompt。请在工作流的高级映射中改为完整 Prompt`)
+  // 手改的单张 Prompt 同样是一整段
+  const splitAny = wf.mapping.filter((m) => (m.source === 'positive' || m.source === 'negative') && (m.modules ?? []).length)
+  if (splitAny.length && units.some((u) => u.manual))
+    once(errors, `工作流「${wf.name}」的 Prompt 映射按模块拆分（节点 ${[...new Set(splitAny.map((m) => m.node))].join('、')}），手改过 Prompt 的图片需要写入完整的 Prompt。请在工作流的高级映射中改为完整 Prompt，或在预览中恢复自动 Prompt`)
   for (const src of ['positive', 'negative']) {
     const entries = wf.mapping.filter((m) => m.source === src)
     if (src === 'positive' && units.some((u) => u.from_template)) continue

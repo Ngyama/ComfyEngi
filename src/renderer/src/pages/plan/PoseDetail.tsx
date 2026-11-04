@@ -2,18 +2,19 @@
 // 分三部分：画面内容（单人 / 双人主体位、子体位、行为、场景、镜头）、角色配置（主角色与第二角色各自的服装、状态（可多选）、表情）、
 // 生成设置（各尺寸张数、附加 Prompt、最终 Prompt 预览）。素材较多时不在面板中平铺，点击字段后在选择器中搜索选择。
 
-import { useMemo, useState, type ReactNode } from 'react'
+import { useEffect, useMemo, useState, type ReactNode } from 'react'
 import { Camera, ChevronRight, Image as ImageIcon, MapPin, Minus, Plus, Shirt, Smile, Users, X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Switch } from '@/components/ui/switch'
-import { Chip, CopyButton, Disclosure, FieldLabel, NumberStepper, PromptField } from '@/components/common'
+import { Chip, Disclosure, NumberStepper, PromptField } from '@/components/common'
 import type { MaterialOption } from '@/lib/material-select'
 import { templatesOf, useLib, usePlan } from '@/lib/stores'
 import { cn } from '@/lib/utils'
-import { itemCameraIds, itemStateIds, itemStateIds2, setItemSizes, sizeCount, sizeTotal, stepSize } from '@shared/planner'
+import { itemCameraIds, itemStateIds, itemStateIds2, parseCount, setItemSizes, SIZE_STEP, sizeCount, sizeTotal, stepSize } from '@shared/planner'
 import { PLACEHOLDER_HELP } from '@shared/prompt'
 import { SIZE_PRESETS, type PlanUnit, type SizeKey, type TaskItem, type Template } from '@shared/types'
 import { MaterialPicker } from './MaterialPicker'
+import { UnitPrompt } from './UnitPrompt'
 
 function MultiChips({ list, value, onChange }: { list: Template[]; value: number[]; onChange: (v: number[]) => void }) {
   return (
@@ -81,10 +82,34 @@ export function Section({ title, right, children, testId }: { title: string; rig
   )
 }
 
+/** 张数输入框：输入时只改本地文字，失焦或回车时保存（空白视为 0） */
+function CountInput({ value, label, onChange, testId }: { value: number; label: string; onChange: (v: number) => void; testId?: string }) {
+  const [text, setText] = useState(String(value))
+  useEffect(() => setText(String(value)), [value])
+  const commit = () => {
+    const v = parseCount(text)
+    setText(String(v))
+    if (v !== value) onChange(v)
+  }
+  return (
+    <input
+      value={text}
+      inputMode="numeric"
+      aria-label={`${label}张数`}
+      onChange={(e) => setText(e.target.value.replace(/[^\d]/g, ''))}
+      onBlur={commit}
+      onKeyDown={(e) => e.key === 'Enter' && (e.target as HTMLInputElement).blur()}
+      onFocus={(e) => e.target.select()}
+      className={cn('h-7 w-14 bg-transparent text-center text-[13px] font-semibold tabular-nums outline-none', !value && 'text-muted-foreground')}
+      data-testid={testId}
+    />
+  )
+}
+
 /** 尺寸示意：按长宽比画一个小框 */
 const ASPECT: Record<SizeKey, string> = { portrait: 'h-6 w-4', landscape: 'h-4 w-6', square: 'size-5' }
 
-/** 三种尺寸各自的张数：每次加减 5 张，最小 0，不能直接输入 */
+/** 三种尺寸各自的张数：直接输入，或用加减按钮每次 1 张（按住 Shift 每次 5 张），最小 0 */
 export function SizeCards({ item, onChange }: { item: TaskItem; onChange: (k: SizeKey, v: number) => void }) {
   return (
     <div className="grid grid-cols-3 gap-2" data-testid="size-cards">
@@ -104,13 +129,11 @@ export function SizeCards({ item, onChange }: { item: TaskItem; onChange: (k: Si
               </div>
             </div>
             <div className="mt-2 flex items-center justify-between rounded-lg bg-tint/[0.04] ring-1 ring-tint/[0.08]">
-              <button type="button" aria-label={`${p.label}减少 5 张`} disabled={!n} className="grid h-7 w-7 place-items-center text-muted-foreground hover:text-foreground disabled:opacity-30" onClick={() => onChange(p.key, stepSize(n, -1))}>
+              <button type="button" aria-label={`${p.label}减少`} title="减少 1 张（Shift：5 张）" disabled={!n} className="grid h-7 w-7 place-items-center text-muted-foreground hover:text-foreground disabled:opacity-30" onClick={(e) => onChange(p.key, stepSize(n, -1, e.shiftKey ? SIZE_STEP : 1))}>
                 <Minus className="size-3.5" />
               </button>
-              <span className={cn('text-[13px] font-semibold tabular-nums', !n && 'text-muted-foreground')} data-testid={`size-${p.key}-count`}>
-                {n}
-              </span>
-              <button type="button" aria-label={`${p.label}增加 5 张`} className="grid h-7 w-7 place-items-center text-muted-foreground hover:text-foreground" onClick={() => onChange(p.key, stepSize(n, 1))}>
+              <CountInput value={n} label={p.label} onChange={(v) => onChange(p.key, v)} testId={`size-${p.key}-count`} />
+              <button type="button" aria-label={`${p.label}增加`} title="增加 1 张（Shift：5 张）" className="grid h-7 w-7 place-items-center text-muted-foreground hover:text-foreground" onClick={(e) => onChange(p.key, stepSize(n, 1, e.shiftKey ? SIZE_STEP : 1))}>
                 <Plus className="size-3.5" />
               </button>
             </div>
@@ -400,14 +423,7 @@ export function PoseDetail({ index, firstUnit, onClose }: { index: number; first
           <Disclosure title="最终 Prompt 预览" summary={firstUnit ? `本动作第 1 张${firstUnit.width ? ` · ${firstUnit.meta.size} ${firstUnit.width}×${firstUnit.height}` : ''}` : '无法生成'}>
             {firstUnit ? (
               <div className="space-y-3" data-testid="detail-preview">
-                <div>
-                  <FieldLabel right={<CopyButton text={firstUnit.positive} />}>正面</FieldLabel>
-                  <pre className="max-h-72 overflow-y-auto rounded-lg bg-inset p-3 font-mono text-[12px] leading-relaxed whitespace-pre-wrap select-text">{firstUnit.positive || '（空）'}</pre>
-                </div>
-                <div>
-                  <FieldLabel right={<CopyButton text={firstUnit.negative} />}>负面</FieldLabel>
-                  <pre className="max-h-40 overflow-y-auto rounded-lg bg-inset p-3 font-mono text-[12px] leading-relaxed whitespace-pre-wrap select-text">{firstUnit.negative || '（空）'}</pre>
-                </div>
+                <UnitPrompt unit={firstUnit} item={item} onEdits={(e) => set({ prompt_edits: e })} />
               </div>
             ) : (
               <div className="text-xs text-muted-foreground">此动作当前无法生成，请查看卡片上的提示。</div>

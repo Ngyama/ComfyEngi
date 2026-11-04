@@ -43,6 +43,10 @@ export function normalizeCard(c: unknown): ActionCard {
     if (cats.length) out.categories = cats
   }
   if (typeof o.skeleton === 'string') out.skeleton = o.skeleton
+  if (Array.isArray(o.expressions)) {
+    const ex = [...new Set(o.expressions.filter((x): x is number => Number.isInteger(x) && x > 0))]
+    if (ex.length) out.expressions = ex
+  }
   const pools = isObject(o.pools) ? o.pools : {}
   const rules = isObject(o.rules) ? o.rules : null
   const legacy = !!rules || Object.values(pools).some(Array.isArray)

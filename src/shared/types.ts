@@ -123,13 +123,18 @@ export interface ActionCard {
   categories?: string[]
   /** 新建模板时预填的正文（复制使用，不是继承：之后修改骨架不影响已有模板） */
   skeleton?: string
+  /**
+   * 表情（素材库「表情」中的条目 ID，按顺序）：体位上为默认表情，模板上为这个模板单独的表情（有时代替默认）。
+   * 每个模板与它的每个表情组成一种组合，生成时轮流使用；没有表情时模板单独成一种组合
+   */
+  expressions?: number[]
   /** 各素材池的固定素材与随机候选（只保存 ID，不复制 Prompt） */
   pools?: Partial<Record<CardPoolKey, PoolConfig>>
 }
 /** 一张图片实际使用的素材（随计划冻结在运行记录中，用于查看来源） */
 export interface CardPick {
   /** template：模板动作卡抽到的 Prompt 模板 */
-  pool: CardPoolKey | 'template'
+  pool: CardPoolKey | 'template' | 'expression'
   id: number
   name: string
   random: boolean
@@ -293,6 +298,8 @@ export interface TaskItem {
   card_exclude?: number[]
   /** 模板动作卡的抽取来源：没有时为这张卡的全部模板 */
   card_pick?: CardTemplatePick
+  /** 在预览中手改的单张 Prompt（k 为本动作内的第几张，从 0 开始）；base 为手改时的自动结果，用于发现来源变化 */
+  prompt_edits?: PromptEdit[]
   /** 场景：null 时沿用任务的默认场景 */
   scene_id?: number | null
   /**
@@ -306,6 +313,14 @@ export interface TaskItem {
  * 模板来源：categories 中的分类包含其中现在和以后的全部模板（'' 为未分类）；include 额外加入的模板；exclude 不参与抽取的模板。
  * categories 没有时为全部分类
  */
+export interface PromptEdit {
+  k: number
+  positive: string
+  negative: string
+  base_positive: string
+  base_negative: string
+}
+
 export interface CardTemplatePick {
   categories?: string[]
   include?: number[]
@@ -513,6 +528,10 @@ export interface PlanUnit {
   inputs?: InputValue[]
   /** 正面 Prompt 来自 Prompt 模板（按占位符位置填入），不能再按模块拆分写入多个节点 */
   from_template?: boolean
+  /** 本张的 Prompt 在预览中手改过（正面、负面都是一整段，不能再按模块拆分） */
+  manual?: boolean
+  /** 手改后自动结果又变化了：需要在预览中选择保留手改还是使用新的 */
+  edit_stale?: boolean
 }
 
 export interface PlanResult {

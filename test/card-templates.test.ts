@@ -3,7 +3,7 @@
 import { existsSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { cardTemplates, distinctTags, drawTemplate, fillTemplate, legacyCardTemplates, pickedTemplates, templatePlaceholders, toggleCategory, toggleTemplate } from '@shared/card-templates'
+import { cardTemplates, distinctTags, drawTemplate, fillTemplate, legacyCardTemplates, pickedTemplates, splitBySubposition, splitSummary, templateExpressionIds, templatePlaceholders, toggleCategory, toggleTemplate } from '@shared/card-templates'
 import { newEntry } from '@shared/mapping'
 import { expandTask, newCardItem } from '@shared/planner'
 import type { ActionCard, Template, TaskItem } from '@shared/types'
@@ -114,15 +114,64 @@ describe('计划展开', () => {
     solo.tpl('a', '{女特征}, x, {男特征}', '')
     expect(solo.expand({ count: 1 }, { second_character_id: solo.lib.charB }).units[0].positive).toBe('1girl, char_a, red hair, x')
   })
-  it('只从勾选的分类抽取，并且轮流覆盖', () => {
+  it('张数按子体位平分（与模板数量无关），子体位内轮流；只从勾选的子体位生成', () => {
     const { tpl, expand } = setup()
-    const ids = [tpl('a1', 'A1', '抬脚'), tpl('a2', 'A2', '抬脚'), tpl('b1', 'B1', '贴近')]
-    const all = expand({ count: 3 }).units.map((u) => u.meta.template)
-    expect(new Set(all)).toEqual(new Set(['a1', 'a2', 'b1']))
-    const only = expand({ count: 4, card_pick: { categories: ['抬脚'] } }).units.map((u) => u.meta.template)
+    const ids = [tpl('a1', 'A1', '抬脚'), tpl('a2', 'A2', '抬脚'), tpl('a3', 'A3', '抬脚'), tpl('b1', 'B1', '贴近')]
+    const units = expand({ count: 8 }).units
+    const by = (cat: string) => units.filter((u) => u.meta.template_category === cat).map((u) => u.meta.template)
+    expect(by('抬脚').length).toBe(4)
+    expect(by('贴近')).toEqual(['b1', 'b1', 'b1', 'b1'])
+    expect(new Set(by('抬脚').slice(0, 3))).toEqual(new Set(['a1', 'a2', 'a3']))
+    // 子体位交错排列：多尺寸时每种尺寸都有各个子体位
+    expect(units.slice(0, 2).map((u) => u.meta.template_category).sort()).toEqual(['抬脚', '贴近'])
+    const only = expand({ count: 4, card_pick: { categories: ['贴近'], include: [ids[0]] } }).units.map((u) => u.meta.template)
     expect(only.filter((x) => x === 'a1').length).toBe(2)
-    expect(only.filter((x) => x === 'a2').length).toBe(2)
-    expect(expand({ count: 2, card_pick: { categories: [], exclude: ids } }).errors.join()).toContain('没有选中任何模板')
+    expect(only.filter((x) => x === 'b1').length).toBe(2)
+    expect(expand({ count: 2, card_pick: { categories: [], exclude: ids } }).errors.join()).toContain('没有选中任何子体位')
+  })
+  it('除不尽时多出的张数随机分给几个子体位（由组合 Seed 决定，可复现）', () => {
+    const split = splitBySubposition(4, 10, 7, 0)
+    const quota = [0, 1, 2, 3].map((g) => split.filter((s) => s.group === g).length)
+    expect(quota.sort()).toEqual([2, 2, 3, 3])
+    expect(splitBySubposition(4, 10, 7, 0)).toEqual(split)
+    const seeds = new Set(Array.from({ length: 12 }, (_, s) => JSON.stringify([0, 1, 2, 3].map((g) => splitBySubposition(4, 10, s, 0).filter((x) => x.group === g).length))))
+    expect(seeds.size).toBeGreaterThan(1)
+    expect(splitBySubposition(3, 2, 1, 0).map((s) => s.index)).toEqual([0, 0])
+    expect(splitSummary(4, 10)).toBe('每个子体位 2～3 张（多出的 2 张随机分配）')
+  })
+  it('表情：模板 × 表情组成组合轮流使用；写入 {表情} 的位置；模板单独选择时代替体位默认表情', () => {
+    const { s, lib, card, tpl, expand } = setup()
+    const [shy, happy, open] = lib.exprs
+    s.save('templates', { id: card, card: { templates: true, categories: ['抬脚', '贴近'], expressions: [shy, happy] } })
+    tpl('a', '{女特征}, legs up, {表情}, after', '抬脚')
+    const own = tpl('b', '{女特征}, hug', '贴近')
+    s.save('templates', { id: own, card: { expressions: [open] } })
+    const units = expand({ count: 4 }).units
+    const a = units.filter((u) => u.meta.template === 'a')
+    expect(a.map((u) => u.positive).sort()).toEqual(['1girl, char_a, red hair, legs up, expr1, after', '1girl, char_a, red hair, legs up, expr2, after'])
+    expect(a.map((u) => u.meta.expression).sort()).toEqual(['表情1', '表情2'])
+    expect(a[0].meta.picks?.map((p) => p.pool)).toEqual(['template', 'expression'])
+    // 模板没有 {表情}：追加在末尾
+    expect(units.filter((u) => u.meta.template === 'b').map((u) => u.positive)).toEqual(['1girl, char_a, red hair, hug, expr3', '1girl, char_a, red hair, hug, expr3'])
+    expect(templateExpressionIds({ card: null }, s.get('templates', card))).toEqual([shy, happy])
+    // 删除的表情跳过并提示
+    s.remove('templates', happy)
+    const r = expand({ count: 2, card_pick: { categories: ['抬脚'] } })
+    expect(r.units.map((u) => u.meta.expression)).toEqual(['表情1', '表情1'])
+    expect(r.warnings.join()).toContain('1 个表情已被删除')
+  })
+  it('预览中手改单张 Prompt：使用手改内容；来源变化后阻止入队，等待选择', () => {
+    const { tpl, expand } = setup()
+    tpl('a', '{女特征}, x', '抬脚')
+    const auto = expand({ count: 2 }).units[1]
+    const edit = { k: 1, positive: '1girl, custom', negative: 'neg', base_positive: auto.positive, base_negative: auto.negative }
+    const r = expand({ count: 2, prompt_edits: [edit] })
+    expect(r.errors).toEqual([])
+    expect(r.units[1]).toMatchObject({ positive: '1girl, custom', negative: 'neg', manual: true })
+    expect(r.units[0].manual).toBeUndefined()
+    const stale = expand({ count: 2, extra_positive: 'sweat', prompt_edits: [edit] })
+    expect(stale.errors.join()).toContain('第 2 张：手改 Prompt 之后')
+    expect(stale.units[1]).toMatchObject({ edit_stale: true, positive: '1girl, char_a, red hair, x, sweat' })
   })
   it('有内容但模板没有写占位符时提示；无法识别的占位符、没有模板时报错', () => {
     const { tpl, expand } = setup()
@@ -132,6 +181,15 @@ describe('计划展开', () => {
     expect(r.errors.join()).toContain('{女服饰}')
     expect(r.warnings.join()).toContain('没有 {女特征}')
     expect(r.warnings.join()).toContain('没有 {全局}')
+  })
+  it('手改过 Prompt 的图片不能写入按模块拆分的映射（负面同样）', () => {
+    const { s, lib, card, tpl } = setup()
+    tpl('a', '{全局}, x', '抬脚')
+    lib.addWorkflow([newEntry('positive', '6', 'text'), newEntry('negative', '7', 'text', ['global'])])
+    const u = planForTask(s, lib.makeTask([{ ...newCardItem(card), count: 1 }])).units[0]
+    expect(planForTask(s, lib.makeTask([{ ...newCardItem(card), count: 1 }], '套图1')).errors).toEqual([])
+    const edited = lib.makeTask([{ ...newCardItem(card), count: 1, prompt_edits: [{ k: 0, positive: 'y', negative: '', base_positive: u.positive, base_negative: u.negative }] }], '套图2')
+    expect(planForTask(s, edited).errors.join()).toContain('手改过 Prompt 的图片')
   })
   it('附加 Prompt：模板没有 {附加} 时追加在末尾', () => {
     const { tpl, expand } = setup()

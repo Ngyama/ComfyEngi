@@ -39,6 +39,7 @@ import { LoraPanel } from './LoraPanel'
 import { CharacterPicker, GlobalPicker, PosePicker, StoryPicker, WorkflowMenu, type NewAction } from './pickers'
 import { isTemplateCard } from '@shared/card-templates'
 import { CardItemDetail } from './CardDetail'
+import { subpositionsOf } from './TemplateSource'
 import { PoseDetail } from './PoseDetail'
 
 /** 新建任务：套用设置 → 生成默认值；角色和工作流沿用当前任务 */
@@ -223,7 +224,8 @@ function PoseCard({
   const card = item.card_id != null ? T(item.card_id) : undefined
   const isCard = item.card_id != null
   const templated = isTemplateCard(card)
-  const tuned = isCard && (templated ? !!item.card_pick : !!Object.keys(item.card_rules ?? {}).length || !!(item.card_exclude ?? []).length)
+  const tuned = isCard && !templated && (!!Object.keys(item.card_rules ?? {}).length || !!(item.card_exclude ?? []).length)
+  const subInfo = templated && card ? subpositionsOf(lib, card, item.card_pick) : null
   const label = isCard
     ? (card?.name ?? '（动作卡已删除）')
     : item.position_id
@@ -270,8 +272,13 @@ function PoseCard({
             </span>
           )}
           {tuned && (
-            <span className="shrink-0 rounded-md bg-amber-500/12 px-1.5 py-0.5 text-[10.5px] text-amber-700" title={templated ? '只从部分分类或模板中抽取' : '本任务修改了动作卡的默认组合规则'}>
-              {templated ? '部分模板' : '已调整组合'}
+            <span className="shrink-0 rounded-md bg-amber-500/12 px-1.5 py-0.5 text-[10.5px] text-amber-700" title="本任务修改了动作卡的默认组合规则">
+              已调整组合
+            </span>
+          )}
+          {subInfo && (
+            <span className={cn('min-w-0 truncate text-[11px]', subInfo.names.length ? 'text-muted-foreground' : 'text-destructive')} title={item.card_pick ? '只使用部分子体位或模板' : '使用全部子体位'} data-testid="card-subs">
+              {subInfo.names.length ? `${subInfo.names.join('、')} · ${subInfo.combos} 种组合${item.card_pick ? '（部分）' : ''}` : '没有选中子体位'}
             </span>
           )}
           {!isCard && item.position_id && states.length > 0 && <span className="shrink-0 truncate text-[11px] text-muted-foreground">+ {states.map((t) => t?.name ?? '（已删除）').join(' + ')}</span>}
@@ -411,7 +418,7 @@ export default function PlanPage() {
         at,
         0,
         ...ids.map((a) => {
-          const it = 'card_id' in a ? newCardItem(a.card_id, prev?.outfit_id ?? null) : { ...newItem(null, prev?.outfit_id ?? null), state_ids: a.state_ids }
+          const it = 'card_id' in a ? { ...newCardItem(a.card_id, prev?.outfit_id ?? null), ...(a.card_pick ? { card_pick: a.card_pick } : {}) } : { ...newItem(null, prev?.outfit_id ?? null), state_ids: a.state_ids }
           setItemSizes(it, sizes)
           return it
         }),

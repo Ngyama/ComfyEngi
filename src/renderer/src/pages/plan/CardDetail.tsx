@@ -4,7 +4,7 @@
 import { useMemo, useState } from 'react'
 import { MapPin, RotateCcw, Shirt, Users, X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
-import { CopyButton, Disclosure, FieldLabel, NumberStepper, PromptField } from '@/components/common'
+import { Disclosure, NumberStepper, PromptField } from '@/components/common'
 import { CardPools, PickSources } from '@/components/card-pools'
 import type { MaterialOption } from '@/lib/material-select'
 import { templatesOf, useLib, usePlan } from '@/lib/stores'
@@ -17,6 +17,7 @@ import { CARD_POOLS, type CardPoolKey, type PlanUnit, type PoolConfig, type Task
 import { MaterialPicker } from './MaterialPicker'
 import { CameraField, PickField, Section, SizeCards } from './PoseDetail'
 import { TemplateSource } from './TemplateSource'
+import { UnitPrompt } from './UnitPrompt'
 
 type PickerKey = 'card' | 'scene' | 'outfit' | 'outfit2'
 
@@ -73,7 +74,7 @@ export function CardItemDetail({ index, units, onClose }: { index: number; units
   const single = (v: number | null | undefined) => (v ? [v] : [])
   const pickers: Record<PickerKey, { title: string; items: MaterialOption[]; value: number[]; noneLabel?: string; onChange: (ids: number[]) => void; description?: string; empty?: string }> = {
     // 换成另一张动作卡时，本任务对原卡的覆盖不再适用
-    card: { title: '动作卡', items: cards, value: single(item.card_id), onChange: (ids) => ids[0] && ids[0] !== item.card_id && update((d) => Object.assign(d.items[index], { card_id: ids[0], card_rules: undefined, card_exclude: undefined, card_pick: undefined })), empty: '还没有动作卡，可在「素材库 → 动作卡」中添加' },
+    card: { title: '体位', items: cards, value: single(item.card_id), onChange: (ids) => ids[0] && ids[0] !== item.card_id && update((d) => Object.assign(d.items[index], { card_id: ids[0], card_rules: undefined, card_exclude: undefined, card_pick: undefined })), empty: '还没有体位，可在「素材库 → 体位」中添加' },
     scene: { title: '场景', items: scenes, value: single(item.scene_id), noneLabel: defaultScene ? `任务默认：${defaultScene.name}` : '不指定', onChange: (ids) => set({ scene_id: ids[0] ?? null }), empty: '场景库为空，可在「素材库 → 场景」中添加' },
     outfit: { title: `主角色服装（${char?.name ?? ''}）`, items: outfitOpts(outfits), value: single(item.outfit_id), noneLabel: '不指定', onChange: (ids) => set({ outfit_id: ids[0] ?? null }), empty: charId ? '该角色还没有服装' : '先选择主角色' },
     outfit2: { title: `第二角色服装（${char2?.name ?? ''}）`, items: outfitOpts(outfits2), value: single(item.second_outfit_id), noneLabel: '不指定', onChange: (ids) => set({ second_outfit_id: ids[0] ?? null }) },
@@ -96,7 +97,7 @@ export function CardItemDetail({ index, units, onClose }: { index: number; units
 
       <div className="min-h-0 flex-1 space-y-3 overflow-y-auto px-4 pb-6">
         <Section title="画面内容" testId="detail-scene">
-          <PickField label="动作卡" names={nameOf(item.card_id, cards)} placeholder="选择动作卡" onOpen={() => setPicker('card')} testId="pick-card" hint={card ? (templated ? '从勾选的模板中轮流抽取：每个模板用过一遍再开始下一轮' : '基础 Prompt、子体位、局部姿态、表情和互动按动作卡的默认规则自动组合') : undefined} />
+          <PickField label="体位" names={nameOf(item.card_id, cards)} placeholder="选择体位" onOpen={() => setPicker('card')} testId="pick-card" hint={card ? (templated ? '张数按下方选中的子体位平分，子体位内的「模板 × 表情」组合轮流使用' : '基础 Prompt、子体位、局部姿态、表情和互动按动作卡的默认规则自动组合') : undefined} />
           <PickField label="场景" icon={<MapPin />} names={nameOf(item.scene_id, scenes)} placeholder={defaultScene ? `任务默认：${defaultScene.name}` : '不指定'} onOpen={() => setPicker('scene')} onClear={() => set({ scene_id: null })} testId="pick-scene" />
           <CameraField item={item} onChange={set} />
         </Section>
@@ -142,7 +143,7 @@ export function CardItemDetail({ index, units, onClose }: { index: number; units
               <PromptField value={item.extra_negative} onChange={(v) => set({ extra_negative: v })} placeholder="附加负面" minRows={2} />
             </div>
           </Disclosure>
-          <Disclosure title="组合与 Prompt 预览" summary={unit ? `第 ${shown + 1} / ${units.length} 张${unit.width ? ` · ${unit.meta.size}` : ''}` : '无法生成'}>
+          <Disclosure title="组合与 Prompt 预览" summary={unit ? `第 ${shown + 1} / ${units.length} 张${unit.width ? ` · ${unit.meta.size}` : ''}${item.prompt_edits?.length ? ` · 手改 ${item.prompt_edits.length} 张` : ''}` : '无法生成'}>
             {unit ? (
               <div className="space-y-3" data-testid="detail-preview">
                 <div className="flex items-center gap-1.5 text-[11.5px] text-muted-foreground">
@@ -155,14 +156,7 @@ export function CardItemDetail({ index, units, onClose }: { index: number; units
                   <span>组合 Seed {unit.meta.combo_seed}（在任务设置中修改）</span>
                 </div>
                 <PickSources picks={unit.meta.picks} card={unit.meta.card} camera={unit.meta.camera} />
-                <div>
-                  <FieldLabel right={<CopyButton text={unit.positive} />}>正面</FieldLabel>
-                  <pre className="max-h-72 overflow-y-auto rounded-lg bg-inset p-3 font-mono text-[12px] leading-relaxed whitespace-pre-wrap select-text">{unit.positive || '（空）'}</pre>
-                </div>
-                <div>
-                  <FieldLabel right={<CopyButton text={unit.negative} />}>负面</FieldLabel>
-                  <pre className="max-h-40 overflow-y-auto rounded-lg bg-inset p-3 font-mono text-[12px] leading-relaxed whitespace-pre-wrap select-text">{unit.negative || '（空）'}</pre>
-                </div>
+                <UnitPrompt unit={unit} item={item} onEdits={(e) => set({ prompt_edits: e })} />
               </div>
             ) : (
               <div className="text-xs text-muted-foreground">此动作当前无法生成，请查看卡片上的提示。</div>

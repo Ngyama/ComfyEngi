@@ -28,7 +28,7 @@ const TABS: [Tab, string][] = [
   ['state', '状态'],
   ['expression', '表情'],
   ['camera', '镜头视角'],
-  ['cards', '动作卡'],
+  ['cards', '体位'],
 ]
 const STATE_HINT = '状态素材（局部姿态、手部动作、双人互动等，旧版「单人动作」与「行为」都在这里）。全局共享：动作卡只记录各素材池使用哪些状态，不复制 Prompt。'
 const HINTS: Record<TemplateKind, string> = {
@@ -36,11 +36,11 @@ const HINTS: Record<TemplateKind, string> = {
   scene: '可复用的环境 Prompt（卧室、教室、街道等）。与剧情库不同：场景只描述环境，在任务中按动作选择。',
   state: STATE_HINT,
   pose: STATE_HINT,
-  position: '动作卡代表一个大的动作类别（正常位、骑乘位……），里面按分类管理完整的 Prompt 模板。套图任务中选择动作卡、勾选参与的分类，生成时从模板中轮流抽取。',
-  card_tpl: '动作卡中的完整 Prompt 模板。',
+  position: '体位代表一个大的动作类别（正常位、骑乘位……），下面按子体位管理完整的 Prompt 模板。套图任务中选择体位和子体位，张数按子体位平分，子体位内的「模板 × 表情」组合轮流使用。',
+  card_tpl: '体位中的完整 Prompt 模板。',
   subposition: '子体位是动作卡的结构变体（例如标准、前倾、反向），生成时拼在基础 Prompt 之后，可以只写差异部分。',
   act: STATE_HINT,
-  expression: '表情 Prompt（全局共享）。动作卡分别配置主角色、第二角色允许使用的表情；可用互斥组避免同一张图片抽到相互矛盾的表情。',
+  expression: '表情 Prompt（全局共享）。在「体位」中为模板勾选可用的表情，同一个表情可以在不同体位之间复用；生成时写入模板中 {表情} 的位置。',
   male: '男性描述（兼容素材）：分类为「基础」的可作为任务的男性基础描述；旧版的男性动作 / 表情模板仍可在任务的男性设置中选择。',
   camera: '视角、景别、构图等镜头 Prompt（全局共享）。在套图任务的动作详情中多选：选 1 个时每张图片都使用它，选多个时每张图片随机抽取 1 个。POV 不会自动启用男性出场。',
 }
@@ -59,10 +59,11 @@ const REF_FIELDS: Record<TemplateKind, string[]> = {
   camera: ['camera_id', 'camera_ids'],
   card_tpl: [],
 }
-/** 使用某个素材的动作卡（素材池的固定素材或随机候选） */
+/** 使用某个素材的体位（旧版素材池的固定素材或随机候选；体位或其模板的表情） */
 function cardsUsing(lib: Library | null, id: number): string[] {
+  const tpls = templatesOf(lib, 'card_tpl')
   return templatesOf(lib, 'position')
-    .filter((c) => cardMaterialIds(c).includes(id))
+    .filter((c) => cardMaterialIds(c).includes(id) || (c.card?.expressions ?? []).includes(id) || tpls.some((t) => t.parent_id === c.id && (t.card?.expressions ?? []).includes(id)))
     .map((c) => c.name || '（未命名）')
 }
 /** 可设置互斥组的素材 */
@@ -157,7 +158,7 @@ export function TemplateEditor({ t, onClose, onDeleted }: { t: Template; onClose
               title: `删除「${draft.name}」？`,
               description:
                 (used.length ? `以下套图任务正在使用它：${used.join('、')}\n删除后这些任务会提示引用失效。\n` : '') +
-                (cards.length ? `以下动作卡的素材池包含它：${cards.join('、')}\n删除后随机抽取时会跳过它（固定使用它的动作会提示错误）。\n` : '') +
+                (cards.length ? `以下体位使用它：${cards.join('、')}\n删除后生成时会跳过它（旧版素材池中固定使用它的动作会提示错误）。\n` : '') +
                 (children.length ? `它下面的 ${children.length} 个子体位也会一起删除（移入工作区回收站 .comfyengi/trash）。\n` : '') +
                 '已生成的运行记录不受影响。',
               confirmText: '删除',
