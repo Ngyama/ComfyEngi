@@ -10,9 +10,9 @@ import { applyInputs, loraStem, newEntry, toggleDisableInputs, TRIGGER_DISABLE }
 import type { ScannedImage } from '@shared/mining'
 import { controlInputs, controlProblems, controlsOf, cutOf, isCut } from '@shared/node-controls'
 import { applyLoraOverrides, SEED_MOD } from '@shared/planner'
-import { compose, fillPlaceholders, joinParts, normalizedOrder, unescapeSeparator } from '@shared/prompt'
+import { compose, fillPlaceholders, joinParts, unescapeSeparator } from '@shared/prompt'
 import { matchRule, type SavedSourceRule } from '@shared/prompt-source'
-import { cameraKeysOf, recognizeDraft, type ImageRecognition } from '@shared/replica-recognize'
+import { cameraKeysOf, countTagsOf, recognizeDraft, replicaPositive, type ImageRecognition } from '@shared/replica-recognize'
 import { parseToken, splitTopLevel } from '@shared/tags'
 import { expandOrder, imageOutfitId, imageSize, normalizeReplicaData, normalizeReplicaImage, originalPositive, outputStems, repeatOf, variantStem, type ReplicaData, type ReplicaImage, type ReplicaPlanCore, type ReplicaRecord, type ReplicaRow, type ReplicaUnitBrief, type RowState } from '@shared/replica'
 import type { ApiWorkflow, Lora, Modules, Outfit, PlanUnit, Settings, Template, UnitMeta, Workflow } from '@shared/types'
@@ -93,8 +93,8 @@ function withTriggerOff(wf: Workflow, off: boolean): Workflow {
 
 const safeDirName = (s: string) => s.replace(/[<>:"/\\|?*\x00-\x1f]/g, '_').trim() || '未命名'
 
-/** 最终 Prompt 的模块：全局 / 画风 → 场景 → 保留片段（镜头位置）→ 角色 → 服装；顺序与连接符按设置中的 Prompt 组合规则 */
-export const REPLICA_MODULE_LABELS: Record<string, string> = { global: '全局 / 画风', scene: '场景', camera: '保留片段', character: '角色', outfit: '服装' }
+/** 最终 Prompt 的来源：全局 / 画风 → 场景 → 保留片段；新角色与服装固定插在第一组人数 Tag（1girl, solo 等）之后（见 replicaPositive） */
+export const REPLICA_MODULE_LABELS: Record<string, string> = { global: '全局 / 画风', scene: '场景', camera: '保留片段', count: '人数（原图）', character: '角色', outfit: '服装' }
 
 export function planForReplica(store: Store, rec: ReplicaRecord, settings?: Settings, dateStr?: string): ReplicaPlan {
   store.files?.scan()
@@ -141,6 +141,7 @@ export function planForReplica(store: Store, rec: ReplicaRecord, settings?: Sett
   const trim = settings.trim_modules ?? true
   const posSep = unescapeSeparator(settings.pos_separator ?? ', ')
   const negSep = unescapeSeparator(settings.neg_separator ?? ', ')
+  const moduleSep = unescapeSeparator(settings.pos_module_separator ?? settings.pos_separator ?? ', ')
   const fill = (s: string | undefined) => fillPlaceholders(s ?? '', character)
   const globalMod: [string, string] = [joinParts([fill(g?.positive), fill(data.global_text)], posSep, trim), joinParts([fill(g?.negative)], negSep, trim)]
   const sceneMod: [string, string] = [joinParts([fill(sc?.positive), fill(data.scene_text)], posSep, trim), joinParts([fill(sc?.negative)], negSep, trim)]
@@ -155,14 +156,17 @@ export function planForReplica(store: Store, rec: ReplicaRecord, settings?: Sett
   const rows: ReplicaRow[] = data.images.map((im, index) => {
     const r = recog.images[index]
     const outfit = outfitOf(imageOutfitId(im, data.outfit_id))
+    // 正向：固定规则，新角色与服装紧跟在人数 Tag（1girl, solo 等）之后；负面按设置的模块顺序
+    const pos = replicaPositive({ global: globalMod[0], scene: sceneMod[0], retained: r.retained, character: character?.positive ?? '', outfit: outfit?.positive ?? '', count: countTagsOf(r) }, moduleSep, posSep, trim)
     const modules: Modules = {
-      global: globalMod,
-      scene: sceneMod,
-      camera: [r.retained, data.keep_source_negative ? im.negative : ''],
-      character: [character?.positive ?? '', character?.negative ?? ''],
-      outfit: [outfit?.positive ?? '', outfit?.negative ?? ''],
+      global: [pos.modules.global, globalMod[1]],
+      scene: [pos.modules.scene, sceneMod[1]],
+      camera: [pos.modules.camera, data.keep_source_negative ? im.negative : ''],
+      character: ['', character?.negative ?? ''],
+      outfit: ['', outfit?.negative ?? ''],
     }
-    const [positive, negative] = compose(modules, settings!)
+    const positive = pos.positive
+    const negative = compose(modules, settings!)[1]
     const { state, reason } = rowState(im, r)
     const repeat = repeatOf(im, data)
     return {
@@ -185,7 +189,7 @@ export function planForReplica(store: Store, rec: ReplicaRecord, settings?: Sett
       manual: r.manual,
       positive,
       negative,
-      positive_parts: composeParts(modules, settings!),
+      positive_parts: pos.parts,
       size: imageSize(im),
       repeat,
       outfit: outfit?.name ?? '',
@@ -319,11 +323,6 @@ export function planForReplica(store: Store, rec: ReplicaRecord, settings?: Sett
     },
     recognition: { prefix_raw: recog.prefix_raw, prefix_auto: recog.prefix_auto, prefix_matches: recog.prefix_matches, usable: recog.usable, character: recog.character, outfit: recog.outfit, kept: recog.kept },
   }
-}
-
-/** 最终 Prompt 按模块分段（与 compose 使用相同的顺序与过滤规则；只用于显示来源） */
-function composeParts(modules: Modules, settings: Settings): { module: string; text: string }[] {
-  return normalizedOrder(settings.compose_order).map((m) => ({ module: m, text: (modules[m]?.[0] ?? '').trim() })).filter((p) => p.text)
 }
 
 /** 冻结为一个执行队列项：之后修改草稿不影响已入队的内容 */

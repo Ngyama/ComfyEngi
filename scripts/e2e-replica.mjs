@@ -155,7 +155,7 @@ try {
   check('3 张 × 2 次 = 6 个单元，变体名称可以区分', outputs.join() === '001_v01,002_v01,003_v01,001_v02,002_v02,003_v02', outputs.join())
   check('汇总显示单元数', (await tid('replica-units-summary').innerText()).includes('6'))
   const unit = (o) => win.locator(`[data-testid=replica-unit][data-output="${o}"]`)
-  check('最终 Prompt：保留片段 + 新角色', (await unit('001_v01').locator('[data-testid=replica-unit-positive]').innerText()).includes('from side, smile, park') && (await unit('001_v01').locator('[data-testid=replica-unit-positive]').innerText()).includes('char_b'))
+  check('最终 Prompt：人数 Tag + 新角色 + 保留片段', (await unit('001_v01').locator('[data-testid=replica-unit-positive]').innerText()).includes('from side, smile, park') && (await unit('001_v01').locator('[data-testid=replica-unit-positive]').innerText()).includes('char_b'))
   check('最终 Prompt 不含旧角色 Tag', !(await unit('002_v01').locator('[data-testid=replica-unit-positive]').innerText()).includes('Red_Hair'))
   await shot('r4-preview')
   // 最终工作流
@@ -201,8 +201,8 @@ try {
   check('六个单元都提交了', submitted.length === 6, String(submitted.length))
   const SEP = ',\n\n'
   const texts = submitted.map(([, g]) => g['6'].inputs.text)
-  const tail = `${SEP}char_b, (pink hair:1.1)`
-  check('每张图的 Prompt = 保留片段 + 新角色', texts[0] === `from side, smile, park${tail}` && texts[1] === `cowboy shot, sitting, beach${tail}` && texts[2] === `running, street${tail}` && texts[3] === texts[0], texts.join(' | '))
+  const head = `1girl, char_b, (pink hair:1.1)${SEP}`
+  check('每张图的 Prompt = 人数 Tag + 新角色 + 保留片段', texts[0] === `${head}from side, smile, park` && texts[1] === `${head}cowboy shot, sitting, beach` && texts[2] === `${head}running, street` && texts[3] === texts[0], texts.join(' | '))
   check('Seed 来自新工作流的逻辑，每个单元不同', new Set(submitted.map(([, g]) => g['3'].inputs.seed)).size === 6 && !submitted.some(([, g]) => [1001, 1002, 1003].includes(g['3'].inputs.seed)))
   check('尺寸按原图', submitted.slice(0, 3).map(([, g]) => g['5'].inputs.width).join() === '832,1024,640')
   check('负面只用角色负面（默认不保留原图负面）', submitted[0][1]['7'].inputs.text === 'bad hands')

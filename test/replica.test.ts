@@ -292,10 +292,10 @@ describe('计划与执行', () => {
     expect(plan.errors).toEqual([])
     expect(plan.units).toHaveLength(3)
     const [a, b, c] = plan.units
-    const tail = `${SEP}char_b, (pink hair:1.1)${SEP}school uniform`
-    expect(a.positive).toBe(`from side, (smile:1.2), park${tail}`)
-    expect(b.positive).toBe(`cowboy shot, sitting, beach${tail}`)
-    expect(c.positive).toBe(`upper body, running${tail}`)
+    const head = `1girl, char_b, (pink hair:1.1), school uniform${SEP}`
+    expect(a.positive).toBe(`${head}from side, (smile:1.2), park`)
+    expect(b.positive).toBe(`${head}cowboy shot, sitting, beach`)
+    expect(c.positive).toBe(`${head}upper body, running`)
     expect(a.negative).toBe('bad hands')
     expect([a.seed, b.seed, c.seed]).toEqual([500, 501, 502])
     expect([a.width, b.width, c.width]).toEqual([832, 1024, 640])
@@ -333,18 +333,18 @@ describe('计划与执行', () => {
     const fixed = [{ ...images[0], confirmed: true }, { ...images[1], retained_manual: 'from side, sitting' }, images[2], images[3]]
     const p2 = planForReplica(s, draft(fixed))
     expect(p2.rows.map((r) => r.state)).toEqual(['valid', 'valid', 'confirm', 'invalid'])
-    expect(p2.units[1].positive.startsWith(`from side, sitting${SEP}`)).toBe(true)
+    expect(p2.units[1].positive.endsWith(`${SEP}from side, sitting`)).toBe(true)
     const grouped = planForReplica(s, draft([{ ...images[2], positive: '1girl, char_a, red hair, from side, (red hair, smile:1.2), running' }]))
     expect(grouped.rows[0].state).toBe('valid')
     expect(grouped.rows[0].retained).toBe('from side, (smile:1.2), running')
   })
 
-  it('Prompt 映射按模块拆分的工作流：保留片段放在镜头模块，各模块分别写入', async () => {
+  it('Prompt 映射按模块拆分的工作流：角色与服装随人数 Tag 写入保留片段所在的模块', async () => {
     const mapping = [...SAMPLE_MAPPING.filter((m) => !m.source.startsWith('lora1') && m.source !== 'positive'), newEntry('positive', '6', 'text', ['camera', 'character'])]
     const id = s.save('workflows', { name: '模块', api_json: SAMPLE_WORKFLOW, mapping })
     const plan = planForReplica(s, draft(await importAll(), { workflow_id: id }))
     expect(plan.errors).toEqual([])
-    expect(applyInputs(SAMPLE_WORKFLOW, plan.units[0].inputs!)['6'].inputs.text).toBe(`from side, (smile:1.2), park${SEP}char_b, (pink hair:1.1)`)
+    expect(applyInputs(SAMPLE_WORKFLOW, plan.units[0].inputs!)['6'].inputs.text).toBe(`1girl, char_b, (pink hair:1.1)${SEP}from side, (smile:1.2), park`)
   })
 
   it('LoRA：没有加载位置时报错；替换后写入角色 LoRA；可以调整权重或关闭', async () => {

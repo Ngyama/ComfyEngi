@@ -839,7 +839,7 @@ export interface ReplicaRow {
   /** 最终 Prompt（每个变体相同；与写入工作流的内容相同） */
   positive: string
   negative: string
-  /** 最终 Prompt 按来源分段（显示用，拼接结果就是 positive） */
+  /** 最终 Prompt 按来源分段（显示用，顺序与 positive 相同；角色与服装在人数 Tag 之后） */
   positive_parts: { module: string; text: string }[]
   size: ImageSize
   repeat: number

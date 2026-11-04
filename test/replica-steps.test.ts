@@ -7,7 +7,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { defaultLoraConfig, setCharTarget } from '@shared/lora-config'
 import { applyInputs, newEntry } from '@shared/mapping'
 import { assignOutfit, expandOrder, normalizeReplicaData, normalizeReplicaImage, outfitRuns, REPLICA_VERSION, variantStem, type ReplicaData, type ReplicaImage } from '@shared/replica'
-import { cameraKeysOf, classifyTag, commonPrefix, recognizeDraft } from '@shared/replica-recognize'
+import { cameraKeysOf, classifyTag, commonPrefix, recognizeDraft, replicaPositive } from '@shared/replica-recognize'
 import { DEFAULT_SETTINGS, type ApiWorkflow, type LoraResource, type MappingEntry } from '@shared/types'
 import { enqueueReplica, finalReplicaWorkflow, planForReplica } from '../src/main/replica'
 import type { Store } from '../src/main/store'
@@ -122,6 +122,31 @@ describe('识别保留片段', () => {
   })
 })
 
+describe('最终正向 Prompt：角色与服装固定在人数 Tag 之后', () => {
+  const build = (over: Partial<Parameters<typeof replicaPositive>[0]>) => replicaPositive({ global: '', scene: '', retained: 'from side, smile', character: 'new girl, (pink hair:1.1)', outfit: 'school uniform', count: [], ...over }, SEP, ', ')
+  it('全局中有 1girl, solo：插在这组人数 Tag 之后，其余内容不动', () => {
+    const r = build({ global: 'masterpiece, 1girl, solo, best quality', scene: 'park' })
+    expect(r.positive).toBe(['masterpiece, 1girl, solo, new girl, (pink hair:1.1), school uniform, best quality', 'park', 'from side, smile'].join(SEP))
+    expect(r.parts).toEqual([{ module: 'global', text: 'masterpiece, 1girl, solo' }, { module: 'character', text: 'new girl, (pink hair:1.1)' }, { module: 'outfit', text: 'school uniform' }, { module: 'global', text: 'best quality' }, { module: 'scene', text: 'park' }, { module: 'camera', text: 'from side, smile' }])
+    expect(r.modules.global).toBe('masterpiece, 1girl, solo, new girl, (pink hair:1.1), school uniform, best quality')
+  })
+  it('人数 Tag 在结尾或保留片段中、带权重时同样插在其后', () => {
+    expect(build({ global: 'masterpiece, (1girl:1.1), solo' }).positive).toBe(['masterpiece, (1girl:1.1), solo, new girl, (pink hair:1.1), school uniform', 'from side, smile'].join(SEP))
+    expect(build({ retained: 'from side, 2girls, smile' }).positive).toBe('from side, 2girls, new girl, (pink hair:1.1), school uniform, smile')
+  })
+  it('全局 / 场景 / 保留片段都没有人数 Tag：使用原图开头的人数 Tag，放在保留片段之前', () => {
+    const r = build({ global: 'masterpiece', count: ['1girl', 'solo'] })
+    expect(r.positive).toBe(['masterpiece', '1girl, solo, new girl, (pink hair:1.1), school uniform', 'from side, smile'].join(SEP))
+    expect(r.parts.map((p) => p.module)).toEqual(['global', 'count', 'character', 'outfit', 'camera'])
+    expect(build({ global: 'masterpiece' }).positive).toBe(['masterpiece', 'new girl, (pink hair:1.1), school uniform', 'from side, smile'].join(SEP))
+    expect(build({ global: 'masterpiece', character: '', outfit: '', count: ['1girl'] }).positive).toBe(['masterpiece', '1girl', 'from side, smile'].join(SEP))
+  })
+  it('原图开头的人数 Tag 会保留下来（旧角色 Tag 仍删除）', () => {
+    const r = recog(SET.map((p) => im(p)))
+    expect(r.images[0].prefix).toContain('1girl')
+  })
+})
+
 describe('重复生成的顺序与文件名', () => {
   it('100 张 × 10 次 = 1000 个单元，每个变体可以区分', () => {
     const set = expandOrder(Array(100).fill(10), 'set')
@@ -201,14 +226,14 @@ describe('计划、最终 JSON 与入队快照', () => {
   })
   afterEach(() => s.close())
 
-  it('最终 Prompt = 新全局 / 画风 + 新场景 + 保留片段 + 新角色 + 新服装；预览就是写入工作流的内容', () => {
+  it('最终 Prompt：新全局 / 画风 + 新场景 + 人数 Tag + 新角色 + 新服装 + 保留片段；预览就是写入工作流的内容', () => {
     const rec = draft([image('a.png')], { global_id: globalId, global_text: 'soft light', scene_id: sceneId, scene_text: 'window', outfit_id: outfitA })
     const plan = planForReplica(s, rec)
     expect(plan.errors).toEqual([])
     const row = plan.rows[0]
     expect(row.retained).toBe('from side, smile')
-    expect(row.positive).toBe(['newest, flat color, soft light', 'classroom, window', 'from side, smile', 'new girl', 'school uniform'].join(SEP))
-    expect(row.positive_parts.map((p) => p.module)).toEqual(['global', 'scene', 'camera', 'character', 'outfit'])
+    expect(row.positive).toBe(['newest, flat color, soft light', 'classroom, window', '1girl, new girl, school uniform', 'from side, smile'].join(SEP))
+    expect(row.positive_parts.map((p) => p.module)).toEqual(['global', 'scene', 'count', 'character', 'outfit', 'camera'])
     expect(row.negative).toBe('lowres, char neg')
     const json = finalReplicaWorkflow(s, rec, 0).json
     expect(json['6'].inputs.text).toBe(row.positive)
@@ -331,7 +356,7 @@ describe('计划、最终 JSON 与入队快照', () => {
       const plan = planForReplica(s, draft(imgs, { outfit_id: outfitA }))
       expect(plan.errors).toEqual([])
       expect(plan.rows.map((r) => r.outfit)).toEqual(['校服', '校服', '泳装', '泳装'])
-      expect(plan.rows[2].positive.endsWith(`new girl${SEP}swimsuit`)).toBe(true)
+      expect(plan.rows[2].positive).toContain('1girl, new girl, swimsuit')
       expect(plan.rows[2].negative).toContain('coat')
       expect(plan.summary.character).toMatchObject({ name: '新角色', positive: 'new girl' })
       expect(plan.summary.outfit).toMatchObject({ name: '校服', positive: 'school uniform' })

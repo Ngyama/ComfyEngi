@@ -745,11 +745,12 @@ const MODULE_STYLE: Record<string, [string, string]> = {
   global: ['全局 / 画风', 'text-sky-700 dark:text-sky-300'],
   scene: ['场景', 'text-emerald-700 dark:text-emerald-300'],
   camera: ['保留片段', ''],
+  count: ['人数（原图开头）', 'text-amber-700 dark:text-amber-300'],
   character: ['角色', 'text-primary'],
   outfit: ['服装', 'text-violet-700 dark:text-violet-300'],
 }
 
-/** 最终 Prompt 按来源着色显示（文字与写入工作流的 Prompt 相同，模块之间的连接符按设置） */
+/** 最终 Prompt 按来源着色显示（文字与写入工作流的 Prompt 相同；新角色与服装固定在人数 Tag 之后） */
 function ModuleParts({ parts }: { parts: { module: string; text: string }[] }) {
   return (
     <span className="whitespace-pre-wrap select-text">

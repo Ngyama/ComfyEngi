@@ -235,7 +235,7 @@ describe('计划、预览与队列', () => {
     expect(plan.errors).toEqual([])
     const json = finalReplicaWorkflow(s, rec, 0).json
     expect(json['45'].inputs.string_a).toBe('')
-    expect(json['3'].inputs.populated_text).toBe(`from side, smile${SEP}new girl`)
+    expect(json['3'].inputs.populated_text).toBe(`1girl, new girl${SEP}from side, smile`)
     expect(json['46'].inputs.model).toEqual(g['46'].inputs.model)
     expect(s.get('workflows', wid)!.controls).toBeNull()
   })
@@ -251,8 +251,8 @@ describe('计划、预览与队列', () => {
   })
   it('每张图保留自己的内容', () => {
     const rec = draft(saveWf(direct()), [image('a.png', '1girl, red_hair, from side, smile'), image('b.png', '1girl, red_hair, from above, sit')])
-    expect(finalReplicaWorkflow(s, rec, 0).json['3'].inputs.populated_text).toBe(`from side, smile${SEP}new girl`)
-    expect(finalReplicaWorkflow(s, rec, 1).json['3'].inputs.populated_text).toBe(`from above, sit${SEP}new girl`)
+    expect(finalReplicaWorkflow(s, rec, 0).json['3'].inputs.populated_text).toBe(`1girl, new girl${SEP}from side, smile`)
+    expect(finalReplicaWorkflow(s, rec, 1).json['3'].inputs.populated_text).toBe(`1girl, new girl${SEP}from above, sit`)
   })
   it('Prompt 中的 LoRA 文字从保留片段中删除并提示；重复 Tag 只提示，不改内容', () => {
     const rec = draft(saveWf(direct()), [image('a.png', '1girl, red_hair, from side, new girl, <lora:old_char:0.8>')])
@@ -260,7 +260,7 @@ describe('计划、预览与队列', () => {
     expect(plan.warnings.join()).toContain('<lora:')
     expect(plan.warnings.join()).toContain('重复')
     expect(plan.rows[0].removed_other).toEqual(['<lora:old_char:0.8>'])
-    expect(plan.rows[0].positive).toBe(`from side, new girl${SEP}new girl`)
+    expect(plan.rows[0].positive).toBe(`1girl, new girl${SEP}from side, new girl`)
   })
   it('关闭一个 LoRA 不影响已绕过的节点，保存映射也不影响节点控制', () => {
     const g = direct()

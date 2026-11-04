@@ -6,6 +6,7 @@
 // （权重、括号、换行与顺序不变，删除使用与旧版相同的 applyTagReplacement）。
 
 import { applyTagReplacement, promptUsable, type ReplacePart, type ReplicaData } from './replica'
+import { joinModules } from './prompt'
 import { normalizeKey, parseToken, topLevelSegments } from './tags'
 
 export type TagClass = 'quality' | 'count' | 'camera' | 'name' | 'appearance' | 'outfit' | 'lora' | 'other'
@@ -360,4 +361,90 @@ export function recognizeDraft(data: Pick<ReplicaData, 'images' | 'tag_fix' | 'p
     })),
     { tag_fix: data.tag_fix, prefix_text: data.prefix_text, camera_keys: cameraKeys },
   )
+}
+
+// ---------------- 最终正向 Prompt（固定规则）
+
+/** 原图开头（被替换的部分）里的人数 Tag（1girl、solo 等），原写法、去重；手动片段时取整段原 Prompt */
+export function countTagsOf(r: ImageRecognition): string[] {
+  const seen = new Set<string>()
+  const out: string[] = []
+  for (const s of r.manual ? r.segments : r.segments.slice(0, r.cut)) {
+    if (s.cls !== 'count' || seen.has(s.key)) continue
+    seen.add(s.key)
+    out.push(s.raw)
+  }
+  return out
+}
+
+/** 文字中第一组连续人数 Tag 的结束位置；没有时为 -1 */
+function countRunEnd(text: string): number {
+  const segs = topLevelSegments(text).segments
+  const i = segs.findIndex((s) => COUNT_RE.test(keyOf(s.raw)))
+  if (i < 0) return -1
+  let j = i
+  while (j + 1 < segs.length && COUNT_RE.test(keyOf(segs[j + 1].raw))) j++
+  return segs[j].end
+}
+
+export interface ReplicaPromptInput {
+  global: string
+  scene: string
+  retained: string
+  character: string
+  outfit: string
+  /** 原图开头里的人数 Tag（见 countTagsOf） */
+  count: string[]
+}
+export interface ReplicaPrompt {
+  positive: string
+  /** 显示用：按来源分段，顺序与 positive 相同 */
+  parts: { module: string; text: string }[]
+  /** 写入工作流的模块文字（角色与服装已经插入到其中一个模块，character / outfit 模块的正向为空） */
+  modules: { global: string; scene: string; camera: string }
+}
+
+const edgeTrim = (s: string) => s.replace(/^[\s,]+|[\s,]+$/g, '')
+
+/**
+ * 套图复刻的最终正向 Prompt：新角色与新服装紧跟在人数 Tag（1girl, solo 等）之后。
+ * 依次在全局 / 画风、场景、保留片段中找第一组连续的人数 Tag，插在这组之后；
+ * 都没有时使用原图开头的人数 Tag，与角色、服装一起放在保留片段之前；原图也没有时，角色与服装放在保留片段之前。
+ */
+export function replicaPositive(p: ReplicaPromptInput, moduleSep: string, tagSep: string, trim = true): ReplicaPrompt {
+  const ins = [
+    { module: 'character', text: edgeTrim(p.character ?? '') },
+    { module: 'outfit', text: edgeTrim(p.outfit ?? '') },
+  ].filter((x) => x.text)
+  const insText = ins.map((x) => x.text).join(tagSep)
+  const mods = { global: p.global ?? '', scene: p.scene ?? '', camera: p.retained ?? '' }
+  const order = ['global', 'scene', 'camera'] as const
+  const join = (m: typeof mods) => joinModules([m.global, m.scene, m.camera], moduleSep, trim)
+  for (const m of order) {
+    const end = countRunEnd(mods[m])
+    if (end < 0) continue
+    const before = mods[m].slice(0, end)
+    const after = mods[m].slice(end)
+    const out = { ...mods, [m]: insText ? `${before}${tagSep}${insText}${after}` : mods[m] }
+    const parts: { module: string; text: string }[] = []
+    for (const k of order) {
+      if (k !== m) {
+        if (mods[k].trim()) parts.push({ module: k, text: mods[k].trim() })
+        continue
+      }
+      parts.push({ module: k, text: before.trim() }, ...ins)
+      if (edgeTrim(after)) parts.push({ module: k, text: edgeTrim(after) })
+    }
+    return { positive: join(out), parts, modules: out }
+  }
+  const countText = p.count.map((t) => t.trim()).filter(Boolean).join(tagSep)
+  const lead = [countText, insText].filter(Boolean).join(tagSep)
+  const out = { ...mods, camera: joinModules([lead, mods.camera], moduleSep, trim) }
+  const parts = [
+    ...(['global', 'scene'] as const).filter((k) => mods[k].trim()).map((k) => ({ module: k, text: mods[k].trim() })),
+    ...(countText ? [{ module: 'count', text: countText }] : []),
+    ...ins,
+    ...(mods.camera.trim() ? [{ module: 'camera', text: mods.camera.trim() }] : []),
+  ]
+  return { positive: join(out), parts, modules: out }
 }
