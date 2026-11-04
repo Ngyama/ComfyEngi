@@ -181,7 +181,7 @@ export function PresetDialog({ open, onOpenChange, insertAfter, onImport, initia
           <SearchBox value={q} onChange={setQ} placeholder="搜索名称、动作卡、表情…" className="flex-1" />
         </div>
         <div className="flex min-h-0 flex-1 gap-3">
-          <div className="w-64 shrink-0 space-y-1 overflow-y-auto pr-1">
+          <div className="w-64 shrink-0 space-y-1 overflow-y-auto p-0.5 pr-1">
             {shown.map((p) => (
               <button key={p.id} type="button" onClick={() => setCur(p.id)} data-testid="preset-row" className={cn('w-full rounded-xl bg-card p-2.5 text-left ring-1 ring-tint/[0.08] hover:bg-accent', preset?.id === p.id && 'bg-primary/10 ring-primary/50')}>
                 <div className="truncate text-[13px] font-medium">{p.name || '（未命名）'}</div>

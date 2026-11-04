@@ -336,7 +336,7 @@ export function PosePicker({ open, onOpenChange, onAdd, insertAfter }: { open: b
         </div>
         {mode === 'card' && cardList.length > 0 && (
           <div className="flex min-h-0 flex-1 gap-3">
-            <div className="w-60 shrink-0 space-y-1 overflow-y-auto pr-1">
+            <div className="w-60 shrink-0 space-y-1 overflow-y-auto p-1">
               {cardList.map((c) => {
                 const key = `c:${c.id}`
                 const on = picked.includes(key)

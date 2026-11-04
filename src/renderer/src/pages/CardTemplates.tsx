@@ -190,7 +190,7 @@ function CardBody({ card, q, onDeleted }: { card: Template; q: string; onDeleted
               )}
               <span className="ml-auto text-[11px] text-muted-foreground">Ctrl / Shift 点击多选 · Ctrl+D 复制 · Alt+↑↓ 切换</span>
             </div>
-            <div className="min-h-0 flex-1 space-y-0.5 overflow-y-auto pr-1">
+            <div className="min-h-0 flex-1 space-y-0.5 overflow-y-auto p-0.5 pr-1">
               <SortableArea
                 items={visible}
                 getId={(t) => String(t.id)}
@@ -218,7 +218,7 @@ function CardBody({ card, q, onDeleted }: { card: Template; q: string; onDeleted
         )}
       </section>
 
-      <section className="w-[420px] shrink-0 overflow-y-auto" data-testid="template-editor">
+      <section className="w-[420px] shrink-0 overflow-y-auto p-0.5" data-testid="template-editor">
         {current ? <TemplateEditor key={current.id} t={current} from={all.find((x) => x.id === source[current.id])} /> : <div className="pt-10 text-center text-xs text-muted-foreground">选择一个姿态模板进行编辑</div>}
       </section>
     </div>
@@ -299,7 +299,7 @@ function CardSettings({ card, cfg, saveCard, onClose }: { card: Template; cfg: A
   const [skeleton, setSkeleton] = useState(skeletonOf(card))
   if (!draft) return null
   return (
-    <div className="min-h-0 flex-1 space-y-4 overflow-y-auto pr-1" data-testid="card-settings-panel">
+    <div className="min-h-0 flex-1 space-y-4 overflow-y-auto p-0.5 pr-1" data-testid="card-settings-panel">
       <div className="flex items-center">
         <span className="text-[13px] font-medium">动作卡设置</span>
         <Button size="icon-sm" variant="ghost" className="ml-auto" aria-label="关闭" onClick={onClose}>
