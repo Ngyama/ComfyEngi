@@ -13,7 +13,7 @@ import { useDraft } from '@/lib/hooks'
 import { confirm, reloadLib, templatesOf, useLib } from '@/lib/stores'
 import { cn } from '@/lib/utils'
 import { isSoloCard, normalizeCard } from '@shared/cards'
-import { CATEGORY_BARS, CATEGORY_COLORS, cardTemplates, categoryColor, categoryLabel, categoryOrder, distinctTags, isTemplateCard, skeletonOf, TEMPLATE_SLOTS, templateCombos, templateExpressionIds, templatePlaceholders, templateTags, UNCATEGORIZED } from '@shared/card-templates'
+import { CATEGORY_BARS, CATEGORY_COLORS, cardTemplates, categoryColor, expressionAnchor, categoryLabel, categoryOrder, distinctTags, isTemplateCard, skeletonOf, TEMPLATE_SLOTS, templateCombos, templateExpressionIds, templatePlaceholders, templateTags, UNCATEGORIZED } from '@shared/card-templates'
 import type { ActionCard, Template } from '@shared/types'
 import { MaterialPicker } from './plan/MaterialPicker'
 
@@ -482,7 +482,7 @@ function TemplateRow({ t, group, active, checked, onClick }: { t: Template; grou
       className={cn('flex cursor-pointer items-center gap-2 rounded-lg px-2 py-1.5 ring-1 ring-transparent hover:bg-tint/[0.05]', active && 'bg-accent/80 ring-primary/50', checked && 'bg-primary/10 ring-primary/40', s.isDragging && 'shadow-xl shadow-tint/15')}
     >
       {checked && <Check className="size-3.5 shrink-0 text-primary" />}
-      <span className="w-28 shrink-0 truncate text-[12.5px] font-medium" title={t.name}>
+      <span className="w-56 max-w-[45%] shrink-0 truncate text-[12.5px] font-medium" title={t.name}>
         {t.name || '（未命名）'}
       </span>
       {own > 0 && (
@@ -654,7 +654,7 @@ function TemplateEditor({ t, card, order, from }: { t: Template; card: Template;
           没有 {missing.map((s) => `{${s.names[0]}}`).join('、')}：{missing.map((s) => s.label).join('、')}不会写入这个模板生成的图片
         </div>
       )}
-      {used.length > 0 && !modules.has('expression') && <div className="text-[11.5px] text-warning">没有 {'{表情}'}：表情会追加在 Prompt 末尾</div>}
+      {used.length > 0 && !modules.has('expression') && <div className="text-[11.5px] text-muted-foreground">没有写 {'{表情}'}：表情{expressionAnchor(draft.positive) ? '写在主角色服装之后' : '追加在 Prompt 末尾'}</div>}
       {changes && (changes.added.length > 0 || changes.removed.length > 0) && (
         <div className="space-y-1 text-[11.5px]" data-testid="template-diff">
           <div className="text-muted-foreground">与复制来源「{from!.name}」相比</div>

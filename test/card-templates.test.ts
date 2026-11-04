@@ -31,6 +31,13 @@ describe('占位符', () => {
     expect(fillTemplate('x,', { ...V, extra: 'sweat' })).toBe('x, sweat')
     expect(fillTemplate('x', V)).toBe('x')
   })
+  it('没有 {表情} 时表情写在 {女服装} 之后（服装为空时同样）；都没有时追加在末尾', () => {
+    const body = '{女特征}, {女服装},\nmissionary,\n{男特征}, {男服装}'
+    expect(fillTemplate(body, { ...V, expression: 'blush' })).toBe('1girl, char_a, red hair, school uniform, blush,\nmissionary,\n1boy')
+    expect(fillTemplate(body, { ...V, outfit: '', expression: 'blush' })).toBe('1girl, char_a, red hair, blush,\nmissionary,\n1boy')
+    expect(fillTemplate('a, {表情}, {女服装}', { ...V, expression: 'blush' })).toBe('a, blush, school uniform')
+    expect(fillTemplate('a, b', { ...V, expression: 'blush' })).toBe('a, b, blush')
+  })
   it('无法识别的中文占位符报告出来；动态语法与角色名占位符不算', () => {
     expect(templatePlaceholders('{女服饰}, {a|b}, {角色名}, {char_tag}, {女特征}')).toEqual({ modules: new Set(['character']), unknown: ['{女服饰}'] })
     expect(fillTemplate('{女服饰}, {a|b}', V)).toBe('{女服饰}, {a|b}')
@@ -151,8 +158,8 @@ describe('计划展开', () => {
     expect(a.map((u) => u.positive).sort()).toEqual(['1girl, char_a, red hair, legs up, expr1, after', '1girl, char_a, red hair, legs up, expr2, after'])
     expect(a.map((u) => u.meta.expression).sort()).toEqual(['表情1', '表情2'])
     expect(a[0].meta.picks?.map((p) => p.pool)).toEqual(['template', 'expression'])
-    // 模板没有 {表情}：追加在末尾
-    expect(units.filter((u) => u.meta.template === 'b').map((u) => u.positive)).toEqual(['1girl, char_a, red hair, hug, expr3', '1girl, char_a, red hair, hug, expr3'])
+    // 模板没有 {表情}：写在主角色（服装）之后
+    expect(units.filter((u) => u.meta.template === 'b').map((u) => u.positive)).toEqual(['1girl, char_a, red hair, expr3, hug', '1girl, char_a, red hair, expr3, hug'])
     expect(templateExpressionIds({ card: null }, s.get('templates', card))).toEqual([shy, happy])
     // 删除的表情跳过并提示
     s.remove('templates', happy)

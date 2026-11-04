@@ -12,7 +12,7 @@ export const TEMPLATE_SLOTS: { module: string; names: string[]; label: string }[
   { module: 'camera', names: ['镜头'], label: '镜头' },
   { module: 'character', names: ['女特征', '主角色'], label: '主角色基础 Prompt（含 LoRA 触发词）' },
   { module: 'outfit', names: ['女服装', '主角色服装'], label: '主角色服装' },
-  { module: 'expression', names: ['表情'], label: '表情（模板没有 {表情} 时追加在末尾）' },
+  { module: 'expression', names: ['表情'], label: '表情（模板没有 {表情} 时写在 {女服装} 之后）' },
   { module: 'character2', names: ['男特征', '第二角色'], label: '第二角色基础 Prompt' },
   { module: 'outfit2', names: ['男服装', '第二角色服装'], label: '第二角色服装' },
   { module: 'extra', names: ['附加'], label: '动作的附加 Prompt（模板中没有时追加在末尾）' },
@@ -26,7 +26,7 @@ export const categoryLabel = (c: string) => c || '未分类'
 
 /** 新建模板的默认正文：双人卡含第二角色一行；中间空行写动作 */
 export function defaultSkeleton(solo: boolean): string {
-  return ['{全局},', '{场景}, {镜头},', '{女特征}, {女服装},', '', '{表情},', ...(solo ? [] : ['{男特征}, {男服装},']), '{附加}'].join('\n')
+  return ['{全局},', '{场景}, {镜头},', '{女特征}, {女服装}, {表情},', '', ...(solo ? [] : ['{男特征}, {男服装},']), '{附加}'].join('\n')
 }
 export const skeletonOf = (card: Pick<Template, 'card'> | null | undefined) => card?.card?.skeleton ?? defaultSkeleton(!!card?.card?.solo)
 
@@ -48,13 +48,26 @@ const S = '\u0000'
 export const APPENDED = ['expression', 'extra']
 const clean = (v: string | undefined) => (v ?? '').trim().replace(/[,，\s]+$/, '')
 
+/** 表情的默认位置：模板没有 {表情} 时紧跟在主角色服装之后（没有服装占位符时在主角色之后，都没有时追加在末尾） */
+export function expressionAnchor(body: string): { index: number } | null {
+  if (templatePlaceholders(body).modules.has('expression')) return null
+  for (const mod of ['outfit', 'character']) {
+    const names = TEMPLATE_SLOTS.find((s) => s.module === mod)!.names
+    const m = new RegExp(`\\{\\s*(?:${names.join('|')})\\s*\\}`).exec(body ?? '')
+    if (m) return { index: m.index + m[0].length }
+  }
+  return null
+}
+
 /**
  * 按占位符位置填入模块内容。空内容的占位符连同相邻的一个逗号一起去掉；整行只剩占位符时删除这一行。
- * 模板中没有 {表情}、{附加} 而内容不为空时，依次追加在末尾。其他文字（权重、换行、动态语法）原样保留
+ * 模板中没有 {表情} 时写在主角色服装之后（见 expressionAnchor）；没有 {附加} 而内容不为空时追加在末尾。其他文字（权重、换行、动态语法）原样保留
  */
 export function fillTemplate(body: string, values: Partial<Record<string, string>>): string {
   const used = new Set<string>()
-  const replaced = (body ?? '').replace(/\{([^{}|]*)\}/g, (all, raw: string) => {
+  const at = clean(values.expression) ? expressionAnchor(body) : null
+  const source = at ? `${body.slice(0, at.index)}, {表情}${body.slice(at.index)}` : (body ?? '')
+  const replaced = source.replace(/\{([^{}|]*)\}/g, (all, raw: string) => {
     const mod = SLOT_OF.get(raw.trim())
     if (!mod) return all
     used.add(mod)
