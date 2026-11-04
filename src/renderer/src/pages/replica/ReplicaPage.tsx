@@ -15,7 +15,7 @@ import { cn } from '@/lib/utils'
 import type { ReplicaPlanView } from '@shared/api'
 import { loraStem } from '@shared/mapping'
 import { normalizeKey } from '@shared/tags'
-import { assignOutfit, imageSize, MAX_REPEAT, normalizeReplicaData, outfitRuns, promptUsable, repeatOf, withoutOutfit, type ReplicaData, type ReplicaImage, type ReplicaRow } from '@shared/replica'
+import { assignOutfit, downscaleOf, imageSize, MAX_DOWNSCALE, MAX_REPEAT, sizeText, normalizeReplicaData, outfitRuns, promptUsable, repeatOf, withoutOutfit, type ReplicaData, type ReplicaImage, type ReplicaRow } from '@shared/replica'
 import { cameraKeysOf, recognizeDraft, type ImageRecognition, type SegRole, type SetRecognition, type TagSummary } from '@shared/replica-recognize'
 import type { Outfit } from '@shared/types'
 import { FinalWorkflowDialog } from '../plan/dialogs'
@@ -408,16 +408,16 @@ function ImportStep({ id, data, plan, update, setImage, flush, reload }: { id: n
         </div>
       </div>
       {cur && sel !== null && (
-        <ImageDetail key={cur.path} im={cur} gone={missing.some((m) => m.index === sel)} onChange={(p) => setImage(sel, p)} onRelocate={async () => { if (!(await flush())) return; const r = await call(api['replicas.relocateFile'](id, sel)); if (r === false) toast.error('这张图片的 Prompt 与草稿中的不一致，没有替换'); if (r) await reload() }} onRemove={() => { const path = cur.path; update((d) => ({ images: d.images.filter((x) => x.path !== path) })); setSel(null) }} />
+        <ImageDetail key={cur.path} im={cur} downscale={data.downscale} gone={missing.some((m) => m.index === sel)} onChange={(p) => setImage(sel, p)} onRelocate={async () => { if (!(await flush())) return; const r = await call(api['replicas.relocateFile'](id, sel)); if (r === false) toast.error('这张图片的 Prompt 与草稿中的不一致，没有替换'); if (r) await reload() }} onRemove={() => { const path = cur.path; update((d) => ({ images: d.images.filter((x) => x.path !== path) })); setSel(null) }} />
       )}
     </div>
   )
 }
 
-function ImageDetail({ im, gone, onChange, onRelocate, onRemove }: { im: ReplicaImage; gone: boolean; onChange: (p: Partial<ReplicaImage>) => void; onRelocate: () => void; onRemove: () => void }) {
+function ImageDetail({ im, downscale, gone, onChange, onRelocate, onRemove }: { im: ReplicaImage; downscale: number; gone: boolean; onChange: (p: Partial<ReplicaImage>) => void; onRelocate: () => void; onRemove: () => void }) {
   const [text, setText] = useState(im.positive)
   const need = !promptUsable(im)
-  const size = imageSize(im)
+  const size = imageSize(im, downscale)
   return (
     <div className="w-[320px] shrink-0 space-y-3 overflow-y-auto rounded-xl bg-card p-3 ring-1 ring-tint/[0.08]" data-testid="replica-image-detail">
       <Thumb path={im.path} width={480} className="aspect-[4/3] w-full" />
@@ -453,8 +453,8 @@ function ImageDetail({ im, gone, onChange, onRelocate, onRemove }: { im: Replica
         </div>
       )}
       <div className="text-[11.5px]" data-testid="replica-image-size">
-        <span className="text-muted-foreground">尺寸：</span>
-        {size.width ? `${size.width} × ${size.height}` : '没有尺寸信息'}
+        <span className="text-muted-foreground">生成尺寸：</span>
+        {size.width ? sizeText(size) : '没有尺寸信息'}
         {size.state === 'confirm' && <span className="ml-1 text-warning">（{size.note}）</span>}
       </div>
       <div className="rounded-lg bg-tint/[0.03] px-2 py-1.5 text-[11px] text-muted-foreground" data-testid="replica-source-info">
@@ -608,7 +608,7 @@ function RecogRow({ index, im, r, row, data, setImage, setFix }: { index: number
   const [text, setText] = useState(r.retained)
   const [w, setW] = useState('')
   const [h, setH] = useState('')
-  const size = imageSize(im)
+  const size = imageSize(im, data.downscale)
   const fixImage = (key: string, v: 'remove' | 'keep' | null) => {
     const next = { ...im.tag_fix }
     if (v === null) delete next[key]
@@ -623,7 +623,7 @@ function RecogRow({ index, im, r, row, data, setImage, setFix }: { index: number
         {r.needs_fix ? <span className="text-warning" data-testid="recog-state">需要处理</span> : <span className="text-success" data-testid="recog-state">{r.manual ? '手动片段' : im.accepted !== null && r.issues.length ? '已确认' : '可靠'}</span>}
         <span className="text-muted-foreground" data-testid="recog-cut-reason">{r.cut_reason === 'camera' ? '从镜头 Tag 保留' : r.cut_reason === 'prefix' ? '按共同前缀分割' : r.cut_reason === 'manual' ? '手动保留起点' : '无法判断起点'}</span>
         <div className="flex-1" />
-        <span className="text-muted-foreground" data-testid="recog-size">{size.width ? `${size.width}×${size.height}` : '工作流默认尺寸'}{size.state === 'confirm' ? '（需确认）' : size.state === 'manual' ? '（手动）' : ''}</span>
+        <span className="text-muted-foreground" data-testid="recog-size">{sizeText(size)}{size.state === 'confirm' ? '（需确认）' : size.state === 'manual' ? '（手动）' : ''}</span>
         <span className="text-muted-foreground">× {repeatOf(im, data)} 次</span>
       </div>
       {r.issues.length > 0 && (
@@ -766,6 +766,41 @@ function ModuleParts({ parts }: { parts: { module: string; text: string }[] }) {
 
 // ---------------- 第 3 步：配置
 
+/** 缩小倍率：原图经过放大时，原图尺寸 ÷ 倍率写入工作流，由工作流中的放大节点放大回原图尺寸 */
+function DownscaleSection({ data, update }: { data: ReplicaData; update: Update }) {
+  const [text, setText] = useState(String(data.downscale))
+  useEffect(() => setText(String(data.downscale)), [data.downscale])
+  const commit = (v: string) => {
+    const n = Number(v)
+    if (!Number.isFinite(n) || n < 1 || n > MAX_DOWNSCALE) {
+      toast.error(`缩小倍率需要在 1 – ${MAX_DOWNSCALE} 之间`)
+      setText(String(data.downscale))
+      return
+    }
+    const d = downscaleOf(n)
+    if (d !== data.downscale) update({ downscale: d })
+  }
+  const sample = data.images.map((im) => imageSize(im, data.downscale)).find((s) => s.source)
+  const manual = data.images.filter((im) => im.size).length
+  return (
+    <section className="space-y-2 rounded-xl bg-card p-3 ring-1 ring-tint/[0.08]" data-testid="replica-downscale">
+      <div className="text-[12.5px] font-medium">生成尺寸</div>
+      <div className="flex flex-wrap items-center gap-2 text-[12px]">
+        原图尺寸 ÷
+        <input type="number" min={1} max={MAX_DOWNSCALE} step={0.5} value={text} onChange={(e) => setText(e.target.value)} onBlur={(e) => commit(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && commit((e.target as HTMLInputElement).value)} className="w-16 rounded bg-tint/[0.05] px-1 py-0.5 text-center ring-1 ring-tint/[0.1] outline-none" data-testid="replica-downscale-input" />
+        {[1, 1.5, 2, 3, 4].map((n) => (
+          <Button key={n} size="sm" variant={data.downscale === n ? 'secondary' : 'ghost'} onClick={() => update({ downscale: n })} data-testid="replica-downscale-option">{n === 1 ? '不缩小' : `÷${n}`}</Button>
+        ))}
+      </div>
+      {sample && <div className="text-[11.5px]" data-testid="replica-downscale-sample">例：{sizeText(sample)}</div>}
+      <div className="text-[11px] text-muted-foreground">
+        原图经过放大时使用：例如原图 3072×3072、倍率 3，工作流中填 1024×1024，再由工作流的放大节点输出 3072×3072。结果取 8 的倍数。
+        {manual > 0 && ` 第 2 步手动指定尺寸的 ${manual} 张图按指定值生成，不再缩小。`}
+      </div>
+    </section>
+  )
+}
+
 function ConfigureStep({ data, plan, update }: { data: ReplicaData; plan: ReplicaPlanView | null; update: Update }) {
   const lib = useLib((s) => s.lib)!
   const [pickChar, setPickChar] = useState(false)
@@ -866,6 +901,7 @@ function ConfigureStep({ data, plan, update }: { data: ReplicaData; plan: Replic
             <Switch checked={data.keep_source_negative} onCheckedChange={(v) => update({ keep_source_negative: !!v })} data-testid="replica-keep-negative" />
           </label>
         </section>
+        <DownscaleSection data={data} update={update} />
         <section className="space-y-2 rounded-xl bg-card p-3 ring-1 ring-tint/[0.08]" data-testid="replica-repeat">
           <div className="text-[12.5px] font-medium">生成次数</div>
           <div className="flex flex-wrap items-center gap-2 text-[12px]">
@@ -1001,6 +1037,7 @@ function PreviewStep({ id, data, plan, goRecognize }: { id: number; data: Replic
                   {u.of > 1 && <span className="rounded bg-primary/10 px-1 text-[10.5px] text-primary" data-testid="replica-unit-variant">第 {u.variant + 1}/{u.of} 次</span>}
                   <span className="text-muted-foreground" data-testid="replica-output-name">→ {u.output_name}</span>
                   <span className="text-muted-foreground">服装：{r.outfit || '不使用'}</span>
+                  <span className="text-muted-foreground" data-testid="replica-unit-size">尺寸：{sizeText(r.size)}</span>
                   <div className="flex-1" />
                   <span className="text-muted-foreground">Seed {u.seed} · {r.size.width ? `${r.size.width}×${r.size.height}` : '默认尺寸'}</span>
                   <Button size="sm" variant="ghost" onClick={() => setJson(u.index)} data-testid="replica-unit-json">最终工作流</Button>

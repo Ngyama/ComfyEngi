@@ -546,6 +546,8 @@ export interface ReplicaData {
   repeat: number
   /** set：先完整生成第 1 套再生成第 2 套；image：每张图连续生成 */
   repeat_order: 'set' | 'image'
+  /** 生成尺寸的缩小倍率：原图尺寸 ÷ 倍率 = 写入工作流的尺寸（原图经过放大时使用，例如 3072×3072 ÷ 3 = 1024×1024）；手动指定的尺寸不再缩小 */
+  downscale: number
   /** 采样 Seed 的起点（第 n 个单元使用 seed_base + n），与原图 Seed 无关 */
   seed_base: number
   output: { dir: string }
@@ -641,6 +643,7 @@ export function normalizeReplicaData(raw: Partial<ReplicaData> | null | undefine
     lora_configs: r.lora_configs && typeof r.lora_configs === 'object' ? (r.lora_configs as ReplicaData['lora_configs']) : {},
     repeat: posInt(r.repeat, MAX_REPEAT) ?? 1,
     repeat_order: r.repeat_order === 'image' ? 'image' : 'set',
+    downscale: downscaleOf(r.downscale),
     seed_base: typeof r.seed_base === 'number' && Number.isSafeInteger(r.seed_base) && r.seed_base >= 0 ? r.seed_base : stableSeed(images.map((im) => im.path).join('\n')),
     output: { dir: text((r.output as { dir?: unknown } | undefined)?.dir) },
     ...(legacy ? { legacy } : {}),
@@ -711,6 +714,7 @@ function migrateV1(r: Record<string, unknown>, opts: NormalizeOptions): ReplicaD
     lora_configs,
     repeat: 1,
     repeat_order: 'set',
+    downscale: 1,
     seed_base: stableSeed(images.map((im) => im.path).join('\n')),
     output: { dir: text((r.output as { dir?: unknown } | undefined)?.dir) },
     legacy: { from: 1, notes, v1 },
@@ -757,23 +761,62 @@ export const promptUsable = (im: ReplicaImage) => im.status === 'ok' || im.confi
 export const originalPositive = (im: ReplicaImage) => (promptUsable(im) ? im.positive : '')
 
 export interface ImageSize {
+  /** 写入工作流的生成尺寸（已按缩小倍率换算） */
   width: number | null
   height: number | null
-  /** manual：手动指定；ok：元数据中的生成尺寸；confirm：只有图片实际尺寸（可能经过放大）；missing：使用工作流默认尺寸 */
+  /** manual：手动指定；ok：元数据中的尺寸；confirm：只有图片实际尺寸（可能经过放大）；missing：使用工作流默认尺寸 */
   state: 'manual' | 'ok' | 'confirm' | 'missing'
   note?: string
+  /** 原图尺寸（缩小之前；手动指定时没有） */
+  source?: { width: number; height: number }
+  /** 使用的缩小倍率（1 表示不缩小） */
+  scale?: number
+  /** 原图尺寸 ÷ 倍率不是 8 的整数倍，已取最接近的 8 的倍数 */
+  rounded?: boolean
 }
 
-/** 每张图保留的尺寸：手动指定 > 元数据中的生成尺寸 > 图片实际尺寸（需要确认） */
-export function imageSize(im: ReplicaImage): ImageSize {
+export const MAX_DOWNSCALE = 16
+/** 缩小倍率：1 – 16，允许小数（例如 1.5） */
+export function downscaleOf(v: unknown): number {
+  const n = typeof v === 'number' ? v : Number(v)
+  return Number.isFinite(n) && n >= 1 && n <= MAX_DOWNSCALE ? Math.round(n * 1000) / 1000 : 1
+}
+
+/** 原图尺寸 ÷ 倍率，取最接近的 8 的倍数（至少 64） */
+export function scaledSide(v: number, scale: number): { value: number; exact: boolean } {
+  const raw = v / scale
+  const value = Math.max(64, Math.round(raw / 8) * 8)
+  return { value, exact: Math.abs(raw - value) < 1e-6 }
+}
+
+/** 每张图的生成尺寸：手动指定（不缩小）> 元数据中的尺寸 > 图片实际尺寸（需要确认）；后两者按缩小倍率换算 */
+export function imageSize(im: ReplicaImage, downscale = 1): ImageSize {
   if (im.size) return { ...im.size, state: 'manual' }
   const w = im.params.width
   const h = im.params.height
   if (typeof w?.value === 'number' && typeof h?.value === 'number') {
     const state = w.state === 'ok' && h.state === 'ok' ? 'ok' : 'confirm'
-    return { width: w.value, height: h.value, state, ...(state === 'confirm' ? { note: w.note || h.note || '尺寸需要确认' } : {}) }
+    const scale = downscaleOf(downscale)
+    const sw = scaledSide(w.value, scale)
+    const sh = scaledSide(h.value, scale)
+    return {
+      width: scale === 1 ? w.value : sw.value,
+      height: scale === 1 ? h.value : sh.value,
+      state,
+      ...(state === 'confirm' ? { note: w.note || h.note || '尺寸需要确认' } : {}),
+      source: { width: w.value, height: h.value },
+      scale,
+      ...(scale !== 1 && !(sw.exact && sh.exact) ? { rounded: true } : {}),
+    }
   }
   return { width: null, height: null, state: 'missing', note: '原图没有尺寸信息，使用工作流默认尺寸' }
+}
+
+/** 显示用：「3072×3072 ÷ 3 → 1024×1024」 */
+export function sizeText(s: ImageSize): string {
+  if (!s.width || !s.height) return '工作流默认尺寸'
+  if (s.source && s.scale && s.scale !== 1) return `${s.source.width}×${s.source.height} ÷ ${s.scale} → ${s.width}×${s.height}${s.rounded ? '（取 8 的倍数）' : ''}`
+  return `${s.width}×${s.height}`
 }
 
 /** 这张图的生成次数 */

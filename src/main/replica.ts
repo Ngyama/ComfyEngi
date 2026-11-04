@@ -190,7 +190,7 @@ export function planForReplica(store: Store, rec: ReplicaRecord, settings?: Sett
       positive,
       negative,
       positive_parts: pos.parts,
-      size: imageSize(im),
+      size: imageSize(im, data.downscale),
       repeat,
       outfit: outfit?.name ?? '',
       outfit_source: im.outfit_id === undefined ? 'default' : 'image',
@@ -293,7 +293,9 @@ export function planForReplica(store: Store, rec: ReplicaRecord, settings?: Sett
   }
   if (dupeRows) warnings.push(`有 ${dupeRows} 张图的保留片段与新角色或服装 Prompt 重复（${[...dupes].slice(0, 5).join('、')}），可能是原角色 / 服装残留。需要时在第 2 步标记删除`)
   const uncertainSize = live.filter((r) => r.size.state === 'confirm').length
-  if (uncertainSize) warnings.push(`有 ${uncertainSize} 张图的尺寸只来自图片实际像素（可能经过放大），请在第 2 步确认或修改`)
+  if (uncertainSize) warnings.push(`有 ${uncertainSize} 张图的尺寸只来自图片实际像素（可能经过放大）${data.downscale === 1 ? '：原图放大过时，请在第 3 步设置缩小倍率' : `，已按缩小倍率 ${data.downscale} 换算`}；也可以在第 2 步逐张修改`)
+  const rounded = live.filter((r) => r.size.rounded).length
+  if (rounded) warnings.push(`有 ${rounded} 张图的原图尺寸 ÷ ${data.downscale} 不是 8 的整数倍，已取最接近的 8 的倍数（工作流放大后与原图尺寸可能略有差别）`)
   const noSize = live.filter((r) => r.size.state === 'missing').length
   if (noSize) warnings.push(`有 ${noSize} 张图没有尺寸信息，使用工作流默认尺寸`)
   const blocked = rows.filter((r) => r.state !== 'valid' && r.state !== 'excluded').length

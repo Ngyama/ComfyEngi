@@ -6,7 +6,7 @@ import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { defaultLoraConfig, setCharTarget } from '@shared/lora-config'
 import { applyInputs, newEntry } from '@shared/mapping'
-import { assignOutfit, expandOrder, normalizeReplicaData, normalizeReplicaImage, outfitRuns, REPLICA_VERSION, variantStem, type ReplicaData, type ReplicaImage } from '@shared/replica'
+import { assignOutfit, downscaleOf, expandOrder, normalizeReplicaData, normalizeReplicaImage, outfitRuns, REPLICA_VERSION, sizeText, variantStem, type ReplicaData, type ReplicaImage } from '@shared/replica'
 import { cameraKeysOf, classifyTag, commonPrefix, recognizeDraft, replicaPositive } from '@shared/replica-recognize'
 import { DEFAULT_SETTINGS, type ApiWorkflow, type LoraResource, type MappingEntry } from '@shared/types'
 import { enqueueReplica, finalReplicaWorkflow, planForReplica } from '../src/main/replica'
@@ -241,6 +241,27 @@ describe('计划、最终 JSON 与入队快照', () => {
     expect(plan.units[0].positive).toBe(row.positive)
     // 可选：同时保留原图负面
     expect(planForReplica(s, draft([image('a.png')], { keep_source_negative: true })).rows[0].negative).toBe('bad, char neg')
+  })
+
+  it('缩小倍率：原图尺寸 ÷ 倍率写入工作流（3072×3072 ÷ 3 = 1024×1024）；手动尺寸不缩小；不整除时取 8 的倍数并提示', () => {
+    const big = (name: string, w: number, h: number) => ({ ...image(name), params: { width: { value: w, state: 'ok' as const }, height: { value: h, state: 'ok' as const } } })
+    const rec = draft([big('a.png', 3072, 3072), big('b.png', 2496, 3648), { ...big('c.png', 3072, 3072), size: { width: 832, height: 1216 } }], { downscale: 3 })
+    const plan = planForReplica(s, rec)
+    expect(plan.errors).toEqual([])
+    expect(plan.rows[0].size).toMatchObject({ width: 1024, height: 1024, source: { width: 3072, height: 3072 }, scale: 3 })
+    expect(plan.rows[0].size.rounded).toBeUndefined()
+    expect(finalReplicaWorkflow(s, rec, 0).json['5'].inputs).toMatchObject({ width: 1024, height: 1024 })
+    expect(plan.rows[1].size).toMatchObject({ width: 832, height: 1216 })
+    expect(finalReplicaWorkflow(s, rec, 2).json['5'].inputs).toMatchObject({ width: 832, height: 1216 })
+    expect(plan.warnings.join()).not.toContain('8 的倍数')
+    const odd = planForReplica(s, draft([big('a.png', 2000, 3000)], { downscale: 3 }))
+    expect(odd.rows[0].size).toMatchObject({ width: 664, height: 1000, rounded: true })
+    expect(odd.warnings.join()).toContain('8 的倍数')
+    expect(sizeText(plan.rows[0].size)).toBe('3072×3072 ÷ 3 → 1024×1024')
+    // 倍率范围与默认值
+    expect([undefined, 0, 0.5, 17, 'x', 1.5, 2].map((v) => downscaleOf(v))).toEqual([1, 1, 1, 1, 1, 1.5, 2])
+    expect(normalizeReplicaData(null).downscale).toBe(1)
+    expect(normalizeReplicaData(JSON.parse(JSON.stringify(rec.data))).downscale).toBe(3)
   })
 
   it('不继承原图的 Seed、Steps、CFG、Sampler 与 LoRA；尺寸按原图', () => {
