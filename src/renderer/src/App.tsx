@@ -3,7 +3,7 @@ import LorasPage from '@/pages/LorasPage'
 import { VaultPanel } from '@/components/VaultPanel'
 import { api } from '@/lib/api'
 import { useEffect, useState, type ComponentType } from 'react'
-import { BookOpen, Copy, History, Layers, ListOrdered, Pickaxe, Settings, Shapes, Users, Workflow } from 'lucide-react'
+import { BookOpen, Copy, History, Layers, ListOrdered, Maximize2, Pickaxe, Settings, Shapes, Users, Workflow } from 'lucide-react'
 import { Toaster } from '@/components/ui/sonner'
 import { TooltipProvider } from '@/components/ui/tooltip'
 import { ConfirmHost, StatusDot } from '@/components/common'
@@ -14,6 +14,7 @@ import QueuePage from '@/pages/QueuePage'
 import ReplicaPage from '@/pages/replica/ReplicaPage'
 import WorkflowsPage from '@/pages/WorkflowsPage'
 import HistoryPage from '@/pages/HistoryPage'
+import UpscalePage from '@/pages/upscale/UpscalePage'
 import LibraryPage from '@/pages/LibraryPage'
 import MiningPage from '@/pages/mining/MiningPage'
 import CharactersPage from '@/pages/CharactersPage'
@@ -35,6 +36,7 @@ const NAV_BOTTOM: NavItem[] = [
   { key: 'workflows', label: '工作流', icon: Workflow },
   { key: 'queue', label: '执行队列', icon: ListOrdered },
   { key: 'history', label: '运行记录', icon: History },
+  { key: 'upscale', label: '批量放大', icon: Maximize2 },
   { key: 'settings', label: '设置', icon: Settings },
 ]
 
@@ -45,6 +47,7 @@ const PAGES: Record<Page, ComponentType> = {
   workflows: WorkflowsPage,
   queue: QueuePage,
   history: HistoryPage,
+  upscale: UpscalePage,
   library: LibraryPage,
   mining: MiningPage,
   characters: CharactersPage,

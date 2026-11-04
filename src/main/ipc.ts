@@ -6,10 +6,10 @@ import { LoraManager, pathKey } from './lora-manager'
 
 import { existsSync, readFileSync, rmSync, statSync } from 'node:fs'
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
-import { dirname, extname, join } from 'node:path'
+import { dirname, extname } from 'node:path'
 import { BrowserWindow, clipboard, dialog, ipcMain, nativeImage, shell, app } from 'electron'
 import { API_METHODS, INVOKE_CHANNEL, RUNNER_EVENT_CHANNEL, type Api, type ApiMethod } from '@shared/api'
-import { TRIGGER_CUT, BYPASS_REWIRE, checkAgainstObjectInfo, ComfyError, NODE_BYPASS, NODE_OVERRIDE, findLoraLoaders, loadApiWorkflow, mappingValues, primaryOutputIndex, sortNodeIds, validateMapping } from '@shared/mapping'
+import { TRIGGER_CUT, BYPASS_REWIRE, checkAgainstObjectInfo, ComfyError, NODE_BYPASS, NODE_OVERRIDE, findLoraLoaders, isUpscaleMapping, loadApiWorkflow, mappingValues, primaryOutputIndex, sortNodeIds, validateMapping } from '@shared/mapping'
 import { normalizeCard } from '@shared/cards'
 import { normalizeTaskData, randomSeed } from '@shared/planner'
 import { diffWorkflow, findPromptInjectors, generationSize } from '@shared/workflow-analysis'
@@ -24,6 +24,7 @@ import { dictionaryInfo, dictionaryPath, importDictionary, loadSourceRules, Mini
 import { analyzeInWorker } from './mining-run'
 import { MINING_LIMITS, MINING_SAVE_KINDS } from '@shared/mining'
 import { sha256, type Runner } from './runner'
+import { enqueueUpscale, listUpscale, localOutputPath, planUpscale, UPSCALE_SECTION, type UpscaleSelection } from './upscale'
 import { TABLES, type Store, type TableName } from './store'
 
 class BadArg extends Error {}
@@ -145,6 +146,7 @@ function libraryOf(store: Store): Library {
       nodes: Object.keys(w.api_json ?? {}).length,
       mapping: (w.mapping ?? []).length,
       errors: [...validateMapping(w.api_json ?? {}, w.mapping ?? []), ...controlProblems(w.api_json ?? {}, w.mapping ?? [], controlsOf(w))].filter(([l]) => l === 'error').length,
+      upscale: isUpscaleMapping(w.mapping),
     })),
     tasks: store.list('tasks').map((t) => ({ id: t.id, name: t.name })),
     characterFolders: store.files?.folders() ?? [],
@@ -152,19 +154,17 @@ function libraryOf(store: Store): Library {
   }
 }
 
-function localOutput(store: Store, o: OutputFile | undefined): string {
-  if (!o) return ''
-  if (o.saved && existsSync(o.saved)) return o.saved // 已复制到任务输出目录的最终图片
-  if (o.path && existsSync(o.path)) return o.path
-  const base = store.getSetting('comfy_output_dir')
-  if (base && o.type === 'output') {
-    const p = join(base, o.subfolder ?? '', o.filename)
-    if (existsSync(p)) return p
-  }
-  return ''
-}
+const localOutput = (store: Store, o: OutputFile | undefined): string => localOutputPath(store, o)
 
-const firstOutput = (u: RunUnit | null) => u?.outputs?.[primaryOutputIndex(u)]
+/** 批量放大的图片选择：记录 ID 与输出序号 */
+const selections = (v: unknown): UpscaleSelection[] => {
+  if (!Array.isArray(v)) throw new BadArg('图片列表必须是数组')
+  if (v.length > 2000) throw new BadArg('一次最多选择 2000 张图片')
+  return v.map((x) => {
+    const o = plain(x, '图片')
+    return { unit_id: int(o.unit_id, 'unit_id'), ...(o.output == null ? {} : { output: int(o.output, 'output') }) }
+  })
+}
 
 /** 一次提交的说明：只读取提交快照与入队时冻结的工作流、映射，不重新计算，也不读取当前素材库 */
 function inspectAttempt(store: Store, id: number): ExecutionInspection {
@@ -200,6 +200,36 @@ function inspectAttempt(store: Store, id: number): ExecutionInspection {
 
 export function registerIpc(ctx: IpcContext) {
   const { store, runner } = ctx
+  // 选择预览用的最终输出需要入队时冻结的工作流（按连接判断前后相连的保存节点）；缩略图会频繁调用，按队列项缓存
+  const wfCache = new Map<number, ApiWorkflow | null>()
+  const runWorkflow = (runId: number): ApiWorkflow | null => {
+    if (!wfCache.has(runId)) {
+      if (wfCache.size > 200) wfCache.clear()
+      wfCache.set(runId, (store.getRun(runId)?.workflow_json as unknown as ApiWorkflow | undefined) ?? null)
+    }
+    return wfCache.get(runId) ?? null
+  }
+  const firstOutput = (u: RunUnit | null) => (u ? u.outputs?.[primaryOutputIndex(u, runWorkflow(u.run_id))] : undefined)
+  const thumb = async (local: string, o: OutputFile | undefined, size: number) => {
+    const width = Math.max(64, Math.min(2048, size))
+    let img = local ? nativeImage.createFromPath(local) : null
+    if ((!img || img.isEmpty()) && o) {
+      try {
+        img = nativeImage.createFromBuffer(await new ComfyClient(store.getSetting('comfy_url'), 10000).fetchImage(o))
+      } catch {
+        return null
+      }
+    }
+    if (!img || img.isEmpty()) return null
+    const { width: w } = img.getSize()
+    const out = w > width ? img.resize({ width, quality: 'good' }) : img
+    return `data:image/jpeg;base64,${out.toJPEG(88).toString('base64')}`
+  }
+  const upscaleUnit = (id: unknown) => {
+    const u = store.getUnit(int(id))
+    if (!u || u.section !== UPSCALE_SECTION || !u.meta?.upscale) throw new BadArg('放大任务不存在')
+    return u as RunUnit & { meta: { upscale: NonNullable<RunUnit['meta']['upscale']> } }
+  }
   const vault = () => { if (!store.files) throw new Error('角色文件夹需要先打开工作区'); return store.files }
   const loras = () => { if (!store.files) throw new Error('请先打开工作区'); return new LoraManager(store.files.root) }
   const scanner = new MiningScanner()
@@ -529,20 +559,7 @@ export function registerIpc(ctx: IpcContext) {
       const u = store.getUnit(int(unitId))
       const o = firstOutput(u)
       if (!o) return null
-      const width = Math.max(64, Math.min(2048, int(size)))
-      const local = localOutput(store, o)
-      let img = local ? nativeImage.createFromPath(local) : null
-      if (!img || img.isEmpty()) {
-        try {
-          img = nativeImage.createFromBuffer(await new ComfyClient(store.getSetting('comfy_url'), 10000).fetchImage(o))
-        } catch {
-          return null
-        }
-      }
-      if (img.isEmpty()) return null
-      const { width: w } = img.getSize()
-      const out = w > width ? img.resize({ width, quality: 'good' }) : img
-      return `data:image/jpeg;base64,${out.toJPEG(88).toString('base64')}`
+      return thumb(localOutput(store, o), o, int(size))
     },
     'history.openImage': async (unitId) => {
       const u = store.getUnit(int(unitId))
@@ -565,7 +582,7 @@ export function registerIpc(ctx: IpcContext) {
       const unit = store.getUnit(int(unitId))
       if (!unit) return null
       const run = store.getRun(unit.run_id)
-      const preview_index = primaryOutputIndex(unit)
+      const preview_index = primaryOutputIndex(unit, runWorkflow(unit.run_id))
       return {
         unit,
         run: run && { id: run.id, task_id: run.task_id, name: run.name, workflow_name: run.workflow_name, created_at: run.created_at },
@@ -592,6 +609,30 @@ export function registerIpc(ctx: IpcContext) {
       await writeFile(r.filePath, JSON.stringify((JSON.parse(stored.body) as { prompt: unknown }).prompt, null, 2), 'utf8')
       return r.filePath
     },
+
+    'upscale.plan': (items, wid) => planUpscale(store, selections(items), wid == null ? null : int(wid, '工作流')),
+    'upscale.enqueue': (items, wid, accept) => enqueueUpscale(store, selections(items), wid == null ? null : int(wid, '工作流'), !!accept),
+    'upscale.list': (limit) => listUpscale(store, Math.min(5000, Math.max(1, int(limit)))),
+    'upscale.image': async (unitId, which, size) => {
+      const u = upscaleUnit(unitId)
+      // 原图只读取入队时记录的路径（来自数据库，不接受界面传入的路径）
+      const src = u.meta.upscale.source.path
+      if (which === 'source') return existsSync(src) ? thumb(src, undefined, int(size)) : null
+      const o = firstOutput(u)
+      return o ? thumb(localOutput(store, o), o, int(size)) : null
+    },
+    'upscale.open': async (unitId, which, folder) => {
+      const u = upscaleUnit(unitId)
+      const src = u.meta.upscale.source.path
+      const p = which === 'source' ? (existsSync(src) ? src : '') : localOutput(store, firstOutput(u))
+      if (!p) return which === 'source' ? `原图已不在原来的位置：${src}` : '还没有放大结果，或结果文件已移动'
+      if (folder) {
+        shell.showItemInFolder(p)
+        return null
+      }
+      return (await shell.openPath(p)) || null
+    },
+    'upscale.retry': (ids) => store.retryUnits(intArray(ids).filter((id) => store.getUnit(id)?.section === UPSCALE_SECTION)),
 
     'comfy.test': async (url) => {
       try {

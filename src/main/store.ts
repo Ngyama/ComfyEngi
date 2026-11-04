@@ -524,6 +524,27 @@ export class Store {
     return this.all("SELECT * FROM run_units WHERE status IN ('submitting','submitted') ORDER BY run_id, idx").map((u) => this.decodeUnit(u)!)
   }
 
+  /** 某一类单元（例如批量放大 section='upscale'），新的在前；statuses 为空时不限状态 */
+  listSection(section: string, statuses: string[] = [], limit = 2000): RunUnit[] {
+    const where = statuses.length ? ` AND u.status IN (${statuses.map(() => '?').join(',')})` : ''
+    return this.all(`SELECT u.*, r.name AS run_name FROM run_units u JOIN runs r ON r.id=u.run_id WHERE u.section=?${where} ORDER BY u.id DESC LIMIT ?`, section, ...statuses, limit).map((u) => this.decodeUnit(u)!)
+  }
+
+  /** 把指定的失败单元重新设为待处理，并让所属队列项重新排队（成功的记录不受影响），返回重新排队的数量 */
+  retryUnits(unitIds: number[]): number {
+    return this.tx(() => {
+      let n = 0
+      for (const id of unitIds) {
+        // 已移出队列的队列项不再执行，不重试其中的图片
+        const u = this.one("SELECT u.run_id FROM run_units u JOIN runs r ON r.id=u.run_id WHERE u.id=? AND u.status='failed' AND r.status!='removed'", id)
+        if (!u) continue
+        n += Number(this.run("UPDATE run_units SET status='pending', error='' WHERE id=?", id).changes)
+        this.run("UPDATE runs SET status='queued', finished_at=NULL WHERE id=?", Number(u.run_id))
+      }
+      return n
+    })
+  }
+
   getUnit(unitId: number): RunUnit | null {
     return this.decodeUnit(this.one('SELECT * FROM run_units WHERE id=?', unitId))
   }

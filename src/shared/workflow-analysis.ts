@@ -37,7 +37,7 @@ const KNOWN_TEXT_SOURCES: Record<string, string[]> = {
   ImpactWildcardProcessor: ['populated_text', 'wildcard_text'],
 }
 /** 通用文本节点中可能保存 Prompt 的字段（按优先级） */
-const TEXT_FIELDS = ['text', 'prompt', 'string', 'value', 'text_g', 'text_l', 'populated_text', 'wildcard_text']
+export const TEXT_FIELDS = ['text', 'prompt', 'string', 'value', 'text_g', 'text_l', 'populated_text', 'wildcard_text']
 /** 回溯字符串时不跟随的输入（数值 / 模型类），以及这些输入不影响「是否为文本源」的判断 */
 const NON_TEXT_LINKS = /^(seed|noise_seed|model|clip|vae|image|images|latent|samples|mask|width|height|batch_size|steps|cfg|denoise)$/
 
@@ -56,10 +56,10 @@ export function findSamplers(api: ApiWorkflow): string[] {
 }
 
 /** 文本编码器：有 clip 连接、并有文本字段（文字或连接）的节点 */
-const isEncoder = (n: ApiNode) => isLink(n.inputs?.clip) && TEXT_FIELDS.some((f) => f in (n.inputs ?? {}))
+export const isEncoder = (n: ApiNode) => isLink(n.inputs?.clip) && TEXT_FIELDS.some((f) => f in (n.inputs ?? {}))
 
 /** 从条件连接回溯到文本编码器（穿过 ControlNet 等同时有 positive / negative 的节点，按输出序号区分） */
-function encodersOf(api: ApiWorkflow, link: [string, number], seen = new Set<string>()): string[] {
+export function encodersOf(api: ApiWorkflow, link: [string, number], seen = new Set<string>()): string[] {
   const [nid, out] = link
   const key = `${nid}:${out}`
   if (seen.has(key)) return []

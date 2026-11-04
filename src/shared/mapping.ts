@@ -30,8 +30,22 @@ export const SOURCES: [string, string][] = [
   // 基础生成尺寸：动作配置了尺寸时逐张写入；没有尺寸配置的旧动作保持工作流原值
   ['width', '生成宽度'],
   ['height', '生成高度'],
+  // 放大工作流（批量放大）：映射了「输入图片」的工作流即为放大工作流。只有这些来源与正负 Prompt 会被写入，
+  // upscale_by、steps、cfg、sampler、denoise、tile、ControlNet 等参数全部保持放大工作流 JSON 的值
+  ['upscale_image', '放大：输入图片（LoadImage）'],
+  ['upscale_checkpoint', '放大：Checkpoint 名称'],
+  ['upscale_lora', '放大：LoRA 加载节点'],
+  ['upscale_output', '放大：最终输出节点'],
 ]
 export const SIZE_SOURCES = ['width', 'height']
+export const UPSCALE_IMAGE = 'upscale_image'
+export const UPSCALE_CHECKPOINT = 'upscale_checkpoint'
+export const UPSCALE_LORA = 'upscale_lora'
+/** 指定最终输出节点（不写入任何值，只决定从哪个节点取图） */
+export const UPSCALE_OUTPUT = 'upscale_output'
+export const UPSCALE_SOURCES = [UPSCALE_IMAGE, UPSCALE_CHECKPOINT, UPSCALE_LORA, UPSCALE_OUTPUT]
+/** 映射了「放大：输入图片」的工作流是放大工作流 */
+export const isUpscaleMapping = (mapping: Pick<MappingEntry, 'source'>[] | null | undefined) => (mapping ?? []).some((m) => m.source === UPSCALE_IMAGE)
 /** 映射来源：禁止 TriggerWord Toggle 注入触发词（由工作流检查中的开关添加，不出现在手动映射列表） */
 export const TRIGGER_DISABLE = 'trigger_disable'
 /** 切断 Loader 的 trigger_words 文本路径（配置在工作流的 trigger_cuts，不是映射） */
@@ -336,6 +350,16 @@ export function validateMapping(api: ApiWorkflow, mapping: MappingEntry[]): Mess
     }
     const inputs = node.inputs ?? {}
     const label = `节点 ${nid}（${nodeTitle(node)}）`
+    if (src === UPSCALE_OUTPUT) {
+      // 只指定节点，不写入：节点应当是保存 / 输出图片的节点
+      if (typeof inputs.filename_prefix !== 'string' && !/save|preview|output/i.test(node.class_type)) out.push(['warning', `${tag}：${label} 看起来不是保存图片的节点，请确认它是最终输出`])
+      return
+    }
+    if (src === UPSCALE_LORA) {
+      const ld = findLoraLoaders({ [nid]: node }).find((l) => l.node === nid)
+      if (!ld || (ld.support !== 'stack' && ld.support !== 'standard' && ld.support !== 'compatible')) out.push(['error', `${tag}：${label}（${node.class_type}）不是可识别的 LoRA 加载节点（支持 Lora Loader (LoraManager) 等多 LoRA Loader 与 LoraLoader）`])
+      return
+    }
     if (!(inp in inputs)) {
       const avail = Object.entries(inputs).filter(([, v]) => !isLink(v)).map(([k]) => k).join('、') || '无'
       out.push(['error', `${tag}：${label} 没有输入字段「${inp}」。可写入的字段：${avail}`])
@@ -361,7 +385,8 @@ export function validateMapping(api: ApiWorkflow, mapping: MappingEntry[]): Mess
       out.push(['error', `${tag}：${label} 的「${inp}」已被映射 ${seen.get(key)! + 1} 使用，同一输入不能写入两次`])
     }
     seen.set(key, i)
-    if (PROMPT_SOURCES.includes(src) || src.endsWith('_name') || src === 'filename_prefix') {
+    if (src === UPSCALE_IMAGE && node.class_type !== 'LoadImage') out.push(['warning', `${tag}：${label} 不是 LoadImage（${node.class_type}）：上传的图片保存在 ComfyUI 的 input 目录，请确认这个节点从 input 目录读取`])
+    if (PROMPT_SOURCES.includes(src) || src.endsWith('_name') || src === 'filename_prefix' || src === UPSCALE_IMAGE || src === UPSCALE_CHECKPOINT) {
       if (typeof cur !== 'string')
         out.push(['warning', `${tag}：${label} 的「${inp}」当前值不是文本（${describeValue(cur)}），请确认是否映射正确`])
     } else if (src === 'seed' || SIZE_SOURCES.includes(src)) {
@@ -375,7 +400,20 @@ export function validateMapping(api: ApiWorkflow, mapping: MappingEntry[]): Mess
   })
   if (!sources.has('positive')) out.push(['error', '尚未映射「正面 Prompt」，至少需要一个接收正面 Prompt 的节点输入'])
   if (!sources.has('negative')) out.push(['warning', '未映射「负面 Prompt」，将使用工作流中原有的负面 Prompt'])
-  if (!sources.has('seed')) out.push(['warning', '未映射 Seed，所有图片将使用工作流中原有的固定 Seed'])
+  if (sources.has(UPSCALE_IMAGE)) {
+    // 放大工作流：不写入 Seed（采样参数以放大工作流为准），另外检查放大所需的映射
+    const count = (s: string) => new Set(mapping.filter((e) => e.source === s).map((e) => String(e.node))).size
+    if (count(UPSCALE_IMAGE) > 1) out.push(['error', '放大工作流只能有一个「放大：输入图片」节点'])
+    if (!sources.has(UPSCALE_OUTPUT)) out.push(['error', '放大工作流需要映射「放大：最终输出节点」：工作流可能有多个保存 / 预览节点，必须指定从哪个节点取最终图片'])
+    if (count('positive') > 1 || count('negative') > 1) out.push(['error', '放大工作流的正面 / 负面 Prompt 各只能写入一个节点（写入的是原图的完整 Prompt）'])
+    if (mapping.some((e) => PROMPT_SOURCES.includes(e.source) && (e.modules ?? []).length)) out.push(['error', '放大工作流的 Prompt 映射不能按模块拆分：写入的是原图的完整 Prompt'])
+    if (count(UPSCALE_LORA) > 1) out.push(['error', '放大工作流只能映射一个「放大：LoRA 加载节点」'])
+    if (count(UPSCALE_CHECKPOINT) > 1) out.push(['error', '放大工作流只能映射一个「放大：Checkpoint 名称」'])
+    if (!sources.has(UPSCALE_CHECKPOINT)) out.push(['warning', '放大工作流没有映射「放大：Checkpoint 名称」：放大时使用工作流中的 Checkpoint，不恢复原图的 Checkpoint'])
+    if (!sources.has(UPSCALE_LORA)) out.push(['warning', '放大工作流没有映射「放大：LoRA 加载节点」：放大时不恢复原图的 LoRA'])
+    for (const s of ['seed', 'width', 'height', 'filename_prefix'])
+      if (sources.has(s)) out.push(['warning', `放大工作流中的「${SOURCE_LABELS[s]}」映射不会写入：放大时采样参数、尺寸与文件名前缀都保持工作流原值`])
+  } else if (!sources.has('seed')) out.push(['warning', '未映射 Seed，所有图片将使用工作流中原有的固定 Seed'])
   return out
 }
 
@@ -390,6 +428,9 @@ export function guessInput(source: string, inputs: Record<string, unknown>): str
   if (PROMPT_SOURCES.includes(source)) pref = ['text']
   else if (source === 'seed') pref = ['seed', 'noise_seed']
   else if (SIZE_SOURCES.includes(source)) pref = [source, 'value', 'int', 'Value']
+  else if (source === UPSCALE_IMAGE) pref = ['image']
+  else if (source === UPSCALE_CHECKPOINT) pref = ['ckpt_name', 'value']
+  else if (source === UPSCALE_LORA) pref = ['loras', 'lora_name']
   else if (source.endsWith('_name')) pref = ['lora_name']
   else if (source.endsWith('_strength')) pref = ['strength_model', 'strength_clip']
   else pref = ['filename_prefix']
@@ -570,7 +611,8 @@ export function checkAgainstObjectInfo(api: ApiWorkflow, inputsList: InputValue[
   const checked = new Set<string>()
   for (const inputs of inputsList) {
     for (const x of inputs) {
-      if (!x.source.endsWith('_name') || x.value == null) continue
+      const ckpt = x.source === UPSCALE_CHECKPOINT
+      if ((!x.source.endsWith('_name') && !ckpt) || x.value == null) continue
       const key = `${x.node}\u0000${x.input}\u0000${x.value}`
       if (checked.has(key)) continue
       checked.add(key)
@@ -582,7 +624,7 @@ export function checkAgainstObjectInfo(api: ApiWorkflow, inputsList: InputValue[
         if (Array.isArray(d) && Array.isArray(d[0])) opts = d[0] as unknown[]
       }
       if (opts && !opts.includes(x.value))
-        msgs.push(['error', `LoRA「${x.value}」不在 ComfyUI 的 ${ct}.${x.input} 可选列表中，请检查角色 LoRA 名称`])
+        msgs.push(['error', ckpt ? `原图的 Checkpoint「${x.value}」不在 ComfyUI 的 ${ct}.${x.input} 可选列表中（模型已移动或改名？）` : `LoRA「${x.value}」不在 ComfyUI 的 ${ct}.${x.input} 可选列表中，请检查角色 LoRA 名称`])
     }
   }
   return msgs
@@ -635,20 +677,71 @@ export function historyInterrupted(entry: HistoryEntry): boolean {
   return (entry.status?.messages ?? []).some((m) => Array.isArray(m) && m[0] === 'execution_interrupted')
 }
 
-/** 最终输出节点：映射了「输出文件前缀」的保存节点；没有该映射时为工作流中没有被其他节点使用的保存节点。为空表示无法判断 */
-export function finalOutputNodes(inputs: InputValue[] | null | undefined, api: ApiWorkflow | Record<string, { inputs?: Record<string, unknown> }> | null | undefined): Set<string> {
-  const mapped = new Set((inputs ?? []).filter((x) => x.source === 'filename_prefix').map((x) => String(x.node)))
-  if (mapped.size || !api) return mapped
-  const nodes = api as Record<string, { inputs?: Record<string, unknown> }>
-  const used = new Set(Object.values(nodes).flatMap((n) => Object.values(n.inputs ?? {}).filter(isLink).map((v) => v[0])))
-  return new Set(Object.keys(nodes).filter((id) => typeof nodes[id].inputs?.filename_prefix === 'string' && !used.has(id)))
+type LinkGraph = Record<string, { inputs?: Record<string, unknown> }>
+
+/** 从某节点沿连接向下游能到达的全部节点（不含自身） */
+function downstreamOf(nodes: LinkGraph, start: string): Set<string> {
+  const cons = new Map<string, string[]>()
+  for (const [nid, n] of Object.entries(nodes)) for (const v of Object.values(n.inputs ?? {})) if (isLink(v)) cons.set(String(v[0]), [...(cons.get(String(v[0])) ?? []), nid])
+  const seen = new Set<string>()
+  const queue = [start]
+  while (queue.length) for (const next of cons.get(queue.shift()!) ?? []) if (!seen.has(next)) (seen.add(next), queue.push(next))
+  seen.delete(start)
+  return seen
 }
 
-/** 预览与「打开图片」使用的输出：优先已保存的最终输出；不依赖 ComfyUI 返回的节点顺序，也不会选中中间结果（旧记录没有 role，用冻结的映射判断） */
-export function primaryOutputIndex(unit: { outputs?: OutputFile[] | null; inputs?: InputValue[] | null } | null | undefined): number {
+/**
+ * 最终输出节点（为空表示无法判断）：
+ * 1. 映射了「放大：最终输出节点」时只取这些节点；
+ * 2. 映射了「输出文件前缀」的保存节点，但多个保存节点前后相连时（例如 SaveImageAdvanced → UltimateSDUpscale → SaveImage），
+ *    下游还有保存节点的只是中间结果，只有最下游的算最终输出；映射的节点都在其他保存节点上游时，取它们下游最末端的保存节点；
+ * 3. 没有映射时为工作流中没有被其他节点使用的保存节点。
+ * api 为 null（没有工作流结构）时只能按映射判断。
+ */
+export function finalOutputNodes(inputs: InputValue[] | null | undefined, api: ApiWorkflow | LinkGraph | null | undefined): Set<string> {
+  const explicit = new Set((inputs ?? []).filter((x) => x.source === UPSCALE_OUTPUT).map((x) => String(x.node)))
+  if (explicit.size) return explicit
+  const mapped = new Set((inputs ?? []).filter((x) => x.source === 'filename_prefix').map((x) => String(x.node)))
+  if (!api) return mapped
+  const nodes = api as LinkGraph
+  const saves = Object.keys(nodes).filter((id) => typeof nodes[id].inputs?.filename_prefix === 'string' || mapped.has(id))
+  if (mapped.size) {
+    const down = new Map(saves.map((id) => [id, downstreamOf(nodes, id)]))
+    const sink = (id: string) => !saves.some((s) => s !== id && down.get(id)!.has(s))
+    const finals = [...mapped].filter((id) => nodes[id] && sink(id))
+    if (finals.length) return new Set(finals)
+    const below = saves.filter((s) => sink(s) && [...mapped].some((m) => down.get(m)?.has(s)))
+    return below.length ? new Set(below) : mapped
+  }
+  const used = new Set(Object.values(nodes).flatMap((n) => Object.values(n.inputs ?? {}).filter(isLink).map((v) => v[0])))
+  return new Set(saves.filter((id) => !used.has(id)))
+}
+
+/** 一张图的最终输出节点：有节点绕过时按实际提交的结构判断（被绕过的节点不算输出，也不再算使用者） */
+export function unitFinalNodes(inputs: InputValue[] | null | undefined, wf: ApiWorkflow | null | undefined): Set<string> {
+  if (!wf || !Object.keys(wf).length) return finalOutputNodes(inputs, null)
+  let graph: ApiWorkflow = wf
+  if (inputs?.some((x) => x.source === NODE_BYPASS)) {
+    try {
+      graph = applyInputs(wf, inputs)
+    } catch {
+      graph = wf
+    }
+  }
+  return finalOutputNodes(inputs, graph)
+}
+
+/**
+ * 预览与「打开图片」使用的输出：优先已保存的最终输出；不依赖 ComfyUI 返回的节点顺序，也不会选中中间结果。
+ * 有入队时冻结的工作流（wf）时按它的连接重新判断最终输出（修正旧记录中把上游保存节点也标为 final 的情况）；
+ * 没有时使用记录的 role（旧记录没有 role，用冻结的映射判断）。
+ */
+export function primaryOutputIndex(unit: { outputs?: OutputFile[] | null; inputs?: InputValue[] | null } | null | undefined, wf?: ApiWorkflow | null): number {
   const outs = unit?.outputs ?? []
+  const graphFinals = wf && Object.keys(wf).length ? unitFinalNodes(unit?.inputs, wf) : null
   const mapped = finalOutputNodes(unit?.inputs, null)
-  const isFinal = (o: OutputFile) => (o.role ? o.role === 'final' : o.type === 'output' && (!mapped.size || mapped.has(o.node)))
+  const isFinal = (o: OutputFile) =>
+    graphFinals?.size ? o.type === 'output' && graphFinals.has(o.node) : o.role ? o.role === 'final' : o.type === 'output' && (!mapped.size || mapped.has(o.node))
   const tests: ((o: OutputFile) => boolean)[] = [(o) => isFinal(o) && !!o.saved, isFinal, (o) => !!o.saved, (o) => o.type === 'output', () => true]
   for (const t of tests) {
     const i = outs.findIndex(t)

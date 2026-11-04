@@ -23,6 +23,33 @@ export const OBJECT_INFO: Record<string, unknown> = {
   DifferentialDiffusion: { input: { required: { model: ['MODEL'], strength: ['FLOAT', { min: 0, max: 1 }] } }, output: ['MODEL'] },
   'Lora Loader (LoraManager)': { input: { required: { model: ['MODEL'], text: ['STRING', {}] }, optional: { clip: ['CLIP'] } }, output: ['MODEL', 'CLIP', 'STRING', 'STRING'] },
   PreviewImage: { input: { required: { images: ['IMAGE'] } }, output: [], output_node: true },
+  LoadImage: { input: { required: { image: [['example.png'], { image_upload: true }] } }, output: ['IMAGE', 'MASK'] },
+}
+
+/** 解析 multipart/form-data（只用于模拟 /upload/image） */
+export function parseMultipart(body: Buffer, contentType: string): { fields: Record<string, string>; files: Record<string, { filename: string; data: Buffer }> } {
+  const m = /boundary=(?:"([^"]+)"|([^;]+))/i.exec(contentType)
+  if (!m) throw new Error('缺少 multipart 边界')
+  const sep = Buffer.from(`--${m[1] ?? m[2]}`)
+  const fields: Record<string, string> = {}
+  const files: Record<string, { filename: string; data: Buffer }> = {}
+  let pos = body.indexOf(sep)
+  while (pos >= 0) {
+    const start = pos + sep.length
+    if (body.slice(start, start + 2).toString() === '--') break
+    const next = body.indexOf(sep, start)
+    if (next < 0) break
+    const part = body.slice(start + 2, next - 2) // 去掉开头与结尾的 \r\n
+    const split = part.indexOf('\r\n\r\n')
+    const head = part.slice(0, split).toString('utf8')
+    const data = part.slice(split + 4)
+    const name = /name="([^"]*)"/i.exec(head)?.[1] ?? ''
+    const filename = /filename="([^"]*)"/i.exec(head)?.[1]
+    if (filename !== undefined) files[name] = { filename, data }
+    else fields[name] = data.toString('utf8')
+    pos = next
+  }
+  return { fields, files }
 }
 
 function crc32(buf: Buffer): number {
@@ -77,6 +104,18 @@ export class MockComfy {
   interruptFlag = false
   interruptCalls: (string | null)[] = []
   deleted: string[] = []
+  /** /upload/image 收到的文件（键为 LoadImage 使用的「子文件夹/文件名」）与每次上传的请求 */
+  uploads = new Map<string, Buffer>()
+  uploadCalls: { name: string; subfolder: string; overwrite: string; saved: string }[] = []
+  /** 模拟 ComfyUI 把上传的文件保存为另一个名称（例如不支持覆盖的旧版本） */
+  uploadRename: ((name: string) => string) | null = null
+  /** 每次执行时 LoadImage 实际读取的文件：[prompt_id, 文件名, SHA-256] */
+  loaded: [string, string, string][] = []
+  /** 哪些节点类型会产生保存的图片（output）与预览图片（temp）；默认只有 SaveImage，保持旧测试的行为 */
+  saveClasses = /^SaveImage$/
+  previewClasses: RegExp | null = null
+  /** 执行成功但不返回这些节点的输出（模拟节点被静音或跳过） */
+  skipOutputs = new Set<string>()
   url = ''
   private server: Server | null = null
   private timer: ReturnType<typeof setInterval> | null = null
@@ -103,7 +142,15 @@ export class MockComfy {
       return
     }
     const entry: Record<string, unknown> = { prompt: [number, pid, graph, {}, []], outputs: {}, meta: {} }
-    if (this.interruptFlag) {
+    // LoadImage：只能读取已上传到 input 目录的文件（与 ComfyUI 相同，不能读取 output 目录）
+    const missing = Object.entries(graph).find(([, n]) => n.class_type === 'LoadImage' && !this.uploads.has(String(n.inputs.image)))
+    for (const [, n] of Object.entries(graph)) {
+      const data = n.class_type === 'LoadImage' ? this.uploads.get(String(n.inputs.image)) : undefined
+      if (data) this.loaded.push([pid, String(n.inputs.image), createHash('sha256').update(data).digest('hex')])
+    }
+    if (missing) {
+      entry.status = { status_str: 'error', completed: false, messages: [['execution_error', { prompt_id: pid, node_id: missing[0], node_type: 'LoadImage', exception_type: 'FileNotFoundError', exception_message: `Invalid image file: ${missing[1].inputs.image}` }]] }
+    } else if (this.interruptFlag) {
       entry.status = { status_str: 'error', completed: false, messages: [['execution_interrupted', { prompt_id: pid }]] }
     } else if (this.failAll || this.failIds.has(pid)) {
       entry.status = {
@@ -114,7 +161,18 @@ export class MockComfy {
     } else {
       const outputs: Record<string, unknown> = {}
       for (const [nid, node] of Object.entries(graph)) {
-        if (node.class_type === 'SaveImage') {
+        if (this.skipOutputs.has(nid)) continue
+        if (this.previewClasses?.test(node.class_type)) {
+          this.counter++
+          const fname = `ComfyUI_temp_${String(this.counter).padStart(5, '0')}_.png`
+          if (this.outputDir) {
+            mkdirSync(join(this.outputDir, '_temp'), { recursive: true })
+            writeFileSync(join(this.outputDir, '_temp', fname), tinyPng([1, 1, (this.counter * 13) % 255], 32))
+          }
+          outputs[nid] = { images: [{ filename: fname, subfolder: '', type: 'temp' }] }
+          continue
+        }
+        if (this.saveClasses.test(node.class_type)) {
           this.counter++
           const prefix = String(node.inputs.filename_prefix ?? 'ComfyUI').split('\\').join('/')
           const cut = prefix.lastIndexOf('/')
@@ -178,12 +236,28 @@ export class MockComfy {
     }
     if (method === 'GET' && p === '/view') {
       if (this.outputDir) {
-        const fp = join(this.outputDir, u.searchParams.get('subfolder') ?? '', u.searchParams.get('filename') ?? '')
+        const fp = join(this.outputDir, u.searchParams.get('type') === 'temp' ? '_temp' : '', u.searchParams.get('subfolder') ?? '', u.searchParams.get('filename') ?? '')
         if (existsSync(fp)) return [200, readFileSync(fp)]
       }
       return [200, tinyPng()]
     }
     return [404, { error: 'not found' }]
+  }
+
+  /** POST /upload/image：与 ComfyUI 的处理相同——overwrite 不是 true 时，同名且内容不同的文件改名为「名称 (n).扩展名」，内容相同时直接使用 */
+  upload(fields: Record<string, string>, file: { filename: string; data: Buffer } | undefined): [number, unknown] {
+    if (!file) return [400, { error: 'no image' }]
+    const subfolder = fields.subfolder ?? ''
+    const key = (n: string) => (subfolder ? `${subfolder}/${n}` : n)
+    let name = this.uploadRename ? this.uploadRename(file.filename) : file.filename
+    if (fields.overwrite !== 'true' && fields.overwrite !== '1') {
+      const dot = name.lastIndexOf('.')
+      const [stem, ext] = dot > 0 ? [name.slice(0, dot), name.slice(dot)] : [name, '']
+      for (let i = 1; this.uploads.has(key(name)) && !this.uploads.get(key(name))!.equals(file.data); i++) name = `${stem} (${i})${ext}`
+    }
+    this.uploads.set(key(name), file.data)
+    this.uploadCalls.push({ name: file.filename, subfolder, overwrite: fields.overwrite ?? '', saved: key(name) })
+    return [200, { name, subfolder, type: fields.type || 'input' }]
   }
 
   serve(port = 0): Promise<string> {
@@ -193,8 +267,15 @@ export class MockComfy {
       req.on('end', () => {
         let code: number, resp: unknown
         try {
-          const raw = Buffer.concat(chunks).toString('utf8')
-          ;[code, resp] = this.handle(req.method ?? 'GET', req.url ?? '/', raw ? JSON.parse(raw) : null)
+          const buf = Buffer.concat(chunks)
+          const ct = String(req.headers['content-type'] ?? '')
+          if (req.method === 'POST' && new URL(req.url ?? '/', 'http://x').pathname === '/upload/image') {
+            const form = parseMultipart(buf, ct)
+            ;[code, resp] = this.upload(form.fields, form.files.image)
+          } else {
+            const raw = buf.toString('utf8')
+            ;[code, resp] = this.handle(req.method ?? 'GET', req.url ?? '/', raw ? JSON.parse(raw) : null)
+          }
         } catch (e) {
           ;[code, resp] = [500, { error: String(e) }]
         }

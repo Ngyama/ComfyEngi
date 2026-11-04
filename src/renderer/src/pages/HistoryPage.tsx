@@ -1,16 +1,17 @@
 // 运行记录：以缩略图浏览历史结果，点开查看 Prompt、Seed、prompt_id 与输出位置。
 
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { AlertTriangle, FileSearch, FolderOpen, History, ImageIcon, ImageOff, RefreshCw, Save, X } from 'lucide-react'
+import { AlertTriangle, Check, FileSearch, FolderOpen, History, ImageIcon, ImageOff, Maximize2, RefreshCw, Save, X } from 'lucide-react'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { Chip, CopyButton, EmptyState, FieldLabel, PageHeader, SearchBox } from '@/components/common'
 import { PickSources } from '@/components/card-pools'
 import { api, call } from '@/lib/api'
-import { useRunner } from '@/lib/stores'
+import { useRunner, useUpscaleSel } from '@/lib/stores'
 import { cn } from '@/lib/utils'
 import type { RunUnit } from '@shared/types'
 import { ExecutionDialog } from './ExecutionDialog'
+import { UpscaleEnqueueDialog } from './upscale/UpscaleEnqueueDialog'
 
 const thumbCache = new Map<string, string | null>()
 
@@ -36,7 +37,7 @@ function useImage(unitId: number, size: number, enabled = true) {
   return src
 }
 
-function Thumb({ u, selected, onClick }: { u: RunUnit; selected: boolean; onClick: () => void }) {
+function Thumb({ u, selected, picked, onPick, onClick }: { u: RunUnit; selected: boolean; picked: boolean; onPick: (() => void) | null; onClick: () => void }) {
   const ref = useRef<HTMLButtonElement>(null)
   const [visible, setVisible] = useState(false)
   useEffect(() => {
@@ -54,7 +55,7 @@ function Thumb({ u, selected, onClick }: { u: RunUnit; selected: boolean; onClic
       ref={ref}
       type="button"
       onClick={onClick}
-      className={cn('group overflow-hidden rounded-xl bg-card text-left ring-1 ring-tint/[0.08] transition hover:ring-tint/[0.24]', selected && 'ring-2 ring-primary/70')}
+      className={cn('group overflow-hidden rounded-xl bg-card text-left ring-1 ring-tint/[0.08] transition hover:ring-tint/[0.24]', (selected || picked) && 'ring-2 ring-primary/70')}
     >
       <div className="relative aspect-[3/4] bg-inset">
         {failed ? (
@@ -66,7 +67,27 @@ function Thumb({ u, selected, onClick }: { u: RunUnit; selected: boolean; onClic
         ) : (
           <div className="absolute inset-0 grid place-items-center text-muted-foreground/40">{src === null ? <ImageOff className="size-5" /> : <ImageIcon className="size-5" />}</div>
         )}
-        <span className="absolute top-2 left-2 rounded-md bg-black/55 px-1.5 py-0.5 font-mono text-[10px] text-white/80">{u.seed}</span>
+        {u.section === 'upscale' ? (
+          <span className="absolute top-2 left-2 rounded-md bg-primary/85 px-1.5 py-0.5 text-[10px] font-medium text-primary-foreground">放大</span>
+        ) : (
+          <span className="absolute top-2 left-2 rounded-md bg-black/55 px-1.5 py-0.5 font-mono text-[10px] text-white/80">{u.seed}</span>
+        )}
+        {onPick && (
+          <span
+            role="checkbox"
+            aria-checked={picked}
+            aria-label="选择这张图加入放大队列"
+            title={picked ? '取消选择' : '选择（加入放大队列）'}
+            onClick={(e) => {
+              e.stopPropagation()
+              onPick()
+            }}
+            className={cn('absolute right-2 bottom-2 grid size-5 place-items-center rounded-md ring-1 transition', picked ? 'bg-primary text-primary-foreground ring-primary' : 'bg-black/45 text-transparent ring-white/50 opacity-0 group-hover:opacity-100 hover:text-white/70')}
+            data-testid="upscale-pick"
+          >
+            <Check className="size-3.5" />
+          </span>
+        )}
         {u.status === 'done' && u.outputs?.some((o) => o.save_error) && (
           <span className="absolute top-2 right-2 rounded-md bg-warning px-1.5 py-0.5 text-[10px] font-medium text-white" title="图片已生成，但未能复制到任务输出目录">
             未保存
@@ -142,7 +163,7 @@ function Detail({ u, onClose }: { u: RunUnit; onClose: () => void }) {
           <Button size="sm" variant="secondary" onClick={() => setInspect(true)} data-testid="open-execution">
             <FileSearch /> 执行详情
           </Button>
-          <CopyButton text={String(u.seed)} label={`复制 Seed ${u.seed}`} />
+          {u.section !== 'upscale' && <CopyButton text={String(u.seed)} label={`复制 Seed ${u.seed}`} />}
         </div>
         {saveFailed && (
           <div className="space-y-2 rounded-xl bg-warning/10 p-3 text-xs leading-relaxed text-warning" data-testid="save-failed">
@@ -209,6 +230,13 @@ export default function HistoryPage() {
     return () => clearTimeout(t)
   }, [load, tick])
   const cur = rows?.find((r) => r.id === sel)
+  const { picks, toggle, add, clear } = useUpscaleSel()
+  const picked = Object.values(picks)
+  const [enqueue, setEnqueue] = useState(false)
+  // 只有成功生成的原图可以加入放大队列（放大结果本身不再放大）
+  const pickable = (u: RunUnit) => u.status === 'done' && u.section !== 'upscale'
+  const pickOf = (u: RunUnit) => ({ unit_id: u.id, label: u.item_label, run_name: u.run_name ?? '' })
+  const visiblePickable = (rows ?? []).filter(pickable)
   return (
     <div className="flex h-full">
       <div className="flex min-w-0 flex-1 flex-col">
@@ -243,12 +271,28 @@ export default function HistoryPage() {
           ) : (
             <div className="grid grid-cols-[repeat(auto-fill,minmax(150px,1fr))] gap-3">
               {(rows ?? []).map((u) => (
-                <Thumb key={u.id} u={u} selected={sel === u.id} onClick={() => setSel(sel === u.id ? null : u.id)} />
+                <Thumb key={u.id} u={u} selected={sel === u.id} picked={!!picks[u.id]} onPick={pickable(u) ? () => toggle(pickOf(u)) : null} onClick={() => setSel(sel === u.id ? null : u.id)} />
               ))}
             </div>
           )}
         </div>
+        <div className="flex items-center gap-2 border-t border-tint/[0.08] px-6 py-2.5 text-xs" data-testid="upscale-bar">
+          <span className="text-muted-foreground">{picked.length ? `已选 ${picked.length} 张（可跨任务累计，切换页面后保留）` : '鼠标移到缩略图上，点右下角的方框选择要放大的图片'}</span>
+          <div className="flex-1" />
+          <Button variant="ghost" size="sm" onClick={() => add(visiblePickable.map(pickOf))} disabled={!visiblePickable.length}>
+            选择本页全部成功的图片
+          </Button>
+          {picked.length > 0 && (
+            <Button variant="ghost" size="sm" onClick={clear}>
+              清空选择
+            </Button>
+          )}
+          <Button size="sm" onClick={() => setEnqueue(true)} disabled={!picked.length} data-testid="upscale-enqueue">
+            <Maximize2 /> 加入放大队列{picked.length ? `（${picked.length}）` : ''}
+          </Button>
+        </div>
       </div>
+      {enqueue && <UpscaleEnqueueDialog picks={picked} onClose={() => setEnqueue(false)} />}
       {cur && (
         <div className="absolute inset-y-3 right-3 z-30 w-[420px] overflow-hidden rounded-2xl bg-popover shadow-2xl ring-1 shadow-tint/15 ring-tint/[0.128] 2xl:static 2xl:my-3 2xl:mr-3 2xl:shrink-0 2xl:bg-card 2xl:shadow-none">
           <Detail u={cur} onClose={() => setSel(null)} />

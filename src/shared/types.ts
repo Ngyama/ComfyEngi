@@ -549,6 +549,8 @@ export interface UnitMeta {
     variant?: number
     variants?: number
   }
+  /** 批量放大：原图、恢复的生成条件与上传信息（入队时冻结） */
+  upscale?: UpscaleMeta
   /** 第二角色出场时：角色名、服装、动作、表情 */
   character2?: string
   outfit2?: string
@@ -562,6 +564,62 @@ export interface UnitMeta {
   size?: string
   width?: number
   height?: number
+}
+
+// ---------------------------------------------------------------- 批量放大
+/** block：不能加入放大队列；confirm：需要用户确认后才加入；note：说明 */
+export type UpscaleIssueLevel = 'block' | 'confirm' | 'note'
+export interface UpscaleIssue {
+  level: UpscaleIssueLevel
+  text: string
+}
+/** 从原图提交快照中恢复的一个 LoRA（多 LoRA Loader 中只有文件名；标准 Loader 为完整的 lora_name） */
+export interface RecoveredLora {
+  name: string
+  strength: number
+  clip: number
+  active: boolean
+  /** 所在的原图节点与类型 */
+  node: string
+  kind: 'stack' | 'standard'
+}
+/** 原图的生成条件：全部来自原图的提交快照（或旧记录中冻结的工作流与写入值），不读取当前角色库与 LoRA 配置 */
+export interface RecoveredGeneration {
+  /** null：无法确定 */
+  positive: string | null
+  negative: string | null
+  /** 文本完全由快照静态确定（没有运行时才产生的部分） */
+  positive_exact: boolean
+  negative_exact: boolean
+  checkpoint: string | null
+  loras: RecoveredLora[] | null
+  issues: UpscaleIssue[]
+}
+export interface UpscaleMeta {
+  source: {
+    unit_id: number
+    run_id: number
+    run_name: string
+    task_id: number | null
+    /** 原图在 outputs 中的序号与节点 */
+    output: number
+    node: string
+    /** 原图本地文件（上传的就是这个文件）、文件名与入队时的 SHA-256 */
+    path: string
+    name: string
+    sha256: string
+    prompt_id: string | null
+    /** 恢复所用的提交快照；rebuilt：旧记录没有快照，按冻结的工作流与写入值重建 */
+    attempt_id: number | null
+    snapshot: 'attempt' | 'rebuilt'
+    seed: number
+  }
+  workflow: { id: number; name: string }
+  recovered: { positive: string; negative: string; checkpoint: string | null; loras: RecoveredLora[]; positive_exact: boolean; negative_exact: boolean }
+  /** 加入时的说明与用户确认过的问题 */
+  issues: UpscaleIssue[]
+  /** 上传到 ComfyUI input 目录的文件名（每张图唯一，不与其他任务共用） */
+  upload: { name: string; subfolder: string }
 }
 
 export interface InputValue {
@@ -797,7 +855,8 @@ export interface Library {
   characters: Character[]
   outfits: Outfit[]
   stories: Story[]
-  workflows: { id: number; name: string; note: string; nodes: number; mapping: number; errors: number }[]
+  /** upscale：映射了「放大：输入图片」，可用于批量放大 */
+  workflows: { id: number; name: string; note: string; nodes: number; mapping: number; errors: number; upscale?: boolean }[]
   tasks: { id: number; name: string }[]
   settings: Settings
 }

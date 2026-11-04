@@ -2,6 +2,7 @@
 
 import type { ReplicaData, ReplicaImage, ReplicaPlanCore, ReplicaRecord, ReplicaRow, ReplicaUnitBrief } from './replica'
 import type { UpdateCheck } from './update'
+import type { UpscalePlan, UpscaleSelection } from './upscale'
 import type { DictionaryInfo, MiningImage, MiningParams, MiningResult, MiningSaveItem, MiningSaveOutcome, RawMeta, ScanResult } from './mining'
 import type { SavedSourceRule } from './prompt-source'
 import type { ApiWorkflow, ExecutionDetail, ExecutionInspection, LoraResource, Character, Library, Message, Outfit, PlanResult, PlanUnit, Run, RunnerEvent, RunnerStatus, RunUnit, Settings, Story, Task, TaskData, Template, TemplateKind, Preset, PresetData, PresetKind, Workflow, InputChange, ObjectInfo } from './types'
@@ -129,6 +130,19 @@ export interface Api {
   'history.attempt'(attemptId: number): ExecutionInspection
   'history.exportAttempt'(attemptId: number): string | null
 
+  /** 批量放大：入队前预览（每张图能否放大、恢复出的生成条件与问题） */
+  'upscale.plan'(items: UpscaleSelection[], workflowId: number | null): UpscalePlan
+  /** 加入放大队列（一个队列项，每张图一个单元）；acceptConfirm 为 true 时同时加入需要确认的图片 */
+  'upscale.enqueue'(items: UpscaleSelection[], workflowId: number | null, acceptConfirm: boolean): { runId: number | null; count: number; errors: string[]; skipped: { unit_id: number; label: string; reason: string }[] }
+  /** 放大任务（全部状态，新的在前） */
+  'upscale.list'(limit: number): RunUnit[]
+  /** 放大任务的原图或放大结果缩略图 */
+  'upscale.image'(unitId: number, which: 'source' | 'result', size: number): string | null
+  /** 打开原图 / 放大结果，或在文件夹中显示；返回错误说明 */
+  'upscale.open'(unitId: number, which: 'source' | 'result', folder: boolean): string | null
+  /** 重试失败的放大任务（只重置这些图片） */
+  'upscale.retry'(unitIds: number[]): number
+
   'comfy.test'(url: string): { ok: true; info: string } | { ok: false; error: string }
   'app.info'(): { version: string; dataDir: string; dbPath: string; backupDir: string; migratedFrom: number | null; backup: string | null }
   'app.openDataDir'(): void
@@ -178,6 +192,7 @@ export const API_METHODS: ApiMethod[] = [
   'queue.enqueue', 'queue.list', 'queue.units', 'queue.reorder', 'queue.remove', 'queue.delete', 'queue.retry', 'queue.retrySave', 'queue.pendingSummary',
   'runner.status', 'runner.precheck', 'runner.start', 'runner.pause', 'runner.stop', 'runner.interrupt', 'runner.logs',
   'history.list', 'history.image', 'history.openImage', 'history.showInFolder', 'history.execution', 'history.attempt', 'history.exportAttempt',
+  'upscale.plan', 'upscale.enqueue', 'upscale.list', 'upscale.image', 'upscale.open', 'upscale.retry',
   'comfy.test', 'app.info', 'app.openDataDir', 'app.backupNow', 'app.chooseOutputDir', 'app.checkUpdate', 'app.openReleasePage',
   'mining.addFiles', 'mining.addFolder', 'mining.cancelScan', 'mining.image', 'mining.showInFolder', 'mining.meta', 'mining.copyMeta', 'mining.analyze', 'mining.rules', 'mining.saveRules', 'mining.dictInfo', 'mining.dictImport', 'mining.dictRemove', 'mining.save',
 ]

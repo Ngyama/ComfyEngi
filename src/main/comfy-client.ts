@@ -39,6 +39,8 @@ export interface ComfyApi {
   interrupt(promptId: string): Promise<boolean>
   viewUrl(f: { filename: string; subfolder?: string; type?: string }): string
   fetchImage(f: { filename: string; subfolder?: string; type?: string }): Promise<Buffer>
+  /** 上传图片到 ComfyUI 的 input 目录（POST /upload/image），返回 ComfyUI 实际保存的文件名与子文件夹 */
+  uploadImage(data: Uint8Array, name: string, subfolder: string, overwrite: boolean): Promise<{ name: string; subfolder: string; type: string }>
 }
 
 export class ComfyClient implements ComfyApi {
@@ -55,8 +57,9 @@ export class ComfyClient implements ComfyApi {
     try {
       res = await fetch(this.base + path, {
         method,
-        headers: body !== undefined ? { 'Content-Type': 'application/json' } : undefined,
-        body: body === undefined ? undefined : typeof body === 'string' ? body : JSON.stringify(body),
+        // FormData（上传图片）由 fetch 自动生成 multipart 边界，不能手动设置 Content-Type
+        headers: body !== undefined && !(body instanceof FormData) ? { 'Content-Type': 'application/json' } : undefined,
+        body: body === undefined ? undefined : typeof body === 'string' || body instanceof FormData ? body : JSON.stringify(body),
         signal: AbortSignal.timeout(timeoutMs ?? this.timeoutMs),
       })
     } catch (e) {
@@ -134,6 +137,21 @@ export class ComfyClient implements ComfyApi {
   async fetchImage(f: { filename: string; subfolder?: string; type?: string }) {
     const q = new URLSearchParams({ filename: f.filename, subfolder: f.subfolder ?? '', type: f.type ?? 'output' })
     return (await this.request('GET', `/view?${q}`, undefined, 30000, true)) as Buffer
+  }
+
+  /**
+   * overwrite=false 时 ComfyUI 遇到同名文件会改名为「名称 (1).png」（内容相同时直接使用已有文件）；
+   * 返回值才是 LoadImage 应当读取的文件名，调用方必须使用它
+   */
+  async uploadImage(data: Uint8Array, name: string, subfolder: string, overwrite: boolean) {
+    const fd = new FormData()
+    fd.append('image', new Blob([new Uint8Array(data)]), name)
+    fd.append('type', 'input')
+    fd.append('subfolder', subfolder)
+    fd.append('overwrite', overwrite ? 'true' : 'false')
+    const r = (await this.request('POST', '/upload/image', fd, 60000)) as { name?: unknown; subfolder?: unknown; type?: unknown } | null
+    if (!r || typeof r.name !== 'string' || !r.name) throw new ComfyError(`ComfyUI 上传图片后返回了意外的响应：${JSON.stringify(r)}`)
+    return { name: r.name, subfolder: typeof r.subfolder === 'string' ? r.subfolder : '', type: typeof r.type === 'string' ? r.type : 'input' }
   }
 }
 

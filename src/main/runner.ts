@@ -9,10 +9,11 @@
 import { createHash, randomUUID } from 'node:crypto'
 import { mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { join, extname } from 'node:path'
-import { applyInputs, ComfyError, extractOutputs, finalOutputNodes, historyError, historyInterrupted, NODE_BYPASS } from '@shared/mapping'
-import type { AttemptState, ExecutionAttempt, OutputFile, RunnerEvent, RunnerState, RunnerStatus, RunUnit, Settings } from '@shared/types'
+import { applyInputs, ComfyError, extractOutputs, historyError, historyInterrupted, unitFinalNodes, UPSCALE_OUTPUT } from '@shared/mapping'
+import type { AttemptState, ExecutionAttempt, InputValue, OutputFile, RunnerEvent, RunnerState, RunnerStatus, RunUnit, Settings } from '@shared/types'
 import { ComfyClient, ComfyHTTPError, EventStream, promptBody, type ComfyApi, type EventSource, type HistoryEntry } from './comfy-client'
 import type { Store } from './store'
+import { plannedImage, withUploadedImage } from './upscale'
 
 type Result = 'done' | 'failed' | 'withdrawn' | 'requeued' | 'interrupted' | 'uncertain'
 
@@ -335,7 +336,9 @@ export class Runner {
     const pid = randomUUID()
     let body: string
     try {
-      body = promptBody(applyInputs(run.workflow_json, unit.inputs ?? []), this.clientId, pid)
+      // 批量放大：先把原图上传到 ComfyUI 的 input 目录（每次提交都重新上传同一个文件名，内容由入队时的 SHA-256 核对）
+      const inputs = unit.meta?.upscale ? await this.uploadSource(client, unit) : (unit.inputs ?? [])
+      body = promptBody(applyInputs(run.workflow_json, inputs), this.clientId, pid)
     } catch (e) {
       const error = (e as Error).message
       this.store.createAttempt(unit, null, 'build_failed', { error, unit: { status: 'failed', error, finished_at: Date.now() / 1000 } })
@@ -363,6 +366,7 @@ export class Runner {
     this.emitStatus()
     const m = unit.meta
     let desc = `[${run.name}] 第 ${unit.idx + 1} 张 · ${m?.section ?? ''}「${unit.item_label}」`
+    const up = unit.meta?.upscale
     if (m?.expression) desc += ` · 表情「${m.expression}」`
     let resp: { prompt_id: string }
     try {
@@ -386,10 +390,35 @@ export class Runner {
     const real = resp.prompt_id || pid
     this.store.updateAttempt(attemptId, { state: 'submitted', prompt_id: real, submitted_at: Date.now() / 1000, response: JSON.stringify(resp) })
     this.store.updateUnit(unit.id, { status: 'submitted', prompt_id: real })
-    this.log(`${desc} 已提交（seed ${unit.seed}）`)
+    this.log(up ? `${desc} 已提交（放大工作流「${up.workflow.name}」，采样参数保持工作流原值）` : `${desc} 已提交（seed ${unit.seed}）`)
     const result = await this.waitUnit(client, unit, real)
     this.afterUnit(unit)
     return result
+  }
+
+  /**
+   * 上传放大的原图：读取入队时记录的文件并核对 SHA-256（文件被替换时停止，避免串图），用入队时确定的唯一文件名上传。
+   * ComfyUI 返回的文件名与预定的不同时（例如旧版 ComfyUI 不支持覆盖）改用返回的文件名，并记录在日志中
+   */
+  private async uploadSource(client: ComfyApi, unit: RunUnit): Promise<InputValue[]> {
+    const up = unit.meta!.upscale!
+    let data: Buffer
+    try {
+      data = await readFile(up.source.path)
+    } catch (e) {
+      throw new Error(`读取原图失败（${up.source.path}）：${(e as NodeJS.ErrnoException).code === 'ENOENT' ? '文件已移动或删除' : (e as Error).message}`)
+    }
+    if (sha256(data) !== up.source.sha256) throw new Error(`原图在加入放大队列后被修改或替换（${up.source.path}，SHA-256 与入队时不同）。为避免使用错误的图片，没有提交；请重新从运行记录加入放大队列`)
+    let r: { name: string; subfolder: string }
+    try {
+      r = await client.uploadImage(data, up.upload.name, up.upload.subfolder, true)
+    } catch (e) {
+      throw new Error(`上传原图到 ComfyUI 失败：${(e as Error).message}`)
+    }
+    const actual = r.subfolder ? `${r.subfolder}/${r.name}` : r.name
+    if (actual === plannedImage(up)) return unit.inputs ?? []
+    this.log(`第 ${unit.idx + 1} 张：ComfyUI 把上传的原图保存为「${actual}」（预定为「${plannedImage(up)}」），LoadImage 使用 ComfyUI 返回的文件名`)
+    return withUploadedImage(unit.inputs ?? [], actual)
   }
 
   /** 更新这张图最新一次提交的状态（更新前的记录没有快照时不做任何事） */
@@ -517,9 +546,11 @@ export class Runner {
    */
   private async saveOutputs(unit: RunUnit, outputs: OutputFile[], client: ComfyApi) {
     const wf = this.store.getRun(unit.run_id)?.workflow_json
-    // 有绕过时按实际提交的结构判断（被绕过的节点不算输出，也不再算使用者）
-    const finals = finalOutputNodes(unit.inputs, wf && unit.inputs?.some((x) => x.source === NODE_BYPASS) ? applyInputs(wf, unit.inputs) : wf)
-    for (const o of outputs) o.role = o.type !== 'output' ? 'preview' : finals.size && !finals.has(o.node) ? 'intermediate' : 'final'
+    // 有绕过时按实际提交的结构判断（被绕过的节点不算输出，也不再算使用者）；前后相连的保存节点只有最下游的是最终输出
+    const finals = unitFinalNodes(unit.inputs, wf)
+    // 映射指定的最终输出节点（放大）：只取这些节点的图片，预览类型（temp）也作为最终输出下载保存
+    const explicit = unit.inputs?.some((x) => x.source === UPSCALE_OUTPUT)
+    for (const o of outputs) o.role = explicit ? (finals.has(o.node) ? 'final' : o.type !== 'output' ? 'preview' : 'intermediate') : o.type !== 'output' ? 'preview' : finals.size && !finals.has(o.node) ? 'intermediate' : 'final'
     const dir = unit.meta?.output_dir
     if (!dir) return
     const seen = new Map<string, OutputFile>()
@@ -582,6 +613,16 @@ export class Runner {
     }
     // 扩展点：将来在这里插入自动筛图（检查 outputs 后决定是否继续后续处理）
     await this.saveOutputs(unit, outputs, client)
+    // 映射指定了最终输出节点，但执行完成后这个节点没有返回图片：不能把其他节点的图片当作结果
+    if (unit.inputs?.some((x) => x.source === UPSCALE_OUTPUT) && !outputs.some((o) => o.role === 'final')) {
+      const want = [...new Set(unit.inputs.filter((x) => x.source === UPSCALE_OUTPUT).map((x) => `#${x.node}`))].join('、')
+      const got = outputs.map((o) => `#${o.node}（${o.type}）`).join('、') || '没有任何图片'
+      const err = `ComfyUI 已执行完成，但指定的最终输出节点 ${want} 没有返回图片（历史记录中的输出：${got}）。没有保存任何文件，请检查工作流中该节点是否被绕过或静音`
+      this.markAttempt(unit, 'failed', { comfy_match, error: err })
+      this.store.updateUnit(unit.id, { status: 'failed', error: err, outputs, finished_at: now })
+      this.log(`第 ${unit.idx + 1} 张失败：${err}`)
+      return 'failed'
+    }
     this.markAttempt(unit, 'success', { comfy_match })
     this.store.updateUnit(unit.id, { status: 'done', outputs, finished_at: now, error: '' })
     const files = outputs.filter((o) => o.type === 'output').map((o) => o.saved || o.filename).join(', ') || '无输出文件信息'

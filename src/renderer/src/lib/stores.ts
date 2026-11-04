@@ -6,7 +6,39 @@ import { byPriority, isStateKind, type Library, type RunnerStatus, type Task, ty
 import { toast } from 'sonner'
 import { api } from './api'
 
-export type Page = 'loras' | 'plan' | 'replica' | 'workflows' | 'queue' | 'history' | 'library' | 'mining' | 'characters' | 'stories' | 'settings'
+export type Page = 'loras' | 'plan' | 'replica' | 'workflows' | 'queue' | 'history' | 'upscale' | 'library' | 'mining' | 'characters' | 'stories' | 'settings'
+
+// ---------------------------------------------------------------- 批量放大的选择（跨任务累计，切换页面后保留）
+export interface UpscalePick {
+  unit_id: number
+  label: string
+  run_name: string
+}
+interface UpscaleSelState {
+  picks: Record<number, UpscalePick>
+  toggle(p: UpscalePick): void
+  add(ps: UpscalePick[]): void
+  remove(ids: number[]): void
+  clear(): void
+}
+export const useUpscaleSel = create<UpscaleSelState>((set) => ({
+  picks: {},
+  toggle: (p) =>
+    set((s) => {
+      const picks = { ...s.picks }
+      if (picks[p.unit_id]) delete picks[p.unit_id]
+      else picks[p.unit_id] = p
+      return { picks }
+    }),
+  add: (ps) => set((s) => ({ picks: { ...s.picks, ...Object.fromEntries(ps.map((p) => [p.unit_id, p])) } })),
+  remove: (ids) =>
+    set((s) => {
+      const picks = { ...s.picks }
+      for (const id of ids) delete picks[id]
+      return { picks }
+    }),
+  clear: () => set({ picks: {} }),
+}))
 
 // ---------------------------------------------------------------- 导航
 /** 跳转时的目标（例如从套图任务直接打开某个工作流） */

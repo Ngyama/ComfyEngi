@@ -30,8 +30,13 @@ import {
   parseStack,
   sortNodeIds,
   TRIGGER_DISABLE,
+  UPSCALE_CHECKPOINT,
+  UPSCALE_IMAGE,
+  UPSCALE_LORA,
+  UPSCALE_OUTPUT,
   validateMapping,
 } from '@shared/mapping'
+import { suggestUpscaleMapping } from '@shared/upscale'
 import { analyzeWorkflow, findPromptInjectors, mergeMapping, unsafeIntegers, type Suggestion, type WorkflowAnalysis } from '@shared/workflow-analysis'
 import { controlProblems, controlsOf, NODE_CATEGORIES, nodeCategory, problemNodes, type NodeCategory, withTriggerCuts } from '@shared/node-controls'
 import { MODULES, MODULE_LABELS } from '@shared/prompt'
@@ -133,7 +138,7 @@ function SuggestDialog({ open, onOpenChange, analysis, onApply }: { open: boolea
 function CheckDialog({ open, onOpenChange, api: wfApi, mapping, onMapping, controls, onNode }: { open: boolean; onOpenChange: (o: boolean) => void; api: ApiWorkflow; mapping: MappingEntry[]; onMapping: (m: MappingEntry[]) => void; controls: WorkflowControls; onNode: (nid: string) => void }) {
   const injectors = findPromptInjectors(wfApi, mapping)
   const ctlMsgs = controlProblems(wfApi, mapping, controls)
-  const finals = finalOutputNodes(mapping.filter((m) => m.source === 'filename_prefix') as unknown as InputValue[], wfApi)
+  const finals = finalOutputNodes(mapping.filter((m) => m.source === 'filename_prefix' || m.source === UPSCALE_OUTPUT) as unknown as InputValue[], wfApi)
   const saves = sortNodeIds(Object.keys(wfApi)).filter((n) => typeof wfApi[n].inputs?.filename_prefix === 'string')
   const unsafe = unsafeIntegers(wfApi)
   const setDisabled = (node: string, on: boolean) => onMapping(on ? [...mapping, newEntry(TRIGGER_DISABLE, node, 'toggle_trigger_words')] : mapping.filter((m) => !(m.source === TRIGGER_DISABLE && m.node === node)))
@@ -306,7 +311,7 @@ export function WorkflowEditor({ id, onDeleted, initialTab }: { id: number; onDe
       toast.error(`「${inp}」连接自节点 ${v[0]}，不是可直接填写的值，请映射提供该值的上游节点`)
       return
     }
-    const guess: Record<string, string> = { text: 'positive', seed: 'seed', noise_seed: 'seed', lora_name: 'lora1_name', strength_model: 'lora1_strength', strength_clip: 'lora1_strength', filename_prefix: 'filename_prefix' }
+    const guess: Record<string, string> = { text: 'positive', seed: 'seed', noise_seed: 'seed', lora_name: 'lora1_name', strength_model: 'lora1_strength', strength_clip: 'lora1_strength', filename_prefix: 'filename_prefix', image: UPSCALE_IMAGE, ckpt_name: UPSCALE_CHECKPOINT }
     let src = guess[inp] ?? 'positive'
     if (src === 'positive' && mapping.some((e) => e.source === 'positive') && !mapping.some((e) => e.source === 'negative')) src = 'negative'
     void saveMapping([...mapping, newEntry(src, nid, inp, [], src === 'filename_prefix' ? DEFAULT_PREFIX_TEMPLATE : '')])
@@ -471,6 +476,26 @@ export function WorkflowEditor({ id, onDeleted, initialTab }: { id: number; onDe
             <Button size="sm" variant="ghost" onClick={() => setSuggest(analyzeWorkflow(api_json))}>
               <Wand2 /> 自动识别
             </Button>
+            {Object.values(api_json).some((n) => n.class_type === 'LoadImage') && (
+              <Button
+                size="sm"
+                variant="ghost"
+                title="放大工作流：映射输入图片（LoadImage）、正 / 负面 Prompt、Checkpoint、LoRA 节点与最终输出节点；不映射任何放大参数"
+                onClick={() => {
+                  const add = suggestUpscaleMapping(api_json)
+                  const next = mergeMapping(mapping, add)
+                  if (next.length === mapping.length) {
+                    toast.info('没有可以新增的放大映射', { description: '已存在的映射保持不变；最终输出节点有多个候选时请手动选择。' })
+                    return
+                  }
+                  void saveMapping(next)
+                  toast.success(`已添加 ${next.length - mapping.length} 条放大映射`, { description: next.slice(mapping.length).map((e) => `${SOURCES.find(([k]) => k === e.source)?.[1] ?? e.source} → ${e.node}.${e.input}`).join('\n') })
+                }}
+                data-testid="suggest-upscale"
+              >
+                <Wand2 /> 识别放大映射
+              </Button>
+            )}
             <Button size="sm" variant="ghost" onClick={() => void saveMapping([...mapping, newEntry('positive')])}>
               <Plus /> 添加
             </Button>
@@ -534,6 +559,14 @@ export function WorkflowEditor({ id, onDeleted, initialTab }: { id: number; onDe
                       </div>
                     ) : e.source.endsWith('_name') ? (
                       '角色没有该槽位的 LoRA 时保持工作流原值'
+                    ) : e.source === UPSCALE_IMAGE ? (
+                      '每张图上传到 ComfyUI 的 input/comfyengi_upscale 后写入文件名'
+                    ) : e.source === UPSCALE_CHECKPOINT ? (
+                      '写入原图生成时使用的 Checkpoint'
+                    ) : e.source === UPSCALE_LORA ? (
+                      'LoRA 列表替换为原图生成时的列表（含停用条目与 model / clip 权重）；单 LoRA Loader 只写入原图唯一启用的 LoRA'
+                    ) : e.source === UPSCALE_OUTPUT ? (
+                      '只取这个节点的图片作为放大结果；不写入任何值'
                     ) : (
                       '每张图使用计划中分配的 Seed'
                     )}
