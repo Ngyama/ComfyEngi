@@ -735,11 +735,20 @@ export function upscaleInputs(wf: UpWorkflow, rec: RecoveredGeneration & { raw?:
 
 /** 一键识别放大工作流的映射候选：LoadImage、Checkpoint、LoRA 加载节点、最终保存节点 */
 export function suggestUpscaleMapping(api: ApiWorkflow): MappingEntry[] {
+  return suggestUpscaleMappingWithNotes(api).add
+}
+
+/** 同上，并说明没有填写的项与原因（例如有多个 LoadImage 时不替用户选择） */
+export function suggestUpscaleMappingWithNotes(api: ApiWorkflow): { add: MappingEntry[]; notes: string[] } {
   const ids = sortNodeIds(Object.keys(api))
   const out: MappingEntry[] = []
+  const notes: string[] = []
   const add = (source: string, node: string, input: string) => out.push({ source, node, input, modules: [], template: '' })
   const loads = ids.filter((id) => api[id].class_type === 'LoadImage' && typeof api[id].inputs?.image === 'string')
   if (loads.length === 1) add(UPSCALE_IMAGE, loads[0], 'image')
+  else if (loads.length > 1)
+    notes.push(`有 ${loads.length} 个 LoadImage（${loads.map((id) => nodeLabel(api, id)).join('、')}），无法确定哪个读取要放大的图片（其他的可能是 IPAdapter / ControlNet 的参考图）：请手动添加「放大：输入图片」，节点选读取原图的那个，输入选 image`)
+  else notes.push('没有 LoadImage 节点：放大工作流需要一个 LoadImage 读取要放大的图片')
   const samplers = findSamplers(api)
   if (samplers.length) {
     let link: unknown = api[samplers[0]].inputs.model
@@ -759,13 +768,18 @@ export function suggestUpscaleMapping(api: ApiWorkflow): MappingEntry[] {
       const enc = encodersOf(api, api[samplers[0]].inputs[pol] as [string, number])[0]
       const f = enc ? TEXT_FIELDS.find((k) => typeof api[enc].inputs[k] === 'string') : undefined
       if (enc && f) add(pol, enc, f)
+      else if (enc) {
+        const linked = TEXT_FIELDS.find((k) => isLink(api[enc].inputs[k]))
+        if (linked) notes.push(`${pol === 'positive' ? '正面' : '负面'} Prompt：编码器 ${nodeLabel(api, enc)} 的 ${linked} 连接自 ${nodeLabel(api, String((api[enc].inputs[linked] as [string, number])[0]))}，不能直接写入：请手动映射到上游可以填写文本的节点（例如通配符节点的 populated_text 与 wildcard_text）`)
+      }
     }
-  }
+  } else notes.push('没有找到采样器：没有填写 Checkpoint、LoRA 与 Prompt 映射')
   // 最终输出：没有被其他节点使用、且下游没有其他保存节点的保存节点；只有一个时才建议
   const used = new Set(ids.flatMap((id) => Object.values(api[id].inputs ?? {}).filter(isLink).map((v) => String(v[0]))))
   const finals = ids.filter((id) => typeof api[id].inputs?.filename_prefix === 'string' && !used.has(id))
   if (finals.length === 1) add(UPSCALE_OUTPUT, finals[0], 'filename_prefix')
-  return out
+  else if (finals.length > 1) notes.push(`有 ${finals.length} 个保存节点（${finals.map((id) => nodeLabel(api, id)).join('、')}）：请手动添加「放大：最终输出节点」，选保存放大结果的那个`)
+  return { add: out, notes }
 }
 
 export const nodeLabel = (api: ApiWorkflow, nid: string) => `#${nid} ${nodeTitle(api[nid])}`

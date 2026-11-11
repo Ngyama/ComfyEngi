@@ -37,7 +37,7 @@ import {
   UPSCALE_SEED,
   validateMapping,
 } from '@shared/mapping'
-import { suggestUpscaleMapping } from '@shared/upscale'
+import { suggestUpscaleMappingWithNotes } from '@shared/upscale'
 import { analyzeWorkflow, findPromptInjectors, mergeMapping, unsafeIntegers, type Suggestion, type WorkflowAnalysis } from '@shared/workflow-analysis'
 import { controlProblems, controlsOf, NODE_CATEGORIES, nodeCategory, problemNodes, type NodeCategory, withTriggerCuts } from '@shared/node-controls'
 import { MODULES, MODULE_LABELS } from '@shared/prompt'
@@ -483,14 +483,21 @@ export function WorkflowEditor({ id, onDeleted, initialTab }: { id: number; onDe
                 variant="ghost"
                 title="放大工作流：映射输入图片（LoadImage）、正 / 负面 Prompt、Checkpoint、LoRA 节点与最终输出节点；不映射任何放大参数"
                 onClick={() => {
-                  const add = suggestUpscaleMapping(api_json)
+                  const { add, notes } = suggestUpscaleMappingWithNotes(api_json)
                   const next = mergeMapping(mapping, add)
+                  // 没有填写的项提示原因（已经有对应映射的不再提示）
+                  const has = (src: string) => next.some((e) => e.source === src)
+                  const todo = notes.filter((n) => !(n.includes('「放大：输入图片」') && has(UPSCALE_IMAGE)) && !(n.includes('「放大：最终输出节点」') && has(UPSCALE_OUTPUT)) && !(n.startsWith('正面') && has('positive')) && !(n.startsWith('负面') && has('negative')))
+                  const added = next.slice(mapping.length).map((e) => `${SOURCES.find(([k]) => k === e.source)?.[1] ?? e.source} → ${e.node}.${e.input}`)
+                  const lines = [...added, ...todo.map((n) => `需要手动设置：${n}`)]
+                  const description = lines.length ? <div className="space-y-1 whitespace-pre-line">{lines.map((l, i) => <div key={i}>{l}</div>)}</div> : '已存在的映射保持不变。'
+                  const duration = todo.length ? 30000 : undefined
                   if (next.length === mapping.length) {
-                    toast.info('没有可以新增的放大映射', { description: '已存在的映射保持不变；最终输出节点有多个候选时请手动选择。' })
+                    toast.info('没有可以新增的放大映射', { description, duration })
                     return
                   }
                   void saveMapping(next)
-                  toast.success(`已添加 ${next.length - mapping.length} 条放大映射`, { description: next.slice(mapping.length).map((e) => `${SOURCES.find(([k]) => k === e.source)?.[1] ?? e.source} → ${e.node}.${e.input}`).join('\n') })
+                  toast.success(`已添加 ${next.length - mapping.length} 条放大映射`, { description, duration })
                 }}
                 data-testid="suggest-upscale"
               >

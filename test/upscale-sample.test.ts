@@ -3,8 +3,8 @@
 // 期望值按插件与 ComfyUI 节点源码推算，没有在真实 ComfyUI 中执行。
 
 import { describe, expect, it } from 'vitest'
-import { applyInputs, parseStack, loraStackOf, validateMapping } from '@shared/mapping'
-import { evalText, pyRegexReplace, recoverGeneration, upscaleInputs } from '@shared/upscale'
+import { applyInputs, parseStack, loraStackOf, UPSCALE_CHECKPOINT, UPSCALE_IMAGE, UPSCALE_LORA, UPSCALE_OUTPUT, validateMapping } from '@shared/mapping'
+import { evalText, pyRegexReplace, recoverGeneration, suggestUpscaleMappingWithNotes, upscaleInputs } from '@shared/upscale'
 import type { ApiWorkflow } from '@shared/types'
 import { SAMPLE, SAMPLE_POSITIVE, SAMPLE_UP, SAMPLE_UP_MAP } from './upscale-fixtures'
 
@@ -96,5 +96,18 @@ describe('样本放大工作流 upscale_workflow_api.json', () => {
   })
   it('采样与放大参数保持放大工作流的值', () => {
     for (const nid of ['32', '101', '103', '107', '109', '110']) expect(graph[nid].inputs).toEqual(UP[nid].inputs)
+  })
+})
+
+describe('识别放大映射：样本放大工作流', () => {
+  it('两个 LoadImage（#142 风格参考图、#163）时不替用户选择，并说明原因；Prompt 编码器的 text 是连接时说明要映射上游；两个保存节点时说明', () => {
+    const { add, notes } = suggestUpscaleMappingWithNotes(UP)
+    expect(add.some((m) => m.source === UPSCALE_IMAGE)).toBe(false)
+    expect(add.some((m) => m.source === UPSCALE_OUTPUT)).toBe(false)
+    expect(add.map((m) => `${m.source}:${m.node}.${m.input}`)).toEqual(expect.arrayContaining([`${UPSCALE_CHECKPOINT}:30.ckpt_name`, `${UPSCALE_LORA}:5.loras`]))
+    const img = notes.find((n) => n.includes('「放大：输入图片」'))!
+    expect(img).toMatch(/^有 2 个 LoadImage（#142 .*、#163 .*）/)
+    expect(notes.some((n) => n.startsWith('正面 Prompt') && n.includes('#47'))).toBe(true)
+    expect(notes.find((n) => n.includes('「放大：最终输出节点」'))).toMatch(/#121.*#136|#136.*#121/)
   })
 })
