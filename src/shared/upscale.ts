@@ -242,17 +242,86 @@ export function triggerToggleOutput(inputs: Record<string, unknown>, override: u
   }
 }
 
-/** Python re.sub 的常见用法转为 JS；无法确认等价时返回 null */
-function pyRegexReplace(s: string, pattern: string, repl: string, flags: { i: boolean; m: boolean; s: boolean }, count: number): string | null {
-  if (/\(\?P|\(\?[aiLmsux]+\)|\\[AZ]/.test(pattern) || /[\\$]/.test(repl)) return null
-  // Python 的 $（非多行模式）还匹配结尾换行符之前的位置，JS 不会
-  if (!flags.m && /(^|[^\\])\$/.test(pattern) && s.endsWith('\n')) return null
+// ---------------- RegexReplace（ComfyUI 内置节点：re.sub(regex_pattern, replace, string, count=count, flags=…)）
+
+/** 含 UTF-16 代理对的字符：JS（不带 u 标志）的 . 与字符类按半个字符匹配，Python 按一个字符 */
+const SURROGATE = new RegExp('[\\uD800-\\uDFFF]')
+/** Python 的 \w \d \s \b 按 Unicode 判断，JS 只按 ASCII（\s 也不含 \x1c-\x1f） */
+const UNICODE_CLASS_TEXT = /[^\x00-\x1b\x20-\x7f]/
+/** 不区分大小写时 Python（Unicode 大小写折叠）与 JS（不带 u 标志，按 toUpperCase）结果可能不同的字符 */
+const CASE_SPECIAL = new RegExp('[\\u00df\\u017f\\u0130\\u0131\\u1e9e\\u212a\\u212b]')
+
+/**
+ * Python 正则 → JS 正则。只转换能确认等价的写法：
+ * - 字符类外、未转义的 $：非多行模式下 Python 的 $ 匹配结尾或结尾换行符之前的位置，转为 (?=\n?$)；多行模式两者相同；
+ * - ^、. 以及其他转义与量词按原样（调用方另外排除了换行符、Unicode 字符类等差异）。
+ * Python 特有或含义不同的写法返回 null：命名组 (?P…) / (?<…>)、行内标志、注释、条件、原子组、{,n}、\A \Z 等转义、反向引用、
+ * 字符类内的 $、转义的 \$、$ 后跟量词、以 ] 开头的字符类。
+ */
+export function pyPatternToJs(p: string, multiline: boolean): string | null {
+  if (/\(\?(P|<[A-Za-z_]|[aiLmsux-]+[):]|#|\(|>)/.test(p) || /\{,/.test(p)) return null
+  let out = ''
+  let inClass = false
+  for (let k = 0; k < p.length; k++) {
+    const c = p[k]
+    if (c === '\\') {
+      const d = p[k + 1]
+      if (d === undefined || d === '$' || /[0-9]/.test(d)) return null
+      if (/[A-Za-z]/.test(d)) {
+        if (d === 'x') {
+          if (!/^[0-9a-fA-F]{2}$/.test(p.slice(k + 2, k + 4))) return null
+        } else if (d === 'u') {
+          if (!/^[0-9a-fA-F]{4}$/.test(p.slice(k + 2, k + 6))) return null
+        } else if (!'bBdDfnrsStvwW'.includes(d) || (inClass && d === 'B')) return null
+      }
+      out += c + d
+      k++
+      continue
+    }
+    if (inClass) {
+      if (c === '$') return null
+      if (c === ']') inClass = false
+      out += c
+      continue
+    }
+    if (c === '[') {
+      inClass = true
+      out += c
+      if (p[k + 1] === '^') {
+        out += '^'
+        k++
+      }
+      if (p[k + 1] === ']') return null
+      continue
+    }
+    if (c === '$') {
+      if (/[*+?{]/.test(p[k + 1] ?? '')) return null
+      out += multiline ? '$' : '(?=\\n?$)'
+      continue
+    }
+    out += c
+  }
+  return inClass ? null : out
+}
+
+/** Python re.sub 转为 JS；无法确认结果相同时返回 null（不猜测） */
+export function pyRegexReplace(s: string, pattern: string, repl: string, flags: { i: boolean; m: boolean; s: boolean }, count: number): string | null {
+  // 替换文本：Python 处理其中的反斜杠转义（\n、\1、\g<…>）；$ 在两者中都是字面量（这里用函数返回替换文本，JS 不解释 $）
+  if (repl.includes('\\')) return null
+  // JS 的 . ^ $ 还把 \r、U+2028、U+2029 当作换行，Python 只认 \n
+  if (JS_LINE_BREAK.test(s) && /[.^$]/.test(pattern)) return null
+  if (UNICODE_CLASS_TEXT.test(s) && /\\[wWbBdDsS]/.test(pattern)) return null
+  if (SURROGATE.test(s) && /[.[]|\\[WDS]/.test(pattern)) return null
+  if (flags.i && (/[^\x00-\x7f]/.test(pattern) || CASE_SPECIAL.test(s))) return null
+  const js = pyPatternToJs(pattern, flags.m)
+  if (js === null) return null
   let re: RegExp
   try {
-    re = new RegExp(pattern, `g${flags.i ? 'i' : ''}${flags.m ? 'm' : ''}${flags.s ? 's' : ''}`)
+    re = new RegExp(js, `g${flags.i ? 'i' : ''}${flags.m ? 'm' : ''}${flags.s ? 's' : ''}`)
   } catch {
     return null
   }
+  // count=0 替换全部，否则只替换前 count 处（与 re.sub 相同）
   let n = 0
   return s.replace(re, (m) => (count > 0 && n >= count ? m : (n++, repl)))
 }
@@ -277,8 +346,11 @@ export function evalText(api: ApiWorkflow, v: unknown, ctx: EvalContext = {}, se
   }
   if (ct === 'RegexReplace') {
     const s = sub(i.string)
-    const lit = [i.regex_pattern, i.replace].every((x) => typeof x === 'string')
-    const r = lit ? pyRegexReplace(s.text, String(i.regex_pattern), String(i.replace), { i: !!i.case_insensitive, m: !!i.multiline, s: !!i.dotall }, Number(i.count) || 0) : null
+    // 可选输入的默认值与节点相同：case_insensitive=True、multiline=False、dotall=False、count=0
+    const opt = ['case_insensitive', 'multiline', 'dotall', 'count']
+    const lit = [i.regex_pattern, i.replace].every((x) => typeof x === 'string') && !opt.some((k) => isLink(i[k])) && (i.count == null || Number.isInteger(i.count))
+    const flags = { i: pyTruthy(i.case_insensitive ?? true), m: pyTruthy(i.multiline ?? false), s: pyTruthy(i.dotall ?? false) }
+    const r = lit ? pyRegexReplace(s.text, String(i.regex_pattern), String(i.replace), flags, Number(i.count ?? 0)) : null
     if (r === null) return { ...merge([s], s.text, [nid]), exact: false, runtime: [...s.runtime, `${label(api, nid)} 的正则替换无法在 ComfyEngi 中按相同规则计算`] }
     return merge([s], r, [nid])
   }
@@ -519,8 +591,12 @@ export function upscaleInputs(wf: UpWorkflow, rec: RecoveredGeneration & { raw?:
       }
       const stack = loraStackOf(n)
       if (stack) {
-        // 替换为原图的 LoRA 列表：名称、启用状态、model / clip 强度都与原图相同，原来未启用的仍未启用
-        const list = rec.loras.map((l) => ({ ...(rec.raw?.get(l) ?? { expanded: false, selected: false, locked: false }), name: loraStem(l.name), strength: l.strength, clipStrength: l.clip, active: l.active }))
+        // 替换为原图的 LoRA 列表：名称、启用状态、model / clip 强度都与原图相同，原来未启用的仍未启用。
+        // 有原图条目时原样使用（插件界面保存的强度可能是 "1.20" 这样的文本，保持原来的写法）
+        const list = rec.loras.map((l) => {
+          const raw = rec.raw?.get(l)
+          return raw ? { ...raw, active: l.active } : { expanded: false, selected: false, locked: false, name: loraStem(l.name), strength: l.strength, clipStrength: l.clip, active: l.active }
+        })
         out.push({ node, input: 'loras', source: UPSCALE_LORA, value: { ...(n!.inputs.loras as object), __value__: list } })
         if (typeof n!.inputs.text === 'string') out.push({ node, input: 'text', source: UPSCALE_LORA, value: loraStackText(list) })
         continue
