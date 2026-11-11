@@ -1,6 +1,6 @@
 // 加入放大队列：选择放大工作流，预览每张图恢复出的生成条件与问题，确认数量后入队。
 
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useState, type ReactNode } from 'react'
 import { AlertTriangle, CircleCheck, CircleSlash, Info } from 'lucide-react'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
@@ -8,9 +8,9 @@ import { Checkbox } from '@/components/ui/checkbox'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { FieldLabel } from '@/components/common'
 import { api, call } from '@/lib/api'
-import { confirm, useLib, useNav, useUpscaleSel, type UpscalePick } from '@/lib/stores'
+import { confirm, useLib, useNav } from '@/lib/stores'
 import { cn } from '@/lib/utils'
-import type { UpscaleCandidate, UpscalePlan } from '@shared/upscale'
+import type { UpscaleCandidate, UpscalePlan, UpscaleSelection } from '@shared/upscale'
 
 const LAST_WF = 'comfyengi.upscale.workflow'
 const readLast = () => {
@@ -52,15 +52,29 @@ function CandidateRow({ c }: { c: UpscaleCandidate }) {
     <div className="space-y-1 rounded-xl bg-inset px-3 py-2 text-[11.5px]" data-testid="upscale-candidate">
       <div className="flex items-center gap-2">
         <st.icon className={cn('size-3.5 shrink-0', st.cls)} />
-        <span className="min-w-0 truncate font-medium">{c.label || `#${c.unit_id}`}</span>
-        <span className="min-w-0 truncate text-muted-foreground">{c.run_name}</span>
-        <span className="ml-auto shrink-0 font-mono text-[10.5px] text-muted-foreground" title={c.path}>
-          {c.name}
-        </span>
+        {c.kind === 'file' ? (
+          // 文件来源：只显示文件路径（没有运行记录信息）
+          <span className="min-w-0 truncate font-mono text-[11px]" title={c.path}>
+            {c.path || c.name}
+          </span>
+        ) : (
+          <>
+            <span className="min-w-0 truncate font-medium">{c.label || `#${c.unit_id}`}</span>
+            <span className="min-w-0 truncate text-muted-foreground">{c.run_name}</span>
+            <span className="ml-auto shrink-0 font-mono text-[10.5px] text-muted-foreground" title={c.path}>
+              {c.name}
+            </span>
+          </>
+        )}
       </div>
       {c.positive != null && (
         <div className="line-clamp-2 font-mono text-[10.5px] break-all text-muted-foreground" title={c.positive}>
           正面：{c.positive || '（空）'}
+        </div>
+      )}
+      {c.negative != null && (
+        <div className="line-clamp-1 font-mono text-[10.5px] break-all text-muted-foreground" title={c.negative}>
+          负面：{c.negative || '（空）'}
         </div>
       )}
       {(c.checkpoint || loras.length > 0) && (
@@ -79,10 +93,13 @@ function CandidateRow({ c }: { c: UpscaleCandidate }) {
   )
 }
 
-export function UpscaleEnqueueDialog({ picks, onClose }: { picks: UpscalePick[]; onClose: () => void }) {
+/**
+ * items：放大来源（运行记录中的图片或本机图片文件）；header：对话框顶部的附加内容（例如文件夹选项）；
+ * onEnqueued：加入成功后调用，参数为没有加入的来源的 key（运行记录：unit_id；文件：路径）
+ */
+export function UpscaleEnqueueDialog({ items, header, onClose, onEnqueued }: { items: UpscaleSelection[]; header?: ReactNode; onClose: () => void; onEnqueued?: (skipped: { unit_ids: Set<number>; files: Set<string> }) => void }) {
   const lib = useLib((s) => s.lib)
   const go = useNav((s) => s.go)
-  const remove = useUpscaleSel((s) => s.remove)
   const workflows = useMemo(() => (lib?.workflows ?? []).filter((w) => w.upscale), [lib])
   const [wid, setWid] = useState<number | null>(() => {
     const last = readLast()
@@ -91,17 +108,18 @@ export function UpscaleEnqueueDialog({ picks, onClose }: { picks: UpscalePick[];
   const [plan, setPlan] = useState<UpscalePlan | null>(null)
   const [accept, setAccept] = useState(false)
   const [busy, setBusy] = useState(false)
-  const items = useMemo(() => picks.map((p) => ({ unit_id: p.unit_id })), [picks])
-
+  // 按内容比较来源列表（父组件每次渲染都会生成新的数组，内容不变时不重新检查）
+  const itemsKey = JSON.stringify(items)
   useEffect(() => {
-    if (wid == null) return
+    const list = JSON.parse(itemsKey) as UpscaleSelection[]
+    if (wid == null || !list.length) return
     let alive = true
     setPlan(null)
-    void call(api['upscale.plan'](items, wid)).then((p) => alive && p && setPlan(p))
+    void call(api['upscale.plan'](list, wid)).then((p) => alive && p && setPlan(p))
     return () => {
       alive = false
     }
-  }, [items, wid])
+  }, [itemsKey, wid])
 
   const n = (st: UpscaleCandidate['state']) => plan?.candidates.filter((c) => c.state === st).length ?? 0
   const ok = n('ok')
@@ -123,9 +141,7 @@ export function UpscaleEnqueueDialog({ picks, onClose }: { picks: UpscalePick[];
       return
     }
     writeLast(wid)
-    // 已加入的从选择中移除，未加入的保留以便处理
-    const skipped = new Set(r.skipped.map((x) => x.unit_id))
-    remove(items.map((x) => x.unit_id).filter((id) => !skipped.has(id)))
+    onEnqueued?.({ unit_ids: new Set(r.skipped.flatMap((x) => (x.unit_id == null ? [] : [x.unit_id]))), files: new Set(r.skipped.flatMap((x) => (x.file ? [x.file] : []))) })
     onClose()
     const started = start && (await startRunnerChecked())
     toast.success(`已加入放大队列（${r.count} 张）${started ? '，开始执行' : ''}`, {
@@ -142,6 +158,7 @@ export function UpscaleEnqueueDialog({ picks, onClose }: { picks: UpscalePick[];
           <DialogDescription>按每张图生成时实际提交的工作流恢复 Prompt、Checkpoint 与 LoRA，写入放大工作流；放大倍数、步数、CFG、采样器、降噪等参数保持放大工作流中的值。</DialogDescription>
         </DialogHeader>
         <div className="scrollbar-none -mx-1 min-h-0 min-w-0 flex-1 space-y-4 overflow-y-auto overscroll-contain px-1 py-0.5">
+          {header}
           <div>
             <FieldLabel hint="在「工作流」中导入放大工作流，并映射输入图片与最终输出节点">放大工作流</FieldLabel>
             {workflows.length ? (
@@ -207,7 +224,8 @@ export function UpscaleEnqueueDialog({ picks, onClose }: { picks: UpscalePick[];
               </div>
             </>
           )}
-          {!plan && wid != null && <div className="py-6 text-center text-xs text-muted-foreground">正在读取每张图的生成记录…</div>}
+          {!items.length && <div className="py-6 text-center text-xs text-muted-foreground">没有找到图片</div>}
+          {!plan && wid != null && items.length > 0 && <div className="py-6 text-center text-xs text-muted-foreground">正在读取每张图的生成记录…</div>}
         </div>
         <DialogFooter className="shrink-0">
           <Button variant="ghost" onClick={onClose}>

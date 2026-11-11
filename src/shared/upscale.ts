@@ -37,17 +37,26 @@ const unwrap = (v: unknown) => (v && typeof v === 'object' && !Array.isArray(v) 
 
 // ---------------------------------------------------------------- 入队预览（主进程计算，界面显示）
 
-export interface UpscaleSelection {
-  unit_id: number
-  /** 原图在 outputs 中的序号；没有时为预览使用的最终输出 */
-  output?: number
-}
+/** 放大来源：运行记录中的一张图，或本机的一个图片文件（二选一） */
+export type UpscaleSelection =
+  | {
+      unit_id: number
+      /** 原图在 outputs 中的序号；没有时为预览使用的最终输出 */
+      output?: number
+    }
+  | {
+      /** 图片文件的绝对路径 */
+      file: string
+    }
+export const isFileSelection = (s: UpscaleSelection): s is { file: string } => 'file' in s
 
 /** 预览中的一张图 */
 export interface UpscaleCandidate {
   key: string
-  unit_id: number
-  output: number
+  kind: 'run' | 'file'
+  /** 运行记录来源的单元与输出序号；file 来源为 null */
+  unit_id: number | null
+  output: number | null
   run_name: string
   label: string
   /** 原图文件名与本机路径 */
@@ -59,7 +68,25 @@ export interface UpscaleCandidate {
   negative: string | null
   checkpoint: string | null
   loras: RecoveredLora[] | null
-  snapshot: 'attempt' | 'rebuilt' | null
+  snapshot: 'attempt' | 'rebuilt' | 'file' | null
+}
+
+/** 加入放大队列时没有加入的图片 */
+export interface UpscaleSkipped {
+  key: string
+  unit_id: number | null
+  file: string | null
+  label: string
+  reason: string
+}
+
+/** 扫描文件夹的结果 */
+export interface UpscaleFolderScan {
+  files: string[]
+  /** 跳过的「放大」子文件夹（放大结果） */
+  skipped_dirs: string[]
+  /** 图片超过上限，只返回了前面的部分 */
+  truncated: boolean
 }
 
 export interface UpscalePlan {
@@ -556,6 +583,25 @@ export function upscaleWorkflowProblems(wf: UpWorkflow): Message[] {
   }
   const loraNode = mapping.find((m) => m.source === UPSCALE_LORA)?.node
   for (const ld of findLoraLoaders(api)) if (String(ld.node) !== String(loraNode) && !gone.has(ld.node)) out.push(['warning', `放大工作流中的 LoRA 节点 ${label(api, ld.node)} 没有映射为「放大：LoRA 加载节点」：它保持工作流原值，会和原图的 LoRA 一起加载`])
+  // 不使用输入图片的输出节点：ComfyUI 执行 API 工作流中的全部输出节点，它与它的上游（例如前半段的采样）每张图都会多运行一次
+  const image = mapping.find((m) => m.source === UPSCALE_IMAGE)?.node
+  if (image != null && api[String(image)]) {
+    const down = new Set([String(image)])
+    for (let grew = true; grew; ) {
+      grew = false
+      for (const [nid, n] of Object.entries(api))
+        if (!down.has(nid) && Object.values(n.inputs ?? {}).some((v) => isLink(v) && down.has(String(v[0])))) {
+          down.add(nid)
+          grew = true
+        }
+    }
+    for (const nid of sortNodeIds(Object.keys(api))) {
+      const n = api[nid]
+      const isOutput = typeof n.inputs?.filename_prefix === 'string' || /^(Save|Preview)Image/.test(n.class_type)
+      if (isOutput && !down.has(nid) && !gone.has(nid))
+        out.push(['warning', `放大工作流的输出节点 ${label(api, nid)} 不使用输入图片 ${label(api, String(image))}：ComfyUI 会执行它和它上游的节点（例如前半段的采样），每张图都会多运行一次。可以在工作流的节点控制中绕过它，或从放大工作流中删除`])
+    }
+  }
   return out
 }
 

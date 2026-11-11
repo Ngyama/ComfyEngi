@@ -2,32 +2,15 @@
 // 正面 Prompt = RegexReplace #47(^,|,$) ← StringConcatenate #45(TriggerWord Toggle #34, ",", ImpactWildcardProcessor #3)。
 // 期望值按插件与 ComfyUI 节点源码推算，没有在真实 ComfyUI 中执行。
 
-import { readFileSync } from 'node:fs'
-import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { applyInputs, newEntry, parseStack, loraStackOf, TRIGGER_DISABLE, UPSCALE_CHECKPOINT, UPSCALE_IMAGE, UPSCALE_LORA, UPSCALE_OUTPUT, validateMapping } from '@shared/mapping'
+import { applyInputs, parseStack, loraStackOf, validateMapping } from '@shared/mapping'
 import { evalText, pyRegexReplace, recoverGeneration, upscaleInputs } from '@shared/upscale'
-import type { ApiWorkflow, MappingEntry } from '@shared/types'
+import type { ApiWorkflow } from '@shared/types'
+import { SAMPLE, SAMPLE_POSITIVE, SAMPLE_UP, SAMPLE_UP_MAP } from './upscale-fixtures'
 
-const SAMPLE = JSON.parse(readFileSync(join(__dirname, 'fixtures', 'upscale-sample-prompt.json'), 'utf8')) as { prompt: ApiWorkflow }
-const UP: ApiWorkflow = JSON.parse(readFileSync(join(__dirname, 'fixtures', 'upscale-workflow-sample.json'), 'utf8'))
+const UP = SAMPLE_UP
 const G = SAMPLE.prompt
-
-/** README 中说明的放大映射：正面 / 负面写入上游的通配符节点，#34 禁止注入 */
-export const SAMPLE_UP_MAP: MappingEntry[] = [
-  newEntry(UPSCALE_IMAGE, '163', 'image'),
-  newEntry('positive', '3', 'populated_text'),
-  newEntry('positive', '3', 'wildcard_text'),
-  newEntry('negative', '4', 'populated_text'),
-  newEntry('negative', '4', 'wildcard_text'),
-  newEntry(UPSCALE_CHECKPOINT, '30', 'ckpt_name'),
-  newEntry(UPSCALE_LORA, '5', 'loras'),
-  newEntry(TRIGGER_DISABLE, '34', 'toggle_trigger_words'),
-  newEntry(UPSCALE_OUTPUT, '121', 'filename_prefix'),
-]
-
-const TRIGGERS = 'long hair, two side up, crossed bangs, pink hair, multicolored eyes, hair flower, black rose, SajunaSchool, serafuku, red sailor collar, yellow bow, sweater vest, black vest, short sleeves, pleated skirt, red skirt, black_thighhighs'
-const EXPECTED_POSITIVE = `${TRIGGERS},${String(G['3'].inputs.populated_text)}`
+const EXPECTED_POSITIVE = SAMPLE_POSITIVE
 
 describe('RegexReplace：Python re.sub 的 $ 与默认值', () => {
   const f = (i = true, m = false) => ({ i, m, s: false })
