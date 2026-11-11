@@ -408,7 +408,7 @@ export class Runner {
     } catch (e) {
       throw new Error(`读取原图失败（${up.source.path}）：${(e as NodeJS.ErrnoException).code === 'ENOENT' ? '文件已移动或删除' : (e as Error).message}`)
     }
-    if (sha256(data) !== up.source.sha256) throw new Error(`原图在加入放大队列后被修改或替换（${up.source.path}，SHA-256 与入队时不同）。为避免使用错误的图片，没有提交；请重新从运行记录加入放大队列`)
+    if (sha256(data) !== up.source.sha256) throw new Error(`原图在加入放大队列后被修改或替换（${up.source.path}，SHA-256 与入队时不同）。为避免使用错误的图片，没有提交；请重新加入放大队列`)
     let r: { name: string; subfolder: string }
     try {
       r = await client.uploadImage(data, up.upload.name, up.upload.subfolder, true)

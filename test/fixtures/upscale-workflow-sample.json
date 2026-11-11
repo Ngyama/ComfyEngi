@@ -1,0 +1,1238 @@
+{
+  "1": {
+    "inputs": {
+      "value": 1024
+    },
+    "class_type": "easy int",
+    "_meta": {
+      "title": "Width"
+    }
+  },
+  "3": {
+    "inputs": {
+      "wildcard_text": "syta, masterpiece, best_quality, anime_screencap, very_aesthetic, newest, absurdres, CG, anime, source_anime, illustration, depth_of_field, \n\nindoors, bed, bedroom, pillow, white_bedding, white_curtains, soft lighting, ((moonlight, night)), simple_background, \n\nfull_body, \n\n1girl, blush, wariza, on_bed\n",
+      "populated_text": "syta, masterpiece, best_quality, anime_screencap, very_aesthetic, newest, absurdres, CG, anime, source_anime, illustration, depth_of_field, \n\nindoors, bed, bedroom, pillow, white_bedding, white_curtains, soft lighting, ((moonlight, night)), simple_background, \n\nfull_body, \n\n1girl, blush, wariza, on_bed\n",
+      "mode": "populate",
+      "seed": [
+        "32",
+        0
+      ],
+      "Select to add Wildcard": "Select the Wildcard to add to the text"
+    },
+    "class_type": "ImpactWildcardProcessor",
+    "_meta": {
+      "title": "POSITIVE"
+    }
+  },
+  "4": {
+    "inputs": {
+      "wildcard_text": "bad quality, worst quality, worst detail, sketch, bad hands, bad anatomy, (moon), door, lamp, sheer, transparent, sheer, transparent, see-through, thin_fabric, sheer_thighhighs, thigh_strap, frills, frilled, lace, lace-trimmed, ribbon,",
+      "populated_text": "bad quality, worst quality, worst detail, sketch, bad hands, bad anatomy, (moon), door, lamp, sheer, transparent, sheer, transparent, see-through, thin_fabric, sheer_thighhighs, thigh_strap, frills, frilled, lace, lace-trimmed, ribbon,",
+      "mode": "populate",
+      "seed": [
+        "32",
+        0
+      ],
+      "Select to add Wildcard": "Select the Wildcard to add to the text"
+    },
+    "class_type": "ImpactWildcardProcessor",
+    "_meta": {
+      "title": "NEGATIVE"
+    }
+  },
+  "5": {
+    "inputs": {
+      "__lm_autocomplete_meta_text": {
+        "version": 1,
+        "textWidgetName": "text",
+        "lastAccepted": {
+          "start": 401,
+          "end": 437,
+          "insertedText": "<lora:syta_style_v1-step00007000:1>,",
+          "textSnapshot": "<lora:syta_style_v1-step00005000:1.20><lora:Inui Sajuna_illus_1115376:0.45:0.45>, <lora:il_contrast_slider_d1:0.20> <lora:il_brightness_slider_d1:0.50> <lora:Ugly Man_illus_1001313:0.40> <lora:syta_style_v1-step00007000:1.20> <lora:Sophia Claudel_illus_2345242:0.50> <lora:Suzune Horikita_illus_2680515:0.60> <lora:Alisa Mikhailovna Kujou_illus_493358:0.40>, <lora:BlueArchiveStyle_illus_1884029:0.80><lora:syta_style_v1-step00007000:1>,"
+        }
+      },
+      "text": "<lora:syta_style_v1-step00005000:1.20><lora:Inui Sajuna_illus_1115376:0.45:0.45>, <lora:il_contrast_slider_d1:0.20> <lora:il_brightness_slider_d1:0.50> <lora:Ugly Man_illus_1001313:0.40> <lora:syta_style_v1-step00007000:1.20>, <lora:syta_style_v1-step00007000:1.20>",
+      "loras": {
+        "__value__": [
+          {
+            "name": "syta_style_v1-step00005000",
+            "strength": "1.20",
+            "active": true,
+            "expanded": false,
+            "clipStrength": "1.20",
+            "selected": false,
+            "locked": false
+          },
+          {
+            "name": "syta_style_v1-step00007000",
+            "strength": "1.20",
+            "active": false,
+            "expanded": false,
+            "clipStrength": "1.20",
+            "selected": false,
+            "locked": false
+          },
+          {
+            "name": "il_contrast_slider_d1",
+            "strength": "0.20",
+            "active": true,
+            "expanded": false,
+            "clipStrength": "0.20",
+            "selected": false,
+            "locked": false
+          },
+          {
+            "name": "il_brightness_slider_d1",
+            "strength": "0.50",
+            "active": true,
+            "expanded": false,
+            "clipStrength": "0.50",
+            "selected": false,
+            "locked": false
+          },
+          {
+            "name": "Ugly Man_illus_1001313",
+            "strength": "0.40",
+            "active": false,
+            "expanded": false,
+            "clipStrength": "0.40",
+            "selected": true,
+            "locked": false
+          },
+          {
+            "name": "Inui Sajuna_illus_1115376",
+            "strength": "0.45",
+            "active": true,
+            "expanded": false,
+            "clipStrength": "0.45",
+            "selected": false,
+            "locked": false
+          }
+        ]
+      },
+      "model": [
+        "30",
+        0
+      ],
+      "clip": [
+        "55",
+        0
+      ]
+    },
+    "class_type": "Lora Loader (LoraManager)",
+    "_meta": {
+      "title": "Lora Loader (LoraManager)"
+    }
+  },
+  "6": {
+    "inputs": {
+      "wildcard": "",
+      "Select to add LoRA": "Select the LoRA to add to the text",
+      "Select to add Wildcard": "Select the Wildcard to add to the text",
+      "model": [
+        "41",
+        0
+      ],
+      "clip": [
+        "5",
+        1
+      ],
+      "vae": [
+        "40",
+        0
+      ],
+      "positive": [
+        "43",
+        0
+      ],
+      "negative": [
+        "44",
+        0
+      ],
+      "bbox_detector": [
+        "33",
+        0
+      ],
+      "sam_model_opt": [
+        "7",
+        0
+      ]
+    },
+    "class_type": "ToDetailerPipe",
+    "_meta": {
+      "title": "ToDetailerPipe"
+    }
+  },
+  "7": {
+    "inputs": {
+      "model_name": "sam_vit_b_01ec64.pth",
+      "device_mode": "AUTO"
+    },
+    "class_type": "SAMLoader",
+    "_meta": {
+      "title": "SAMLoader (Impact)"
+    }
+  },
+  "12": {
+    "inputs": {
+      "value": 1536
+    },
+    "class_type": "easy int",
+    "_meta": {
+      "title": "Height"
+    }
+  },
+  "18": {
+    "inputs": {
+      "seed": [
+        "32",
+        0
+      ],
+      "steps": 28,
+      "cfg": 5.5,
+      "sampler": "euler_ancestral",
+      "scheduler": "normal",
+      "denoise": 1
+    },
+    "class_type": "Input Parameters (Image Saver)",
+    "_meta": {
+      "title": "Input Parameters (Image Saver)"
+    }
+  },
+  "19": {
+    "inputs": {
+      "value": 1536
+    },
+    "class_type": "PrimitiveFloat",
+    "_meta": {
+      "title": "Max Size"
+    }
+  },
+  "23": {
+    "inputs": {
+      "value": false
+    },
+    "class_type": "PrimitiveBoolean",
+    "_meta": {
+      "title": "Tiled Detailer"
+    }
+  },
+  "29": {
+    "inputs": {
+      "value": 1
+    },
+    "class_type": "easy int",
+    "_meta": {
+      "title": "Batch Size"
+    }
+  },
+  "30": {
+    "inputs": {
+      "ckpt_name": "oneObsession_v24.safetensors"
+    },
+    "class_type": "CheckpointLoaderSimple",
+    "_meta": {
+      "title": "Checkpoint加载器（简易）"
+    }
+  },
+  "31": {
+    "inputs": {
+      "value": 2.5
+    },
+    "class_type": "PrimitiveFloat",
+    "_meta": {
+      "title": "BBOX Crop Factor"
+    }
+  },
+  "32": {
+    "inputs": {
+      "seed": 1024880281194556
+    },
+    "class_type": "SeedNode",
+    "_meta": {
+      "title": "种子"
+    }
+  },
+  "33": {
+    "inputs": {
+      "model_name": "bbox/face_yolov9c.pt"
+    },
+    "class_type": "UltralyticsDetectorProvider",
+    "_meta": {
+      "title": "DefaultDetectorProvider"
+    }
+  },
+  "34": {
+    "inputs": {
+      "group_mode": true,
+      "default_active": false,
+      "allow_strength_adjustment": true,
+      "toggle_trigger_words": {
+        "__value__": [
+          {
+            "text": "long hair, two side up, crossed bangs, pink hair, multicolored eyes, hair flower, black rose",
+            "active": false,
+            "highlighted": false,
+            "strength": null,
+            "items": [
+              {
+                "text": "long hair",
+                "active": true,
+                "highlighted": false,
+                "strength": null
+              },
+              {
+                "text": "two side up",
+                "active": true,
+                "highlighted": false,
+                "strength": null
+              },
+              {
+                "text": "crossed bangs",
+                "active": true,
+                "highlighted": false,
+                "strength": null
+              },
+              {
+                "text": "pink hair",
+                "active": true,
+                "highlighted": false,
+                "strength": null
+              },
+              {
+                "text": "multicolored eyes",
+                "active": true,
+                "highlighted": false,
+                "strength": null
+              },
+              {
+                "text": "hair flower",
+                "active": true,
+                "highlighted": false,
+                "strength": null
+              },
+              {
+                "text": "black rose",
+                "active": true,
+                "highlighted": false,
+                "strength": null
+              }
+            ]
+          },
+          {
+            "text": "SajunaSchool, serafuku, red sailor collar, yellow bow, sweater vest, black vest, short sleeves, pleated skirt, red skirt, black_thighhighs",
+            "active": false,
+            "highlighted": false,
+            "strength": null,
+            "items": [
+              {
+                "text": "SajunaSchool",
+                "active": true,
+                "highlighted": false,
+                "strength": null
+              },
+              {
+                "text": "serafuku",
+                "active": true,
+                "highlighted": false,
+                "strength": null
+              },
+              {
+                "text": "red sailor collar",
+                "active": true,
+                "highlighted": false,
+                "strength": null
+              },
+              {
+                "text": "yellow bow",
+                "active": true,
+                "highlighted": false,
+                "strength": null
+              },
+              {
+                "text": "sweater vest",
+                "active": true,
+                "highlighted": false,
+                "strength": null
+              },
+              {
+                "text": "black vest",
+                "active": true,
+                "highlighted": false,
+                "strength": null
+              },
+              {
+                "text": "short sleeves",
+                "active": true,
+                "highlighted": false,
+                "strength": null
+              },
+              {
+                "text": "pleated skirt",
+                "active": true,
+                "highlighted": false,
+                "strength": null
+              },
+              {
+                "text": "red skirt",
+                "active": true,
+                "highlighted": false,
+                "strength": null
+              },
+              {
+                "text": "black_thighhighs",
+                "active": true,
+                "highlighted": false,
+                "strength": null
+              }
+            ]
+          },
+          {
+            "text": "long hair, crossed bangs, pink hair, multicolored eyes",
+            "active": false,
+            "highlighted": false,
+            "strength": null,
+            "items": [
+              {
+                "text": "long hair",
+                "active": true,
+                "highlighted": false,
+                "strength": null
+              },
+              {
+                "text": "crossed bangs",
+                "active": true,
+                "highlighted": false,
+                "strength": null
+              },
+              {
+                "text": "pink hair",
+                "active": true,
+                "highlighted": false,
+                "strength": null
+              },
+              {
+                "text": "multicolored eyes",
+                "active": true,
+                "highlighted": false,
+                "strength": null
+              }
+            ]
+          },
+          {
+            "text": "SajunaShirt, white shirt, collarbone, oversized shirt, short sleeves",
+            "active": false,
+            "highlighted": false,
+            "strength": null,
+            "items": [
+              {
+                "text": "SajunaShirt",
+                "active": true,
+                "highlighted": false,
+                "strength": null
+              },
+              {
+                "text": "white shirt",
+                "active": true,
+                "highlighted": false,
+                "strength": null
+              },
+              {
+                "text": "collarbone",
+                "active": true,
+                "highlighted": false,
+                "strength": null
+              },
+              {
+                "text": "oversized shirt",
+                "active": true,
+                "highlighted": false,
+                "strength": null
+              },
+              {
+                "text": "short sleeves",
+                "active": true,
+                "highlighted": false,
+                "strength": null
+              }
+            ]
+          },
+          {
+            "text": "SajunaDress, white dress, puffy short sleeves, strawberry print, collarbone",
+            "active": false,
+            "highlighted": false,
+            "strength": null,
+            "items": [
+              {
+                "text": "SajunaDress",
+                "active": true,
+                "highlighted": false,
+                "strength": null
+              },
+              {
+                "text": "white dress",
+                "active": true,
+                "highlighted": false,
+                "strength": null
+              },
+              {
+                "text": "puffy short sleeves",
+                "active": true,
+                "highlighted": false,
+                "strength": null
+              },
+              {
+                "text": "strawberry print",
+                "active": true,
+                "highlighted": false,
+                "strength": null
+              },
+              {
+                "text": "collarbone",
+                "active": true,
+                "highlighted": false,
+                "strength": null
+              }
+            ]
+          }
+        ]
+      },
+      "orinalMessage": "long hair, two side up, crossed bangs, pink hair, multicolored eyes, hair flower, black rose,, SajunaSchool, serafuku, red sailor collar, yellow bow, sweater vest, black vest, short sleeves, pleated skirt, red skirt, black_thighhighs,,, long hair, crossed bangs, pink hair, multicolored eyes,, SajunaShirt, white shirt, collarbone, oversized shirt, short sleeves,, SajunaDress, white dress, puffy short sleeves, strawberry print, collarbone",
+      "trigger_words": [
+        "5",
+        2
+      ]
+    },
+    "class_type": "TriggerWord Toggle (LoraManager)",
+    "_meta": {
+      "title": "TriggerWord Toggle (LoraManager)"
+    }
+  },
+  "35": {
+    "inputs": {
+      "text": "normal",
+      "anything": [
+        "18",
+        4
+      ]
+    },
+    "class_type": "easy showAnything",
+    "_meta": {
+      "title": "展示任何"
+    }
+  },
+  "36": {
+    "inputs": {
+      "text": "euler_ancestral",
+      "anything": [
+        "18",
+        3
+      ]
+    },
+    "class_type": "easy showAnything",
+    "_meta": {
+      "title": "展示任何"
+    }
+  },
+  "37": {
+    "inputs": {
+      "width": [
+        "1",
+        0
+      ],
+      "height": [
+        "12",
+        0
+      ],
+      "batch_size": [
+        "29",
+        0
+      ]
+    },
+    "class_type": "EmptyLatentImage",
+    "_meta": {
+      "title": "空Latent图像"
+    }
+  },
+  "38": {
+    "inputs": {
+      "select": 1,
+      "sel_mode": false,
+      "input1": [
+        "37",
+        0
+      ]
+    },
+    "class_type": "ImpactSwitch",
+    "_meta": {
+      "title": "Switch (Any)"
+    }
+  },
+  "39": {
+    "inputs": {
+      "samples": [
+        "46",
+        0
+      ],
+      "vae": [
+        "40",
+        0
+      ]
+    },
+    "class_type": "VAEDecode",
+    "_meta": {
+      "title": "VAE解码"
+    }
+  },
+  "40": {
+    "inputs": {
+      "select": 1,
+      "sel_mode": false,
+      "input1": [
+        "30",
+        2
+      ]
+    },
+    "class_type": "ImpactSwitch",
+    "_meta": {
+      "title": "Switch (Any)"
+    }
+  },
+  "41": {
+    "inputs": {
+      "strength": 1,
+      "model": [
+        "5",
+        0
+      ]
+    },
+    "class_type": "DifferentialDiffusion",
+    "_meta": {
+      "title": "差异扩散DifferentialDiffusion"
+    }
+  },
+  "43": {
+    "inputs": {
+      "text": [
+        "47",
+        0
+      ],
+      "clip": [
+        "5",
+        1
+      ]
+    },
+    "class_type": "CLIPTextEncode",
+    "_meta": {
+      "title": "CLIP Text Encode (Positive)"
+    }
+  },
+  "44": {
+    "inputs": {
+      "text": [
+        "4",
+        0
+      ],
+      "clip": [
+        "5",
+        1
+      ]
+    },
+    "class_type": "CLIPTextEncode",
+    "_meta": {
+      "title": "CLIP Text Encode (Negative)"
+    }
+  },
+  "45": {
+    "inputs": {
+      "string_a": [
+        "34",
+        0
+      ],
+      "string_b": [
+        "3",
+        0
+      ],
+      "delimiter": ","
+    },
+    "class_type": "StringConcatenate",
+    "_meta": {
+      "title": "连接"
+    }
+  },
+  "46": {
+    "inputs": {
+      "seed": [
+        "32",
+        0
+      ],
+      "steps": [
+        "18",
+        1
+      ],
+      "cfg": [
+        "18",
+        2
+      ],
+      "sampler_name": [
+        "36",
+        0
+      ],
+      "scheduler": [
+        "35",
+        0
+      ],
+      "denoise": [
+        "18",
+        5
+      ],
+      "model": [
+        "161",
+        0
+      ],
+      "positive": [
+        "154",
+        0
+      ],
+      "negative": [
+        "44",
+        0
+      ],
+      "latent_image": [
+        "38",
+        0
+      ]
+    },
+    "class_type": "KSampler",
+    "_meta": {
+      "title": "K采样器"
+    }
+  },
+  "47": {
+    "inputs": {
+      "string": [
+        "45",
+        0
+      ],
+      "regex_pattern": "^,|,$",
+      "replace": "",
+      "case_insensitive": true,
+      "multiline": false,
+      "dotall": false,
+      "count": 0
+    },
+    "class_type": "RegexReplace",
+    "_meta": {
+      "title": "正则表达式替换"
+    }
+  },
+  "48": {
+    "inputs": {
+      "string_a": [
+        "47",
+        0
+      ],
+      "string_b": [
+        "5",
+        3
+      ],
+      "delimiter": " "
+    },
+    "class_type": "StringConcatenate",
+    "_meta": {
+      "title": "连接"
+    }
+  },
+  "49": {
+    "inputs": {
+      "id": 30,
+      "widget_name": "ckpt_name",
+      "return_all": false,
+      "node_title": "",
+      "allowed_float_decimals": 2
+    },
+    "class_type": "WidgetToString",
+    "_meta": {
+      "title": "Widget To String"
+    }
+  },
+  "55": {
+    "inputs": {
+      "stop_at_clip_layer": -2,
+      "clip": [
+        "30",
+        1
+      ]
+    },
+    "class_type": "CLIPSetLastLayer",
+    "_meta": {
+      "title": "设置CLIP最后一层"
+    }
+  },
+  "101": {
+    "inputs": {
+      "upscale_method": "lanczos",
+      "scale_by": 1.5,
+      "image": [
+        "163",
+        0
+      ]
+    },
+    "class_type": "ImageScaleBy",
+    "_meta": {
+      "title": "缩放图像（比例）"
+    }
+  },
+  "102": {
+    "inputs": {
+      "pixels": [
+        "101",
+        0
+      ],
+      "vae": [
+        "30",
+        2
+      ]
+    },
+    "class_type": "VAEEncode",
+    "_meta": {
+      "title": "VAE编码"
+    }
+  },
+  "103": {
+    "inputs": {
+      "seed": [
+        "32",
+        0
+      ],
+      "steps": 28,
+      "cfg": 5.5,
+      "sampler_name": "euler_ancestral",
+      "scheduler": "simple",
+      "denoise": 0.35,
+      "model": [
+        "162",
+        0
+      ],
+      "positive": [
+        "151",
+        0
+      ],
+      "negative": [
+        "44",
+        0
+      ],
+      "latent_image": [
+        "102",
+        0
+      ]
+    },
+    "class_type": "KSampler",
+    "_meta": {
+      "title": "K采样器"
+    }
+  },
+  "104": {
+    "inputs": {
+      "samples": [
+        "103",
+        0
+      ],
+      "vae": [
+        "30",
+        2
+      ]
+    },
+    "class_type": "VAEDecode",
+    "_meta": {
+      "title": "VAE解码"
+    }
+  },
+  "105": {
+    "inputs": {
+      "images": [
+        "104",
+        0
+      ]
+    },
+    "class_type": "PreviewImage",
+    "_meta": {
+      "title": "二次重绘"
+    }
+  },
+  "106": {
+    "inputs": {
+      "filename_prefix": "2026-11-11/image",
+      "format": "png",
+      "format.bit_depth": "8-bit",
+      "format.input_color_space": "sRGB",
+      "images": [
+        "105",
+        0
+      ]
+    },
+    "class_type": "SaveImageAdvanced",
+    "_meta": {
+      "title": "保存图像（高级）"
+    }
+  },
+  "107": {
+    "inputs": {
+      "upscale_by": [
+        "110",
+        0
+      ],
+      "seed": 532458340464765,
+      "steps": 18,
+      "cfg": 5.5,
+      "sampler_name": "dpmpp_2m_sde",
+      "scheduler": "karras",
+      "denoise": 0.16,
+      "mode_type": "Linear",
+      "tile_width": 1024,
+      "tile_height": 1024,
+      "mask_blur": 8,
+      "tile_padding": 64,
+      "seam_fix_mode": "Half Tile + Intersections",
+      "seam_fix_denoise": 1,
+      "seam_fix_width": 64,
+      "seam_fix_mask_blur": 16,
+      "seam_fix_padding": 32,
+      "force_uniform_tiles": true,
+      "tiled_decode": false,
+      "image": [
+        "106",
+        0
+      ],
+      "model": [
+        "5",
+        0
+      ],
+      "positive": [
+        "109",
+        0
+      ],
+      "negative": [
+        "109",
+        1
+      ],
+      "vae": [
+        "30",
+        2
+      ],
+      "upscale_model": [
+        "112",
+        0
+      ]
+    },
+    "class_type": "UltimateSDUpscale",
+    "_meta": {
+      "title": "Ultimate SD Upscale"
+    }
+  },
+  "108": {
+    "inputs": {
+      "low_threshold": 0.3500000000000001,
+      "high_threshold": 0.7500000000000001,
+      "image": [
+        "106",
+        0
+      ]
+    },
+    "class_type": "Canny",
+    "_meta": {
+      "title": "Canny边缘检测"
+    }
+  },
+  "109": {
+    "inputs": {
+      "strength": 0.64,
+      "start_percent": 0,
+      "end_percent": 0.42,
+      "positive": [
+        "43",
+        0
+      ],
+      "negative": [
+        "44",
+        0
+      ],
+      "control_net": [
+        "111",
+        0
+      ],
+      "image": [
+        "108",
+        0
+      ],
+      "vae": [
+        "30",
+        2
+      ]
+    },
+    "class_type": "ControlNetApplyAdvanced",
+    "_meta": {
+      "title": "应用ControlNet（旧版高级）"
+    }
+  },
+  "110": {
+    "inputs": {
+      "value": 2
+    },
+    "class_type": "easy float",
+    "_meta": {
+      "title": "Upscale by"
+    }
+  },
+  "111": {
+    "inputs": {
+      "control_net_name": "diffusion_pytorch_model_promax.safetensors"
+    },
+    "class_type": "ControlNetLoader",
+    "_meta": {
+      "title": "加载ControlNet模型"
+    }
+  },
+  "112": {
+    "inputs": {
+      "model_name": "4x_foolhardy_Remacri.pth"
+    },
+    "class_type": "UpscaleModelLoader",
+    "_meta": {
+      "title": "加载放大模型"
+    }
+  },
+  "121": {
+    "inputs": {
+      "filename_prefix": "2026-11-11/image",
+      "images": [
+        "107",
+        0
+      ]
+    },
+    "class_type": "SaveImage",
+    "_meta": {
+      "title": "保存图像"
+    }
+  },
+  "134": {
+    "inputs": {
+      "upscale_model": [
+        "135",
+        0
+      ]
+    },
+    "class_type": "ImageUpscaleWithModel",
+    "_meta": {
+      "title": "使用模型放大图像"
+    }
+  },
+  "135": {
+    "inputs": {
+      "model_name": "4x_foolhardy_Remacri.pth"
+    },
+    "class_type": "UpscaleModelLoader",
+    "_meta": {
+      "title": "加载放大模型"
+    }
+  },
+  "136": {
+    "inputs": {
+      "filename_prefix": "2026-11-11/image",
+      "images": [
+        "39",
+        0
+      ]
+    },
+    "class_type": "SaveImage",
+    "_meta": {
+      "title": "保存图像"
+    }
+  },
+  "138": {
+    "inputs": {
+      "weight": 0.5,
+      "weight_type": "style transfer",
+      "combine_embeds": "concat",
+      "start_at": 0,
+      "end_at": 1,
+      "embeds_scaling": "V only"
+    },
+    "class_type": "IPAdapterAdvanced",
+    "_meta": {
+      "title": "IPAdapter Advanced"
+    }
+  },
+  "139": {
+    "inputs": {
+      "ipadapter_file": "noobIPAMARK1_mark1.safetensors"
+    },
+    "class_type": "IPAdapterModelLoader",
+    "_meta": {
+      "title": "IPAdapter Model Loader"
+    }
+  },
+  "140": {
+    "inputs": {
+      "clip_name": "CLIP-ViT-bigG-14-laion2B-39B-b160k.safetensors"
+    },
+    "class_type": "CLIPVisionLoader",
+    "_meta": {
+      "title": "加载CLIP视觉"
+    }
+  },
+  "141": {
+    "inputs": {
+      "interpolation": "LANCZOS",
+      "crop_position": "pad",
+      "sharpening": 0,
+      "image": [
+        "142",
+        0
+      ]
+    },
+    "class_type": "PrepImageForClipVision",
+    "_meta": {
+      "title": "Prep Image"
+    }
+  },
+  "142": {
+    "inputs": {
+      "image": "image_00141_.png"
+    },
+    "class_type": "LoadImage",
+    "_meta": {
+      "title": "风格参考图 (换成你满意的单人图)"
+    }
+  },
+  "151": {
+    "inputs": {
+      "text": [
+        "47",
+        0
+      ],
+      "clip": [
+        "5",
+        1
+      ]
+    },
+    "class_type": "CLIPTextEncode",
+    "_meta": {
+      "title": "二次采样 Positive (组开=正则版 / 组关=原版)"
+    }
+  },
+  "152": {
+    "inputs": {
+      "start": 0,
+      "end": 1,
+      "conditioning": [
+        "43",
+        0
+      ]
+    },
+    "class_type": "ConditioningSetTimestepRange",
+    "_meta": {
+      "title": "带特征词 前段 (定体型)"
+    }
+  },
+  "153": {
+    "inputs": {
+      "start": 1,
+      "end": 1,
+      "conditioning": [
+        "151",
+        0
+      ]
+    },
+    "class_type": "ConditioningSetTimestepRange",
+    "_meta": {
+      "title": "干净提示词 后段 (画画风)"
+    }
+  },
+  "154": {
+    "inputs": {
+      "conditioning_1": [
+        "152",
+        0
+      ],
+      "conditioning_2": [
+        "153",
+        0
+      ]
+    },
+    "class_type": "ConditioningCombine",
+    "_meta": {
+      "title": "条件合并"
+    }
+  },
+  "161": {
+    "inputs": {
+      "weight": 0.35,
+      "style_boost": 2,
+      "combine_embeds": "concat",
+      "start_at": 0.3,
+      "end_at": 1,
+      "embeds_scaling": "V only",
+      "model": [
+        "5",
+        0
+      ],
+      "ipadapter": [
+        "139",
+        0
+      ],
+      "image": [
+        "141",
+        0
+      ],
+      "clip_vision": [
+        "140",
+        0
+      ]
+    },
+    "class_type": "IPAdapterPreciseStyleTransferV2",
+    "_meta": {
+      "title": "IPAdapter 一次采样"
+    }
+  },
+  "162": {
+    "inputs": {
+      "weight": 0.7,
+      "style_boost": 1,
+      "combine_embeds": "concat",
+      "start_at": 0,
+      "end_at": 1,
+      "embeds_scaling": "V only",
+      "model": [
+        "5",
+        0
+      ],
+      "ipadapter": [
+        "139",
+        0
+      ],
+      "image": [
+        "141",
+        0
+      ],
+      "clip_vision": [
+        "140",
+        0
+      ]
+    },
+    "class_type": "IPAdapterPreciseStyleTransferV2",
+    "_meta": {
+      "title": "IPAdapter 二次采样"
+    }
+  },
+  "163": {
+    "inputs": {
+      "image": "image_00021_.png"
+    },
+    "class_type": "LoadImage",
+    "_meta": {
+      "title": "加载图像"
+    }
+  }
+}

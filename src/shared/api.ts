@@ -2,7 +2,7 @@
 
 import type { ReplicaData, ReplicaImage, ReplicaPlanCore, ReplicaRecord, ReplicaRow, ReplicaUnitBrief } from './replica'
 import type { UpdateCheck } from './update'
-import type { UpscalePlan, UpscaleSelection } from './upscale'
+import type { UpscaleFolderScan, UpscalePlan, UpscaleSelection, UpscaleSkipped } from './upscale'
 import type { DictionaryInfo, MiningImage, MiningParams, MiningResult, MiningSaveItem, MiningSaveOutcome, RawMeta, ScanResult } from './mining'
 import type { SavedSourceRule } from './prompt-source'
 import type { ApiWorkflow, ExecutionDetail, ExecutionInspection, LoraResource, Character, Library, Message, Outfit, PlanResult, PlanUnit, Run, RunnerEvent, RunnerStatus, RunUnit, Settings, Story, Task, TaskData, Template, TemplateKind, Preset, PresetData, PresetKind, Workflow, InputChange, ObjectInfo } from './types'
@@ -133,7 +133,13 @@ export interface Api {
   /** 批量放大：入队前预览（每张图能否放大、恢复出的生成条件与问题） */
   'upscale.plan'(items: UpscaleSelection[], workflowId: number | null): UpscalePlan
   /** 加入放大队列（一个队列项，每张图一个单元）；acceptConfirm 为 true 时同时加入需要确认的图片 */
-  'upscale.enqueue'(items: UpscaleSelection[], workflowId: number | null, acceptConfirm: boolean): { runId: number | null; count: number; errors: string[]; skipped: { unit_id: number; label: string; reason: string }[] }
+  'upscale.enqueue'(items: UpscaleSelection[], workflowId: number | null, acceptConfirm: boolean): { runId: number | null; count: number; errors: string[]; skipped: UpscaleSkipped[] }
+  /** 选择放大来源：图片文件（可多选）；取消时为 null */
+  'upscale.pickFiles'(): string[] | null
+  /** 选择放大来源：文件夹；取消时为 null */
+  'upscale.pickFolder'(): string | null
+  /** 扫描文件夹中的图片（按路径排序，跳过「放大」子文件夹） */
+  'upscale.scanFolder'(dir: string, recursive: boolean): UpscaleFolderScan
   /** 放大任务（全部状态，新的在前） */
   'upscale.list'(limit: number): RunUnit[]
   /** 放大任务的原图或放大结果缩略图 */
@@ -192,7 +198,7 @@ export const API_METHODS: ApiMethod[] = [
   'queue.enqueue', 'queue.list', 'queue.units', 'queue.reorder', 'queue.remove', 'queue.delete', 'queue.retry', 'queue.retrySave', 'queue.pendingSummary',
   'runner.status', 'runner.precheck', 'runner.start', 'runner.pause', 'runner.stop', 'runner.interrupt', 'runner.logs',
   'history.list', 'history.image', 'history.openImage', 'history.showInFolder', 'history.execution', 'history.attempt', 'history.exportAttempt',
-  'upscale.plan', 'upscale.enqueue', 'upscale.list', 'upscale.image', 'upscale.open', 'upscale.retry',
+  'upscale.plan', 'upscale.enqueue', 'upscale.pickFiles', 'upscale.pickFolder', 'upscale.scanFolder', 'upscale.list', 'upscale.image', 'upscale.open', 'upscale.retry',
   'comfy.test', 'app.info', 'app.openDataDir', 'app.backupNow', 'app.chooseOutputDir', 'app.checkUpdate', 'app.openReleasePage',
   'mining.addFiles', 'mining.addFolder', 'mining.cancelScan', 'mining.image', 'mining.showInFolder', 'mining.meta', 'mining.copyMeta', 'mining.analyze', 'mining.rules', 'mining.saveRules', 'mining.dictInfo', 'mining.dictImport', 'mining.dictRemove', 'mining.save',
 ]

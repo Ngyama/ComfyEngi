@@ -25,9 +25,11 @@ import {
   UPSCALE_IMAGE,
   UPSCALE_LORA,
   UPSCALE_OUTPUT,
+  UPSCALE_SEED,
   validateMapping,
 } from './mapping'
 import { controlInputs, controlProblems, controlsOf, mergeControlInputs, withTriggerCuts } from './node-controls'
+import { parseJsonLoose } from './prompt-source'
 import type { ApiNode, ApiWorkflow, InputValue, MappingEntry, Message, RecoveredGeneration, RecoveredLora, UpscaleIssue, Workflow, WorkflowControls } from './types'
 import { encodersOf, findPromptInjectors, findSamplers, TEXT_FIELDS } from './workflow-analysis'
 
@@ -36,17 +38,26 @@ const unwrap = (v: unknown) => (v && typeof v === 'object' && !Array.isArray(v) 
 
 // ---------------------------------------------------------------- 入队预览（主进程计算，界面显示）
 
-export interface UpscaleSelection {
-  unit_id: number
-  /** 原图在 outputs 中的序号；没有时为预览使用的最终输出 */
-  output?: number
-}
+/** 放大来源：运行记录中的一张图，或本机的一个图片文件（二选一） */
+export type UpscaleSelection =
+  | {
+      unit_id: number
+      /** 原图在 outputs 中的序号；没有时为预览使用的最终输出 */
+      output?: number
+    }
+  | {
+      /** 图片文件的绝对路径 */
+      file: string
+    }
+export const isFileSelection = (s: UpscaleSelection): s is { file: string } => 'file' in s
 
 /** 预览中的一张图 */
 export interface UpscaleCandidate {
   key: string
-  unit_id: number
-  output: number
+  kind: 'run' | 'file'
+  /** 运行记录来源的单元与输出序号；file 来源为 null */
+  unit_id: number | null
+  output: number | null
   run_name: string
   label: string
   /** 原图文件名与本机路径 */
@@ -58,7 +69,25 @@ export interface UpscaleCandidate {
   negative: string | null
   checkpoint: string | null
   loras: RecoveredLora[] | null
-  snapshot: 'attempt' | 'rebuilt' | null
+  snapshot: 'attempt' | 'rebuilt' | 'file' | null
+}
+
+/** 加入放大队列时没有加入的图片 */
+export interface UpscaleSkipped {
+  key: string
+  unit_id: number | null
+  file: string | null
+  label: string
+  reason: string
+}
+
+/** 扫描文件夹的结果 */
+export interface UpscaleFolderScan {
+  files: string[]
+  /** 跳过的「放大」子文件夹（放大结果） */
+  skipped_dirs: string[]
+  /** 图片超过上限，只返回了前面的部分 */
+  truncated: boolean
 }
 
 export interface UpscalePlan {
@@ -99,17 +128,228 @@ interface EvalContext {
   original?: ApiWorkflow | null
 }
 
-/** Python re.sub 的常见用法转为 JS；无法确认等价时返回 null */
-function pyRegexReplace(s: string, pattern: string, repl: string, flags: { i: boolean; m: boolean; s: boolean }, count: number): string | null {
-  if (/\(\?P|\(\?[aiLmsux]+\)|\\[AZ]/.test(pattern) || /[\\$]/.test(repl)) return null
-  // Python 的 $（非多行模式）还匹配结尾换行符之前的位置，JS 不会
-  if (!flags.m && /(^|[^\\])\$/.test(pattern) && s.endsWith('\n')) return null
+// ---------------- TriggerWord Toggle (LoraManager)
+// 与插件 py/nodes/trigger_word_toggle.py（ComfyUI-Lora-Manager，2026-04-21 的 79dd9a1）的 process_trigger_words 逐分支对应：
+//   覆盖判断 → toggle_trigger_words 为空时输出 orinalMessage → 列表：组模式（有子项 / 允许调整权重 / 不允许）或非组模式
+//   → 不是列表时按 orinalMessage 拆分（fallback）。插件处理列表出错时记录日志并输出 orinalMessage，这里同样处理。
+// 无法确认与 Python 结果相同的情况（例如文本含 \r，Python 与 JS 的正则 . 不同）返回 error，不猜测。
+
+/** JS 正则中 . / ^ / $ 视为换行、而 Python 不视为换行的字符 */
+const JS_LINE_BREAK = new RegExp('[\\r\\u2028\\u2029]')
+/** Python 的 str.isspace 字符（strip() 去掉的字符；与 JS 的 \s 不完全相同：JS 含 U+FEFF，不含 \x1c-\x1f 与 \x85） */
+const PY_SPACE = '\\t\\n\\v\\f\\r\\x1c-\\x20\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000'
+const PY_STRIP = new RegExp(`^[${PY_SPACE}]+|[${PY_SPACE}]+$`, 'g')
+const pyStrip = (s: string) => s.replace(PY_STRIP, '')
+/** Python 的真值判断（bool(x)） */
+const pyTruthy = (v: unknown) => !(v === false || v === null || v === undefined || v === 0 || v === '' || (Array.isArray(v) && !v.length) || (!!v && typeof v === 'object' && !Array.isArray(v) && !Object.keys(v).length))
+/** Python 的 f"{x:.2f}"：恰好在两位小数中间时按银行家舍入（JS 的 toFixed 向上），其他情况两者相同 */
+function pyFixed2(x: number): string {
+  const s = x * 100
+  const f = Math.floor(s)
+  // x * 8 为整数时 x * 100 精确，才可能恰好在中间
+  if (Number.isInteger(x * 8) && s - f === 0.5) return ((f % 2 === 0 ? f : f + 1) / 100).toFixed(2)
+  return x.toFixed(2)
+}
+/** Python float()：只接受十进制数字与一个小数点（插件的正则只会给出 [\d.]+） */
+const pyFloat = (s: string) => (/^(\d+\.?\d*|\.\d+)$/.test(s) ? Number(s) : null)
+
+/** 插件处理时会抛出异常的情况（AttributeError / ValueError 等）：插件输出 orinalMessage */
+class PyError extends Error {}
+/** 无法确认与插件结果相同 */
+class Unknowable extends Error {}
+
+interface TriggerItem {
+  text: string
+  active: boolean
+  strength: unknown
+}
+
+/** _parse_trigger_item：text 去空白；text 为 (词:权重) 时拆出词与权重（strength 为 null 时才用拆出的权重）；不允许调整权重时 strength 为 null */
+function parseTriggerItem(item: unknown, allow: boolean): TriggerItem {
+  if (!item || typeof item !== 'object' || Array.isArray(item)) throw new PyError('item.get')
+  const o = item as Record<string, unknown>
+  const raw = pyTruthy(o.text) ? o.text : ''
+  if (typeof raw !== 'string') throw new PyError('strip')
+  let text = pyStrip(raw)
+  let strength = o.strength ?? null
+  // Python 的 . 不匹配 \n，JS 还不匹配 \r、U+2028、U+2029；Python 的 \d 还匹配其他文字的数字
+  if (JS_LINE_BREAK.test(text) || /(?![0-9])\p{Nd}/u.test(text)) throw new Unknowable(`触发词「${text.slice(0, 30)}」含有特殊字符`)
+  const m = /^\((.+):([\d.]+)\)$/.exec(text)
+  if (m) {
+    text = pyStrip(m[1])
+    if (strength === null) strength = pyFloat(m[2])
+  }
+  return { text, active: pyTruthy(o.active ?? false), strength: allow ? strength : null }
+}
+
+/** _format_word_output：允许调整权重且有权重时输出 (词:权重两位小数) */
+function formatTriggerWord(base: string, strength: unknown, allow: boolean): string {
+  if (!allow || strength === null) return base
+  if (typeof strength === 'boolean') return `(${base}:${pyFixed2(Number(strength))})`
+  if (typeof strength !== 'number' || !Number.isFinite(strength)) throw new PyError('format')
+  return `(${base}:${pyFixed2(strength)})`
+}
+
+/** _normalize_trigger_words：按 ,{2,} 分组再按 , 分词、去空白、去空串后的集合 */
+function normalizeTriggerWords(s: unknown): Set<string> {
+  if (typeof s !== 'string' || !s) return new Set()
+  return new Set(s.split(/,{2,}/).flatMap((g) => g.split(',')).map(pyStrip).filter(Boolean))
+}
+
+/**
+ * TriggerWord Toggle (LoraManager) 的输出。
+ * inputs：节点的输入（快照中的值）；override：trigger_words 输入的值（连接时为它在运行时收到的文本，未知时由调用方处理）。
+ */
+export function triggerToggleOutput(inputs: Record<string, unknown>, override: unknown): { text: string } | { error: string } {
+  const om = unwrap(inputs.orinalMessage)
+  const original = typeof om === 'string' ? om : ''
+  const ov = unwrap(override)
+  if (pyTruthy(ov) && typeof ov === 'string') {
+    const a = normalizeTriggerWords(ov)
+    const b = normalizeTriggerWords(original)
+    if (a.size !== b.size || [...a].some((w) => !b.has(w))) return { text: ov }
+  }
+  let data = 'toggle_trigger_words' in inputs ? unwrap(inputs.toggle_trigger_words) : null
+  if (!pyTruthy(data)) return { text: original }
+  const groupMode = pyTruthy(inputs.group_mode)
+  const allow = pyTruthy(inputs.allow_strength_adjustment ?? false)
+  try {
+    if (typeof data === 'string') {
+      try {
+        data = parseJsonLoose(data)
+      } catch {
+        throw new PyError('json.loads')
+      }
+    }
+    if (!Array.isArray(data)) {
+      // 不是列表：按 orinalMessage 拆分
+      const parts = groupMode ? original.split(/,{2,}/).map(pyStrip).filter(Boolean) : original.split(',').map(pyStrip).filter(Boolean)
+      return { text: parts.join(', ') }
+    }
+    const list: unknown[] = data
+    const hasItems = (x: unknown) => !!x && typeof x === 'object' && !Array.isArray(x) && Array.isArray((x as Record<string, unknown>).items)
+    let out: string[]
+    if (groupMode && list.some(hasItems)) {
+      // _process_group_items：启用的组输出启用的子项（子项不带权重，按 ", " 拼接），没有启用的子项时跳过该组；组的权重套在外层
+      out = []
+      for (const item of list) {
+        const g = parseTriggerItem(item, allow)
+        if (!g.text || !g.active) continue
+        let text = g.text
+        if (hasItems(item)) {
+          const active = ((item as Record<string, unknown>).items as unknown[]).map((c) => parseTriggerItem(c, false)).filter((c) => c.text && c.active)
+          if (!active.length) continue
+          text = active.map((c) => c.text).join(', ')
+        }
+        out.push(formatTriggerWord(text, g.strength, allow))
+      }
+    } else if (groupMode && !allow) {
+      // 组模式、不允许调整权重：组的 text 原样输出（不拆分 (词:权重)）
+      out = list
+        .map((item) => {
+          if (!item || typeof item !== 'object' || Array.isArray(item)) throw new PyError('item.get')
+          const o = item as Record<string, unknown>
+          const raw = pyTruthy(o.text) ? o.text : ''
+          if (typeof raw !== 'string') throw new PyError('strip')
+          return { text: pyStrip(raw), active: pyTruthy(o.active ?? false) }
+        })
+        .filter((x) => x.text && x.active)
+        .map((x) => x.text)
+    } else {
+      // 组模式且允许调整权重，或非组模式：逐项解析权重后输出
+      out = list
+        .map((item) => parseTriggerItem(item, allow))
+        .filter((x) => x.text && x.active)
+        .map((x) => formatTriggerWord(x.text, x.strength, allow))
+    }
+    return { text: out.join(', ') }
+  } catch (e) {
+    if (e instanceof PyError) return { text: original }
+    if (e instanceof Unknowable) return { error: e.message }
+    throw e
+  }
+}
+
+// ---------------- RegexReplace（ComfyUI 内置节点：re.sub(regex_pattern, replace, string, count=count, flags=…)）
+
+/** 含 UTF-16 代理对的字符：JS（不带 u 标志）的 . 与字符类按半个字符匹配，Python 按一个字符 */
+const SURROGATE = new RegExp('[\\uD800-\\uDFFF]')
+/** Python 的 \w \d \s \b 按 Unicode 判断，JS 只按 ASCII（\s 也不含 \x1c-\x1f） */
+const UNICODE_CLASS_TEXT = /[^\x00-\x1b\x20-\x7f]/
+/** 不区分大小写时 Python（Unicode 大小写折叠）与 JS（不带 u 标志，按 toUpperCase）结果可能不同的字符 */
+const CASE_SPECIAL = new RegExp('[\\u00df\\u017f\\u0130\\u0131\\u1e9e\\u212a\\u212b]')
+
+/**
+ * Python 正则 → JS 正则。只转换能确认等价的写法：
+ * - 字符类外、未转义的 $：非多行模式下 Python 的 $ 匹配结尾或结尾换行符之前的位置，转为 (?=\n?$)；多行模式两者相同；
+ * - ^、. 以及其他转义与量词按原样（调用方另外排除了换行符、Unicode 字符类等差异）。
+ * Python 特有或含义不同的写法返回 null：命名组 (?P…) / (?<…>)、行内标志、注释、条件、原子组、{,n}、\A \Z 等转义、反向引用、
+ * 字符类内的 $、转义的 \$、$ 后跟量词、以 ] 开头的字符类。
+ */
+export function pyPatternToJs(p: string, multiline: boolean): string | null {
+  if (/\(\?(P|<[A-Za-z_]|[aiLmsux-]+[):]|#|\(|>)/.test(p) || /\{,/.test(p)) return null
+  let out = ''
+  let inClass = false
+  for (let k = 0; k < p.length; k++) {
+    const c = p[k]
+    if (c === '\\') {
+      const d = p[k + 1]
+      if (d === undefined || d === '$' || /[0-9]/.test(d)) return null
+      if (/[A-Za-z]/.test(d)) {
+        if (d === 'x') {
+          if (!/^[0-9a-fA-F]{2}$/.test(p.slice(k + 2, k + 4))) return null
+        } else if (d === 'u') {
+          if (!/^[0-9a-fA-F]{4}$/.test(p.slice(k + 2, k + 6))) return null
+        } else if (!'bBdDfnrsStvwW'.includes(d) || (inClass && d === 'B')) return null
+      }
+      out += c + d
+      k++
+      continue
+    }
+    if (inClass) {
+      if (c === '$') return null
+      if (c === ']') inClass = false
+      out += c
+      continue
+    }
+    if (c === '[') {
+      inClass = true
+      out += c
+      if (p[k + 1] === '^') {
+        out += '^'
+        k++
+      }
+      if (p[k + 1] === ']') return null
+      continue
+    }
+    if (c === '$') {
+      if (/[*+?{]/.test(p[k + 1] ?? '')) return null
+      out += multiline ? '$' : '(?=\\n?$)'
+      continue
+    }
+    out += c
+  }
+  return inClass ? null : out
+}
+
+/** Python re.sub 转为 JS；无法确认结果相同时返回 null（不猜测） */
+export function pyRegexReplace(s: string, pattern: string, repl: string, flags: { i: boolean; m: boolean; s: boolean }, count: number): string | null {
+  // 替换文本：Python 处理其中的反斜杠转义（\n、\1、\g<…>）；$ 在两者中都是字面量（这里用函数返回替换文本，JS 不解释 $）
+  if (repl.includes('\\')) return null
+  // JS 的 . ^ $ 还把 \r、U+2028、U+2029 当作换行，Python 只认 \n
+  if (JS_LINE_BREAK.test(s) && /[.^$]/.test(pattern)) return null
+  if (UNICODE_CLASS_TEXT.test(s) && /\\[wWbBdDsS]/.test(pattern)) return null
+  if (SURROGATE.test(s) && /[.[]|\\[WDS]/.test(pattern)) return null
+  if (flags.i && (/[^\x00-\x7f]/.test(pattern) || CASE_SPECIAL.test(s))) return null
+  const js = pyPatternToJs(pattern, flags.m)
+  if (js === null) return null
   let re: RegExp
   try {
-    re = new RegExp(pattern, `g${flags.i ? 'i' : ''}${flags.m ? 'm' : ''}${flags.s ? 's' : ''}`)
+    re = new RegExp(js, `g${flags.i ? 'i' : ''}${flags.m ? 'm' : ''}${flags.s ? 's' : ''}`)
   } catch {
     return null
   }
+  // count=0 替换全部，否则只替换前 count 处（与 re.sub 相同）
   let n = 0
   return s.replace(re, (m) => (count > 0 && n >= count ? m : (n++, repl)))
 }
@@ -134,8 +374,11 @@ export function evalText(api: ApiWorkflow, v: unknown, ctx: EvalContext = {}, se
   }
   if (ct === 'RegexReplace') {
     const s = sub(i.string)
-    const lit = [i.regex_pattern, i.replace].every((x) => typeof x === 'string')
-    const r = lit ? pyRegexReplace(s.text, String(i.regex_pattern), String(i.replace), { i: !!i.case_insensitive, m: !!i.multiline, s: !!i.dotall }, Number(i.count) || 0) : null
+    // 可选输入的默认值与节点相同：case_insensitive=True、multiline=False、dotall=False、count=0
+    const opt = ['case_insensitive', 'multiline', 'dotall', 'count']
+    const lit = [i.regex_pattern, i.replace].every((x) => typeof x === 'string') && !opt.some((k) => isLink(i[k])) && (i.count == null || Number.isInteger(i.count))
+    const flags = { i: pyTruthy(i.case_insensitive ?? true), m: pyTruthy(i.multiline ?? false), s: pyTruthy(i.dotall ?? false) }
+    const r = lit ? pyRegexReplace(s.text, String(i.regex_pattern), String(i.replace), flags, Number(i.count ?? 0)) : null
     if (r === null) return { ...merge([s], s.text, [nid]), exact: false, runtime: [...s.runtime, `${label(api, nid)} 的正则替换无法在 ComfyEngi 中按相同规则计算`] }
     return merge([s], r, [nid])
   }
@@ -148,28 +391,26 @@ export function evalText(api: ApiWorkflow, v: unknown, ctx: EvalContext = {}, se
   }
   const toggle = toggleStructure(n)
   if (toggle) {
-    // 与 ComfyUI-Lora-Manager 的 trigger_word_toggle.py 相同的分支（见 mapping.ts 的说明）
-    if (unwrap(i.allow_strength_adjustment) === true) return fail(`${label(api, nid)} 启用了触发词权重调整，输出在运行时决定`, [nid])
-    const original = typeof i.orinalMessage === 'string' ? i.orinalMessage : ''
-    const words = (s: string) => new Set(s.split(/,+/).map((x) => x.trim()).filter(Boolean))
-    const same = (a: string, b: string) => {
-      const x = words(a)
-      const y = words(b)
-      return x.size === y.size && [...x].every((w) => y.has(w))
-    }
+    // 与 ComfyUI-Lora-Manager 的 trigger_word_toggle.py 相同的分支（见 triggerToggleOutput）
+    const linked = ['group_mode', 'allow_strength_adjustment', 'toggle_trigger_words', 'orinalMessage'].filter((k) => isLink(i[k]))
+    if (linked.length) return fail(`${label(api, nid)} 的 ${linked.join('、')} 是连接，不是快照中的值，输出在运行时决定`, [nid])
     const inferred: string[] = []
-    let raw = ''
+    if ('allow_strength_adjustment' in i && typeof i.allow_strength_adjustment !== 'boolean')
+      inferred.push(`${label(api, nid)} 的 allow_strength_adjustment 不是布尔值（${JSON.stringify(i.allow_strength_adjustment).slice(0, 40)}），按 Python 的真值规则视为开启`)
+    let override: unknown = i.trigger_words
     if (isLink(i.trigger_words)) {
+      // trigger_words 在运行时由 LoRA Loader 输出（它加载的 LoRA 的触发词）。插件的网页界面在 Loader 变化时把同样的触发词写入 orinalMessage，
+      // 所以 Loader 加载的 LoRA 与工作流保存时相同时，两者的词集合相同，不会触发覆盖
       const loader = String(i.trigger_words[0])
       const orig = ctx.original?.[loader]
       if (!orig || !api[loader] || activeLoraNames(api[loader]).join('\n') !== activeLoraNames(orig).join('\n'))
         return fail(`${label(api, nid)} 输出 LoRA 触发词（来自 ${label(api, loader)}，加载的 LoRA 与工作流保存时不同，插件会绕过开关输出全部触发词），内容在运行时由插件读取`, [nid])
-      inferred.push(`${label(api, nid)} 的输出按工作流保存时的触发词与开关状态推断（假定 ${label(api, loader)} 输出的触发词与保存时相同）`)
-      raw = original
-    } else if (typeof i.trigger_words === 'string') raw = i.trigger_words
-    const list = (unwrap(i.toggle_trigger_words) as { text: string; active: boolean }[]) ?? []
-    const text = raw && !same(raw, original) ? raw : list.length ? list.filter((g) => g.active && g.text.trim()).map((g) => g.text.trim()).join(', ') : original
-    return { text, exact: !inferred.length, runtime: [], inferred, nodes: [nid] }
+      inferred.push(`${label(api, nid)} 的输出按节点中记录的触发词（orinalMessage）与开关状态推断（假定 ${label(api, loader)} 运行时输出的触发词与记录的相同）`)
+      override = null
+    }
+    const r = triggerToggleOutput(i, override)
+    if ('error' in r) return fail(`${label(api, nid)} 的输出无法确认与插件的计算结果相同：${r.error}`, [nid])
+    return { text: r.text, exact: !inferred.length, runtime: [], inferred, nodes: [nid] }
   }
   if (isLink(i.model) || isLink(i.clip)) return fail(`${label(api, nid)} 的文本输出（LoRA 触发词 / 已加载列表）在运行时产生`, [nid])
   if (/trigger/i.test(ct)) return fail(`${label(api, nid)} 是结构未验证的触发词节点，输出在运行时产生`, [nid])
@@ -271,7 +512,7 @@ export function recoverGeneration(graph: ApiWorkflow, opts: { original?: ApiWork
   const ctx: EvalContext = { original: opts.original }
   const issues: UpscaleIssue[] = []
   const samplers = findSamplers(graph)
-  const empty = { positive: null, negative: null, positive_exact: false, negative_exact: false, checkpoint: null, loras: null, issues, raw: new Map() }
+  const empty = { positive: null, negative: null, positive_exact: false, negative_exact: false, checkpoint: null, loras: null, seed: null, seed_note: '原图的工作流中找不到采样器', issues, raw: new Map() }
   if (!samplers.length) {
     issues.push({ level: 'block', text: '原图的工作流中找不到采样器，无法确定 Prompt、Checkpoint 与 LoRA' })
     return empty
@@ -320,9 +561,54 @@ export function recoverGeneration(graph: ApiWorkflow, opts: { original?: ApiWork
     negative_exact: !!neg?.r.exact,
     checkpoint: chain.checkpoint,
     loras: chain.loras,
+    ...originalSeed(graph, samplers),
     issues,
     raw: chain.raw,
   }
+}
+
+const isSeed = (v: unknown): v is number => typeof v === 'number' && Number.isSafeInteger(v) && v >= 0
+/** 只输出自己的一个整数值的节点（种子节点、整数常量） */
+const SEED_SOURCE_CLASSES = new Set(['SeedNode', 'easy int', 'easy seed', 'PrimitiveInt'])
+
+/**
+ * 原图第一个采样器（上游没有其他采样器的那个）的 Seed。只接受字面值，或连接到只输出一个整数的节点（SeedNode、easy int、PrimitiveInt 等，
+ * 节点没有连接输入、只有一个数字输入）；其他情况（运算节点、随机节点、超出 JSON 能精确表示的范围）返回 null 与原因，不猜测。
+ */
+function originalSeed(graph: ApiWorkflow, samplers: string[]): { seed: number | null; seed_note: string } {
+  const ups = new Map(samplers.map((s) => [s, upstreamOf(graph, s)]))
+  const first = samplers.find((s) => !samplers.some((o) => o !== s && ups.get(s)!.has(o))) ?? samplers[0]
+  const inputs = graph[first].inputs
+  const key = 'seed' in inputs ? 'seed' : 'noise_seed' in inputs ? 'noise_seed' : null
+  const at = `原图第一个采样器 ${label(graph, first)}`
+  if (!key) return { seed: null, seed_note: `${at} 没有 seed / noise_seed 输入` }
+  const v = inputs[key]
+  if (isSeed(v)) return { seed: v, seed_note: `${at} 的 ${key}` }
+  if (!isLink(v)) return { seed: null, seed_note: `${at} 的 ${key} 不是可以精确确定的非负整数（${JSON.stringify(v)}）` }
+  const nid = String(v[0])
+  const n = graph[nid]
+  if (!n) return { seed: null, seed_note: `${at} 的 ${key} 连接的节点 #${nid} 不存在` }
+  const vals = Object.values(n.inputs ?? {})
+  const nums = vals.filter((x): x is number => typeof x === 'number')
+  if (!SEED_SOURCE_CLASSES.has(n.class_type) || Number(v[1]) !== 0 || vals.some(isLink) || nums.length !== 1)
+    return { seed: null, seed_note: `${at} 的 ${key} 来自 ${label(graph, nid)}，不是只输出一个整数的节点（支持 ${[...SEED_SOURCE_CLASSES].join('、')}），无法从快照确定实际使用的值` }
+  if (!isSeed(nums[0])) return { seed: null, seed_note: `${at} 的 ${key} 来自 ${label(graph, nid)}，值 ${nums[0]} 不是可以精确确定的非负整数` }
+  return { seed: nums[0], seed_note: `${at} 的 ${key}，来自 ${label(graph, nid)}` }
+}
+
+/** 节点的全部上游节点 */
+function upstreamOf(graph: ApiWorkflow, nid: string): Set<string> {
+  const out = new Set<string>()
+  const stack = [nid]
+  while (stack.length) {
+    const cur = stack.pop()!
+    for (const v of Object.values(graph[cur]?.inputs ?? {}))
+      if (isLink(v) && !out.has(String(v[0]))) {
+        out.add(String(v[0]))
+        stack.push(String(v[0]))
+      }
+  }
+  return out
 }
 
 // ---------------------------------------------------------------- 放大工作流
@@ -343,6 +629,25 @@ export function upscaleWorkflowProblems(wf: UpWorkflow): Message[] {
   }
   const loraNode = mapping.find((m) => m.source === UPSCALE_LORA)?.node
   for (const ld of findLoraLoaders(api)) if (String(ld.node) !== String(loraNode) && !gone.has(ld.node)) out.push(['warning', `放大工作流中的 LoRA 节点 ${label(api, ld.node)} 没有映射为「放大：LoRA 加载节点」：它保持工作流原值，会和原图的 LoRA 一起加载`])
+  // 不使用输入图片的输出节点：ComfyUI 执行 API 工作流中的全部输出节点，它与它的上游（例如前半段的采样）每张图都会多运行一次
+  const image = mapping.find((m) => m.source === UPSCALE_IMAGE)?.node
+  if (image != null && api[String(image)]) {
+    const down = new Set([String(image)])
+    for (let grew = true; grew; ) {
+      grew = false
+      for (const [nid, n] of Object.entries(api))
+        if (!down.has(nid) && Object.values(n.inputs ?? {}).some((v) => isLink(v) && down.has(String(v[0])))) {
+          down.add(nid)
+          grew = true
+        }
+    }
+    for (const nid of sortNodeIds(Object.keys(api))) {
+      const n = api[nid]
+      const isOutput = typeof n.inputs?.filename_prefix === 'string' || /^(Save|Preview)Image/.test(n.class_type)
+      if (isOutput && !down.has(nid) && !gone.has(nid))
+        out.push(['warning', `放大工作流的输出节点 ${label(api, nid)} 不使用输入图片 ${label(api, String(image))}：ComfyUI 会执行它和它上游的节点（例如前半段的采样），每张图都会多运行一次。可以在工作流的节点控制中绕过它，或从放大工作流中删除`])
+    }
+  }
   return out
 }
 
@@ -350,8 +655,8 @@ export function upscaleWorkflowProblems(wf: UpWorkflow): Message[] {
 export const upscaleOutputNodes = (mapping: MappingEntry[]) => [...new Set(mapping.filter((m) => m.source === UPSCALE_OUTPUT).map((m) => String(m.node)))]
 
 /**
- * 一张图写入放大工作流的值。只写入映射的输入图片、正负 Prompt、Checkpoint、LoRA 加载节点、禁止触发词注入与工作流的节点控制，
- * 其他映射（Seed、尺寸、文件名前缀、LoRA 槽位）一律不写入。有 block 级问题时 inputs 为 null。
+ * 一张图写入放大工作流的值。只写入映射的输入图片、正负 Prompt、Checkpoint、LoRA 加载节点、禁止触发词注入、「放大：Seed」与工作流的节点控制，
+ * 其他映射（生成用的 Seed、尺寸、文件名前缀、LoRA 槽位）一律不写入。有 block 级问题时 inputs 为 null。
  */
 export function upscaleInputs(wf: UpWorkflow, rec: RecoveredGeneration & { raw?: Map<RecoveredLora, Record<string, unknown>> }, image: string): { inputs: InputValue[] | null; issues: UpscaleIssue[] } {
   const api = wf.api_json ?? {}
@@ -359,6 +664,7 @@ export function upscaleInputs(wf: UpWorkflow, rec: RecoveredGeneration & { raw?:
   const issues: UpscaleIssue[] = []
   const block = (text: string) => issues.push({ level: 'block', text })
   const out: InputValue[] = []
+  let seedNoted = false
   for (const e of mapping) {
     const node = String(e.node)
     const n: ApiNode | undefined = api[node]
@@ -378,8 +684,12 @@ export function upscaleInputs(wf: UpWorkflow, rec: RecoveredGeneration & { raw?:
       }
       const stack = loraStackOf(n)
       if (stack) {
-        // 替换为原图的 LoRA 列表：名称、启用状态、model / clip 强度都与原图相同，原来未启用的仍未启用
-        const list = rec.loras.map((l) => ({ ...(rec.raw?.get(l) ?? { expanded: false, selected: false, locked: false }), name: loraStem(l.name), strength: l.strength, clipStrength: l.clip, active: l.active }))
+        // 替换为原图的 LoRA 列表：名称、启用状态、model / clip 强度都与原图相同，原来未启用的仍未启用。
+        // 有原图条目时原样使用（插件界面保存的强度可能是 "1.20" 这样的文本，保持原来的写法）
+        const list = rec.loras.map((l) => {
+          const raw = rec.raw?.get(l)
+          return raw ? { ...raw, active: l.active } : { expanded: false, selected: false, locked: false, name: loraStem(l.name), strength: l.strength, clipStrength: l.clip, active: l.active }
+        })
         out.push({ node, input: 'loras', source: UPSCALE_LORA, value: { ...(n!.inputs.loras as object), __value__: list } })
         if (typeof n!.inputs.text === 'string') out.push({ node, input: 'text', source: UPSCALE_LORA, value: loraStackText(list) })
         continue
@@ -406,8 +716,16 @@ export function upscaleInputs(wf: UpWorkflow, rec: RecoveredGeneration & { raw?:
       out.push({ node, input: 'lora_name', source: UPSCALE_LORA, value: name })
       for (const k of ld.strengths) out.push({ node, input: k, source: UPSCALE_LORA, value: l ? (/clip/i.test(k) ? l.clip : l.strength) : 0 })
     } else if (e.source === TRIGGER_DISABLE) out.push(...toggleDisableInputs(node, n))
+    else if (e.source === UPSCALE_SEED) {
+      // 能确定时写入原图的 Seed；不能确定时保持放大工作流的值并要求确认（不猜测）
+      if (rec.seed != null) {
+        out.push({ node, input: e.input, source: e.source, value: rec.seed })
+        if (!seedNoted) issues.push({ level: 'note', text: `Seed：写入原图的 ${rec.seed}（${rec.seed_note ?? '原图'}）` })
+      } else issues.push({ level: 'confirm', text: `无法确定原图的 Seed（${rec.seed_note ?? '没有 Seed 信息'}）：${label(api, node)} 的 ${e.input} 保持放大工作流的值（${JSON.stringify(n?.inputs?.[e.input] ?? null)}）` })
+      seedNoted = true
+    }
   }
-  if (issues.length) return { inputs: null, issues }
+  if (issues.some((i) => i.level === 'block')) return { inputs: null, issues }
   const controls = controlsOf(wf)
   if (controlProblems(api, mapping, controls).some(([l]) => l === 'error')) return { inputs: null, issues: [{ level: 'block', text: `放大工作流「${wf.name}」的节点控制有错误，请在工作流页面检查` }] }
   const merged = mergeControlInputs(api, out, controlInputs(api, controls))

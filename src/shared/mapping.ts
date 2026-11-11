@@ -36,6 +36,8 @@ export const SOURCES: [string, string][] = [
   ['upscale_checkpoint', '放大：Checkpoint 名称'],
   ['upscale_lora', '放大：LoRA 加载节点'],
   ['upscale_output', '放大：最终输出节点'],
+  // 可选：写入原图第一个采样器的 Seed（能静态确定时）；不映射时放大工作流的 Seed 保持原值
+  ['upscale_seed', '放大：Seed'],
 ]
 export const SIZE_SOURCES = ['width', 'height']
 export const UPSCALE_IMAGE = 'upscale_image'
@@ -43,7 +45,9 @@ export const UPSCALE_CHECKPOINT = 'upscale_checkpoint'
 export const UPSCALE_LORA = 'upscale_lora'
 /** 指定最终输出节点（不写入任何值，只决定从哪个节点取图） */
 export const UPSCALE_OUTPUT = 'upscale_output'
-export const UPSCALE_SOURCES = [UPSCALE_IMAGE, UPSCALE_CHECKPOINT, UPSCALE_LORA, UPSCALE_OUTPUT]
+/** 写入原图的 Seed（可以映射到多个节点，例如二次采样与分区放大各自的 Seed 输入） */
+export const UPSCALE_SEED = 'upscale_seed'
+export const UPSCALE_SOURCES = [UPSCALE_IMAGE, UPSCALE_CHECKPOINT, UPSCALE_LORA, UPSCALE_OUTPUT, UPSCALE_SEED]
 /** 映射了「放大：输入图片」的工作流是放大工作流 */
 export const isUpscaleMapping = (mapping: Pick<MappingEntry, 'source'>[] | null | undefined) => (mapping ?? []).some((m) => m.source === UPSCALE_IMAGE)
 /** 映射来源：禁止 TriggerWord Toggle 注入触发词（由工作流检查中的开关添加，不出现在手动映射列表） */
@@ -206,11 +210,12 @@ export function loraBindingEntries(prefix: string, loader: LoraLoaderInfo): Mapp
 }
 
 // ---------------------------------------------------------------- TriggerWord Toggle
-// 只适配已对照插件源码（ComfyUI-Lora-Manager，py/nodes/trigger_word_toggle.py）验证过的 TriggerWord Toggle (LoraManager)：
+// 只适配已对照插件源码（ComfyUI-Lora-Manager，py/nodes/trigger_word_toggle.py，2026-04-21 的 79dd9a1）验证过的 TriggerWord Toggle (LoraManager)：
 // 1. trigger_words（连接自 LoRA Loader 的触发词输出）非空、且与 orinalMessage 的词集合不同时，直接输出 trigger_words，开关状态不起作用；
-// 2. 否则 toggle_trigger_words 非空时输出启用的组，全部未启用时输出空文本；
+// 2. 否则 toggle_trigger_words 非空时输出启用的组（组带子项 items 时为启用的子项；允许调整权重时带权重），全部未启用时输出空文本；
 // 3. toggle_trigger_words 为空或不存在时输出 orinalMessage。
 // 因此禁止注入要同时处理三个输入，只关闭开关不够（规则 1 会绕过它）。其他类型的节点一律不修改。
+// 完整的静态计算见 upscale.ts 的 triggerToggleOutput。
 
 export const LM_TRIGGER_TOGGLE = 'TriggerWord Toggle (LoraManager)'
 /** 已验证输出结构的 LoRA Loader：输出依次为 MODEL、CLIP、trigger_words、loaded_loras。名称含 Lora 的其他节点不按这个结构处理 */
@@ -230,7 +235,12 @@ export function toggleStructure(node: ApiNode | undefined): ToggleStructure | nu
   const i = node.inputs ?? {}
   if (typeof i.group_mode !== 'boolean' || !('toggle_trigger_words' in i)) return null
   const list = unwrap(i.toggle_trigger_words)
-  if (!Array.isArray(list) || !list.every((x) => isObj(x) && typeof x.text === 'string' && typeof x.active === 'boolean')) return null
+  // 每组：text / active；新版插件另有 strength（null 或数字）与子项 items（每项同样有 text / active）
+  const entry = (x: unknown): x is Record<string, unknown> => isObj(x) && typeof x.text === 'string' && typeof x.active === 'boolean' && (x.strength == null || typeof x.strength === 'number')
+  if (!Array.isArray(list) || !list.every((x) => entry(x) && (!('items' in x) || (Array.isArray(x.items) && x.items.every(entry))))) return null
+  // 旧版插件界面保存过 {"__value__": []} 形式的值（实际样本 workflow-two-pass.json）：Python 中非空 dict 为真
+  const allow = i.allow_strength_adjustment
+  if ('allow_strength_adjustment' in i && typeof allow !== 'boolean' && !(isObj(allow) && '__value__' in allow)) return null
   if ('orinalMessage' in i && typeof i.orinalMessage !== 'string') return null
   if ('trigger_words' in i && typeof i.trigger_words !== 'string' && !isLink(i.trigger_words)) return null
   return { groups: list.map((x) => ({ text: String(x.text), active: !!x.active })), source_node: isLink(i.trigger_words) ? i.trigger_words[0] : undefined }
@@ -239,6 +249,8 @@ export function toggleStructure(node: ApiNode | undefined): ToggleStructure | nu
 /**
  * 让节点输出空文本要写入的值：所有组设为未启用（其他字段不变）；orinalMessage 与 trigger_words 写空文本。
  * trigger_words 只断开这个节点自己的这个输入，LoRA Loader 与它的其他连接、这个节点的输出连接都不变。结构未验证时不写入。
+ * 组的子项（items）不需要修改：插件在组未启用时直接跳过整组（_process_group_items 先判断组的 active，再看子项），
+ * 非组模式与没有子项的分支也只按组的 active 过滤；trigger_words 为空不会触发覆盖，列表处理出错时输出的 orinalMessage 也已是空文本。
  */
 export function toggleDisableInputs(nid: string, node: ApiNode | undefined): InputValue[] {
   if (!toggleStructure(node)) return []
@@ -389,7 +401,7 @@ export function validateMapping(api: ApiWorkflow, mapping: MappingEntry[]): Mess
     if (PROMPT_SOURCES.includes(src) || src.endsWith('_name') || src === 'filename_prefix' || src === UPSCALE_IMAGE || src === UPSCALE_CHECKPOINT) {
       if (typeof cur !== 'string')
         out.push(['warning', `${tag}：${label} 的「${inp}」当前值不是文本（${describeValue(cur)}），请确认是否映射正确`])
-    } else if (src === 'seed' || SIZE_SOURCES.includes(src)) {
+    } else if (src === 'seed' || src === UPSCALE_SEED || SIZE_SOURCES.includes(src)) {
       if (!isInt(cur)) out.push(['warning', `${tag}：${label} 的「${inp}」当前值不是整数（${describeValue(cur)}）`])
     } else if (src.endsWith('_strength')) {
       if (typeof cur !== 'number') out.push(['warning', `${tag}：${label} 的「${inp}」当前值不是数字（${describeValue(cur)}）`])
@@ -412,7 +424,7 @@ export function validateMapping(api: ApiWorkflow, mapping: MappingEntry[]): Mess
     if (!sources.has(UPSCALE_CHECKPOINT)) out.push(['warning', '放大工作流没有映射「放大：Checkpoint 名称」：放大时使用工作流中的 Checkpoint，不恢复原图的 Checkpoint'])
     if (!sources.has(UPSCALE_LORA)) out.push(['warning', '放大工作流没有映射「放大：LoRA 加载节点」：放大时不恢复原图的 LoRA'])
     for (const s of ['seed', 'width', 'height', 'filename_prefix'])
-      if (sources.has(s)) out.push(['warning', `放大工作流中的「${SOURCE_LABELS[s]}」映射不会写入：放大时采样参数、尺寸与文件名前缀都保持工作流原值`])
+      if (sources.has(s)) out.push(['warning', `放大工作流中的「${SOURCE_LABELS[s]}」映射不会写入：放大时采样参数、尺寸与文件名前缀都保持工作流原值${s === 'seed' ? `（要使用原图的 Seed，请改为映射「${SOURCE_LABELS[UPSCALE_SEED]}」）` : ''}`])
   } else if (!sources.has('seed')) out.push(['warning', '未映射 Seed，所有图片将使用工作流中原有的固定 Seed'])
   return out
 }
@@ -427,6 +439,7 @@ export function guessInput(source: string, inputs: Record<string, unknown>): str
   let pref: string[]
   if (PROMPT_SOURCES.includes(source)) pref = ['text']
   else if (source === 'seed') pref = ['seed', 'noise_seed']
+  else if (source === UPSCALE_SEED) pref = ['seed', 'noise_seed', 'value', 'int']
   else if (SIZE_SOURCES.includes(source)) pref = [source, 'value', 'int', 'Value']
   else if (source === UPSCALE_IMAGE) pref = ['image']
   else if (source === UPSCALE_CHECKPOINT) pref = ['ckpt_name', 'value']

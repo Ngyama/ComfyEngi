@@ -1,16 +1,18 @@
 // 批量放大：放大队列中每张图的原图、使用的工作流、状态、结果与失败原因；可以对比原图与放大结果。
 
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { AlertTriangle, ArrowRight, FileSearch, FolderOpen, ImageIcon, ImageOff, Info, Maximize2, Play, RefreshCw, RotateCcw, X } from 'lucide-react'
+import { AlertTriangle, ArrowRight, FileSearch, FolderInput, FolderOpen, ImageIcon, ImageOff, ImagePlus, Info, Maximize2, Play, RefreshCw, RotateCcw, X } from 'lucide-react'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
+import { Checkbox } from '@/components/ui/checkbox'
 import { Chip, EmptyState, FieldLabel, PageHeader } from '@/components/common'
 import { api, call } from '@/lib/api'
 import { useNav, useRunner } from '@/lib/stores'
 import { cn } from '@/lib/utils'
 import type { RunUnit, UnitStatus } from '@shared/types'
+import type { UpscaleFolderScan, UpscaleSelection } from '@shared/upscale'
 import { ExecutionDialog } from '../ExecutionDialog'
-import { startRunnerChecked } from './UpscaleEnqueueDialog'
+import { startRunnerChecked, UpscaleEnqueueDialog } from './UpscaleEnqueueDialog'
 
 type Which = 'source' | 'result'
 const cache = new Map<string, string>()
@@ -101,8 +103,8 @@ function Row({ u, selected, onClick }: { u: RunUnit; selected: boolean; onClick:
           <span className="truncate font-medium">{m?.source.name ?? u.item_label}</span>
           <span className={cn('shrink-0 text-[11px]', st.cls)}>{st.label}</span>
         </div>
-        <div className="truncate text-[11px] text-muted-foreground">
-          {m?.source.run_name ?? ''} · {[u.meta?.character, u.meta?.outfit].filter(Boolean).join(' · ') || u.item_label}
+        <div className="truncate text-[11px] text-muted-foreground" title={m?.source.path}>
+          {m?.source.kind === 'file' ? m.source.path : `${m?.source.run_name ?? ''} · ${[u.meta?.character, u.meta?.outfit].filter(Boolean).join(' · ') || u.item_label}`}
         </div>
         <div className="truncate text-[11px] text-muted-foreground">工作流：{m?.workflow.name ?? '—'}</div>
         {u.status === 'failed' && u.error && <div className="line-clamp-2 text-[11px] break-all text-destructive">{u.error}</div>}
@@ -204,10 +206,10 @@ function Detail({ u, onClose }: { u: RunUnit; onClose: () => void }) {
         <div className="grid grid-cols-[84px_1fr] gap-x-3 gap-y-1.5 text-xs">
           {(
             [
-              ['原图任务', m?.source.run_name ?? ''],
+              ...(m?.source.kind === 'file' ? [] : [['原图任务', m?.source.run_name ?? '']]),
               ['原图文件', m?.source.path ?? ''],
-              ['原图 Seed', String(m?.source.seed ?? '—')],
-              ['恢复来源', m?.source.snapshot === 'attempt' ? '原图实际提交的工作流快照' : '按冻结的工作流与写入值重建（旧记录没有提交快照）'],
+              ['原图 Seed', m?.source.seed == null ? '—' : String(m.source.seed)],
+              ['恢复来源', m?.source.snapshot === 'file' ? '图片文件中的 ComfyUI prompt 元数据' : m?.source.snapshot === 'attempt' ? '原图实际提交的工作流快照' : '按冻结的工作流与写入值重建（旧记录没有提交快照）'],
               ['放大工作流', m?.workflow.name ?? ''],
               ['Checkpoint', rec?.checkpoint ?? '（未写入：放大工作流使用自己的设置）'],
               ['结果文件', u.outputs?.find((o) => o.role === 'final')?.saved ?? '—'],
@@ -242,6 +244,46 @@ function Detail({ u, onClose }: { u: RunUnit; onClose: () => void }) {
   )
 }
 
+const RECURSIVE_KEY = 'comfyengi.upscale.recursive'
+const readRecursive = () => {
+  try {
+    return localStorage.getItem(RECURSIVE_KEY) === '1'
+  } catch {
+    return false
+  }
+}
+const writeRecursive = (v: boolean) => {
+  try {
+    localStorage.setItem(RECURSIVE_KEY, v ? '1' : '0')
+  } catch {
+    /* 无法保存时下次使用默认值 */
+  }
+}
+
+/** 文件夹来源的说明与选项（显示在加入放大队列的对话框顶部） */
+function FolderHeader({ dir, recursive, scan, onRecursive }: { dir: string; recursive: boolean; scan: UpscaleFolderScan; onRecursive: (v: boolean) => void }) {
+  return (
+    <div className="space-y-1.5 rounded-xl bg-inset p-3 text-xs" data-testid="upscale-folder">
+      <div className="truncate font-mono text-[11px]" title={dir}>
+        {dir}
+      </div>
+      <label className="flex items-center gap-2">
+        <Checkbox checked={recursive} onCheckedChange={(v) => onRecursive(v === true)} />
+        <span>包含子文件夹</span>
+      </label>
+      <div className="text-muted-foreground">
+        找到 {scan.files.length} 张图片（按路径排序）
+        {scan.truncated ? '，超过 2000 张，只列出前 2000 张' : ''}
+      </div>
+      {scan.skipped_dirs.length > 0 && (
+        <div className="text-muted-foreground" title={scan.skipped_dirs.join('\n')}>
+          跳过了 {scan.skipped_dirs.length} 个「放大」子文件夹（放大结果）
+        </div>
+      )}
+    </div>
+  )
+}
+
 const FILTERS: [string, string][] = [
   ['', '全部'],
   ['active', '未完成'],
@@ -256,6 +298,29 @@ export default function UpscalePage() {
   const [rows, setRows] = useState<RunUnit[] | null>(null)
   const [filter, setFilter] = useState('')
   const [sel, setSel] = useState<number | null>(null)
+  // 从本机文件选择的来源：图片文件，或文件夹（扫描结果）
+  const [pick, setPick] = useState<{ kind: 'files'; files: string[] } | { kind: 'folder'; dir: string; recursive: boolean; scan: UpscaleFolderScan | null } | null>(null)
+  const pickFiles = async () => {
+    const files = await call(api['upscale.pickFiles']())
+    if (files?.length) setPick({ kind: 'files', files })
+  }
+  const pickFolder = async () => {
+    const dir = await call(api['upscale.pickFolder']())
+    if (dir) setPick({ kind: 'folder', dir, recursive: readRecursive(), scan: null })
+  }
+  const folderKey = pick?.kind === 'folder' ? `${pick.dir}|${pick.recursive}` : ''
+  useEffect(() => {
+    if (pick?.kind !== 'folder') return
+    let alive = true
+    void call(api['upscale.scanFolder'](pick.dir, pick.recursive)).then((scan) => {
+      if (alive && scan) setPick((p) => (p?.kind === 'folder' && p.dir === pick.dir && p.recursive === pick.recursive ? { ...p, scan } : p))
+      else if (alive) setPick(null)
+    })
+    return () => {
+      alive = false
+    }
+  }, [folderKey]) // eslint-disable-line react-hooks/exhaustive-deps
+  const pickItems: UpscaleSelection[] = pick?.kind === 'files' ? pick.files.map((file) => ({ file })) : (pick?.scan?.files ?? []).map((file) => ({ file }))
   const load = useCallback(() => void api['upscale.list'](2000).then(setRows), [])
   useEffect(() => {
     const t = setTimeout(load, 200)
@@ -281,11 +346,17 @@ export default function UpscalePage() {
       <div className="flex min-w-0 flex-1 flex-col">
         <PageHeader
           title="批量放大"
-          description="在「运行记录」中选择图片加入放大队列。每张图按生成时的 Prompt、Checkpoint 与 LoRA 写入放大工作流；放大参数保持工作流中的值。结果保存在原图所在文件夹的「放大」子文件夹。"
+          description="选择本机的图片 / 文件夹（读取图片中的 ComfyUI prompt 元数据），或在「运行记录」中选择图片，加入放大队列。每张图按生成时的 Prompt、Checkpoint 与 LoRA 写入放大工作流；放大参数保持工作流中的值。结果保存在原图所在文件夹的「放大」子文件夹。"
           actions={
             <>
+              <Button variant="ghost" size="sm" onClick={() => void pickFolder()} data-testid="upscale-pick-folder">
+                <FolderInput /> 选择文件夹
+              </Button>
+              <Button variant="ghost" size="sm" onClick={() => void pickFiles()} data-testid="upscale-pick-files">
+                <ImagePlus /> 选择图片
+              </Button>
               <Button variant="ghost" size="sm" onClick={() => go('history')}>
-                <Maximize2 /> 选择图片
+                <Maximize2 /> 从运行记录选择
               </Button>
               {failed.length > 0 && (
                 <Button variant="ghost" size="sm" onClick={retryAll}>
@@ -321,7 +392,7 @@ export default function UpscalePage() {
             <EmptyState
               icon={<Maximize2 />}
               title={filter ? '没有匹配的记录' : '放大队列是空的'}
-              description="在「运行记录」中选择图片（可以跨任务累计），点「加入放大队列」并选择放大工作流。"
+              description="点「选择文件夹」或「选择图片」放大本机的图片；也可以在「运行记录」中选择图片（可以跨任务累计），点「加入放大队列」。"
               action={
                 <Button size="sm" variant="secondary" onClick={() => go('history')}>
                   前往运行记录
@@ -337,6 +408,13 @@ export default function UpscalePage() {
           )}
         </div>
       </div>
+      {pick && (pick.kind === 'files' || pick.scan) && (
+        <UpscaleEnqueueDialog
+          items={pickItems}
+          header={pick.kind === 'folder' ? <FolderHeader dir={pick.dir} recursive={pick.recursive} scan={pick.scan!} onRecursive={(recursive) => (writeRecursive(recursive), setPick({ ...pick, recursive, scan: null }))} /> : null}
+          onClose={() => setPick(null)}
+        />
+      )}
       {cur && (
         <div className="absolute inset-y-3 right-3 z-30 w-[440px] overflow-hidden rounded-2xl bg-popover shadow-2xl ring-1 shadow-tint/15 ring-tint/[0.128] 2xl:static 2xl:my-3 2xl:mr-3 2xl:shrink-0 2xl:bg-card 2xl:shadow-none">
           <Detail u={cur} onClose={() => setSel(null)} />

@@ -6,7 +6,7 @@ import { LoraManager, pathKey } from './lora-manager'
 
 import { existsSync, readFileSync, rmSync, statSync } from 'node:fs'
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
-import { dirname, extname } from 'node:path'
+import { dirname, extname, isAbsolute } from 'node:path'
 import { BrowserWindow, clipboard, dialog, ipcMain, nativeImage, shell, app } from 'electron'
 import { API_METHODS, INVOKE_CHANNEL, RUNNER_EVENT_CHANNEL, type Api, type ApiMethod } from '@shared/api'
 import { TRIGGER_CUT, BYPASS_REWIRE, checkAgainstObjectInfo, ComfyError, NODE_BYPASS, NODE_OVERRIDE, findLoraLoaders, isUpscaleMapping, loadApiWorkflow, mappingValues, primaryOutputIndex, sortNodeIds, validateMapping } from '@shared/mapping'
@@ -24,7 +24,7 @@ import { dictionaryInfo, dictionaryPath, importDictionary, loadSourceRules, Mini
 import { analyzeInWorker } from './mining-run'
 import { MINING_LIMITS, MINING_SAVE_KINDS } from '@shared/mining'
 import { sha256, type Runner } from './runner'
-import { enqueueUpscale, listUpscale, localOutputPath, planUpscale, UPSCALE_SECTION, type UpscaleSelection } from './upscale'
+import { enqueueUpscale, IMAGE_EXTS, listUpscale, localOutputPath, planUpscale, scanUpscaleFolder, UPSCALE_SECTION, type UpscaleSelection } from './upscale'
 import { TABLES, type Store, type TableName } from './store'
 
 class BadArg extends Error {}
@@ -162,6 +162,12 @@ const selections = (v: unknown): UpscaleSelection[] => {
   if (v.length > 2000) throw new BadArg('一次最多选择 2000 张图片')
   return v.map((x) => {
     const o = plain(x, '图片')
+    if (o.file != null) {
+      // 文件来源：界面从系统对话框或文件夹扫描得到的本机路径，只接受绝对路径与图片扩展名
+      const f = str(o.file)
+      if (!isAbsolute(f) || f.length > 4096 || !IMAGE_EXTS.includes(extname(f).toLowerCase())) throw new BadArg(`不是可放大的图片文件路径：${f.slice(0, 200)}`)
+      return { file: f }
+    }
     return { unit_id: int(o.unit_id, 'unit_id'), ...(o.output == null ? {} : { output: int(o.output, 'output') }) }
   })
 }
@@ -612,6 +618,23 @@ export function registerIpc(ctx: IpcContext) {
 
     'upscale.plan': (items, wid) => planUpscale(store, selections(items), wid == null ? null : int(wid, '工作流')),
     'upscale.enqueue': (items, wid, accept) => enqueueUpscale(store, selections(items), wid == null ? null : int(wid, '工作流'), !!accept),
+    'upscale.pickFiles': async () => {
+      const r = await dialog.showOpenDialog(ctx.window()!, { title: '选择要放大的图片（读取图片中的 ComfyUI prompt 元数据）', properties: ['openFile', 'multiSelections'], filters: [{ name: '图片', extensions: IMAGE_EXTS.map((e) => e.slice(1)) }] })
+      return r.canceled || !r.filePaths.length ? null : r.filePaths
+    },
+    'upscale.pickFolder': async () => {
+      const r = await dialog.showOpenDialog(ctx.window()!, { title: '选择要放大的图片所在文件夹', properties: ['openDirectory'] })
+      return r.canceled || !r.filePaths[0] ? null : r.filePaths[0]
+    },
+    'upscale.scanFolder': (dir, recursive) => {
+      const d = str(dir)
+      if (!isAbsolute(d)) throw new BadArg('文件夹路径必须是绝对路径')
+      try {
+        return scanUpscaleFolder(d, !!recursive)
+      } catch (e) {
+        throw new BadArg((e as Error).message)
+      }
+    },
     'upscale.list': (limit) => listUpscale(store, Math.min(5000, Math.max(1, int(limit)))),
     'upscale.image': async (unitId, which, size) => {
       const u = upscaleUnit(unitId)

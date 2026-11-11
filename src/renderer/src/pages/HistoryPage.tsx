@@ -230,7 +230,7 @@ export default function HistoryPage() {
     return () => clearTimeout(t)
   }, [load, tick])
   const cur = rows?.find((r) => r.id === sel)
-  const { picks, toggle, add, clear } = useUpscaleSel()
+  const { picks, toggle, add, remove, clear } = useUpscaleSel()
   const picked = Object.values(picks)
   const [enqueue, setEnqueue] = useState(false)
   // 只有成功生成的原图可以加入放大队列（放大结果本身不再放大）
@@ -292,7 +292,14 @@ export default function HistoryPage() {
           </Button>
         </div>
       </div>
-      {enqueue && <UpscaleEnqueueDialog picks={picked} onClose={() => setEnqueue(false)} />}
+      {enqueue && (
+        <UpscaleEnqueueDialog
+          items={picked.map((p) => ({ unit_id: p.unit_id }))}
+          onClose={() => setEnqueue(false)}
+          // 已加入的从选择中移除，未加入的保留以便处理
+          onEnqueued={(skipped) => remove(picked.map((p) => p.unit_id).filter((id) => !skipped.unit_ids.has(id)))}
+        />
+      )}
       {cur && (
         <div className="absolute inset-y-3 right-3 z-30 w-[420px] overflow-hidden rounded-2xl bg-popover shadow-2xl ring-1 shadow-tint/15 ring-tint/[0.128] 2xl:static 2xl:my-3 2xl:mr-3 2xl:shrink-0 2xl:bg-card 2xl:shadow-none">
           <Detail u={cur} onClose={() => setSel(null)} />

@@ -593,26 +593,35 @@ export interface RecoveredGeneration {
   negative_exact: boolean
   checkpoint: string | null
   loras: RecoveredLora[] | null
+  /** 原图第一个采样器的 Seed：只有能从快照静态确定时才有值（字面值，或来自只输出一个整数的节点）；旧数据没有这个字段 */
+  seed?: number | null
+  /** Seed 的来源说明，或无法确定的原因 */
+  seed_note?: string | null
   issues: UpscaleIssue[]
 }
 export interface UpscaleMeta {
   source: {
-    unit_id: number
-    run_id: number
+    /** run：运行记录中的图片；file：本机的图片文件（从 PNG 等的 prompt 元数据恢复）。旧数据没有这个字段，按 run 处理 */
+    kind?: 'run' | 'file'
+    /** 以下运行记录字段在 file 来源中为 null */
+    unit_id: number | null
+    run_id: number | null
+    /** 运行记录的任务名称；file 来源为空文本 */
     run_name: string
     task_id: number | null
     /** 原图在 outputs 中的序号与节点 */
-    output: number
-    node: string
+    output: number | null
+    node: string | null
     /** 原图本地文件（上传的就是这个文件）、文件名与入队时的 SHA-256 */
     path: string
     name: string
     sha256: string
     prompt_id: string | null
-    /** 恢复所用的提交快照；rebuilt：旧记录没有快照，按冻结的工作流与写入值重建 */
+    /** 恢复所用的提交快照；rebuilt：旧记录没有快照，按冻结的工作流与写入值重建；file：图片文件中的 prompt 元数据 */
     attempt_id: number | null
-    snapshot: 'attempt' | 'rebuilt'
-    seed: number
+    snapshot: 'attempt' | 'rebuilt' | 'file'
+    /** 原图的 Seed（运行记录中写入的值；file 来源为静态得到的第一个采样器的 Seed，得不到时为 null） */
+    seed: number | null
   }
   workflow: { id: number; name: string }
   recovered: { positive: string; negative: string; checkpoint: string | null; loras: RecoveredLora[]; positive_exact: boolean; negative_exact: boolean }
