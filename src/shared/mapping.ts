@@ -206,11 +206,12 @@ export function loraBindingEntries(prefix: string, loader: LoraLoaderInfo): Mapp
 }
 
 // ---------------------------------------------------------------- TriggerWord Toggle
-// 只适配已对照插件源码（ComfyUI-Lora-Manager，py/nodes/trigger_word_toggle.py）验证过的 TriggerWord Toggle (LoraManager)：
+// 只适配已对照插件源码（ComfyUI-Lora-Manager，py/nodes/trigger_word_toggle.py，2026-04-21 的 79dd9a1）验证过的 TriggerWord Toggle (LoraManager)：
 // 1. trigger_words（连接自 LoRA Loader 的触发词输出）非空、且与 orinalMessage 的词集合不同时，直接输出 trigger_words，开关状态不起作用；
-// 2. 否则 toggle_trigger_words 非空时输出启用的组，全部未启用时输出空文本；
+// 2. 否则 toggle_trigger_words 非空时输出启用的组（组带子项 items 时为启用的子项；允许调整权重时带权重），全部未启用时输出空文本；
 // 3. toggle_trigger_words 为空或不存在时输出 orinalMessage。
 // 因此禁止注入要同时处理三个输入，只关闭开关不够（规则 1 会绕过它）。其他类型的节点一律不修改。
+// 完整的静态计算见 upscale.ts 的 triggerToggleOutput。
 
 export const LM_TRIGGER_TOGGLE = 'TriggerWord Toggle (LoraManager)'
 /** 已验证输出结构的 LoRA Loader：输出依次为 MODEL、CLIP、trigger_words、loaded_loras。名称含 Lora 的其他节点不按这个结构处理 */
@@ -230,7 +231,12 @@ export function toggleStructure(node: ApiNode | undefined): ToggleStructure | nu
   const i = node.inputs ?? {}
   if (typeof i.group_mode !== 'boolean' || !('toggle_trigger_words' in i)) return null
   const list = unwrap(i.toggle_trigger_words)
-  if (!Array.isArray(list) || !list.every((x) => isObj(x) && typeof x.text === 'string' && typeof x.active === 'boolean')) return null
+  // 每组：text / active；新版插件另有 strength（null 或数字）与子项 items（每项同样有 text / active）
+  const entry = (x: unknown): x is Record<string, unknown> => isObj(x) && typeof x.text === 'string' && typeof x.active === 'boolean' && (x.strength == null || typeof x.strength === 'number')
+  if (!Array.isArray(list) || !list.every((x) => entry(x) && (!('items' in x) || (Array.isArray(x.items) && x.items.every(entry))))) return null
+  // 旧版插件界面保存过 {"__value__": []} 形式的值（实际样本 workflow-two-pass.json）：Python 中非空 dict 为真
+  const allow = i.allow_strength_adjustment
+  if ('allow_strength_adjustment' in i && typeof allow !== 'boolean' && !(isObj(allow) && '__value__' in allow)) return null
   if ('orinalMessage' in i && typeof i.orinalMessage !== 'string') return null
   if ('trigger_words' in i && typeof i.trigger_words !== 'string' && !isLink(i.trigger_words)) return null
   return { groups: list.map((x) => ({ text: String(x.text), active: !!x.active })), source_node: isLink(i.trigger_words) ? i.trigger_words[0] : undefined }
@@ -239,6 +245,8 @@ export function toggleStructure(node: ApiNode | undefined): ToggleStructure | nu
 /**
  * 让节点输出空文本要写入的值：所有组设为未启用（其他字段不变）；orinalMessage 与 trigger_words 写空文本。
  * trigger_words 只断开这个节点自己的这个输入，LoRA Loader 与它的其他连接、这个节点的输出连接都不变。结构未验证时不写入。
+ * 组的子项（items）不需要修改：插件在组未启用时直接跳过整组（_process_group_items 先判断组的 active，再看子项），
+ * 非组模式与没有子项的分支也只按组的 active 过滤；trigger_words 为空不会触发覆盖，列表处理出错时输出的 orinalMessage 也已是空文本。
  */
 export function toggleDisableInputs(nid: string, node: ApiNode | undefined): InputValue[] {
   if (!toggleStructure(node)) return []

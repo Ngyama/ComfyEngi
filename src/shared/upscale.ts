@@ -28,6 +28,7 @@ import {
   validateMapping,
 } from './mapping'
 import { controlInputs, controlProblems, controlsOf, mergeControlInputs, withTriggerCuts } from './node-controls'
+import { parseJsonLoose } from './prompt-source'
 import type { ApiNode, ApiWorkflow, InputValue, MappingEntry, Message, RecoveredGeneration, RecoveredLora, UpscaleIssue, Workflow, WorkflowControls } from './types'
 import { encodersOf, findPromptInjectors, findSamplers, TEXT_FIELDS } from './workflow-analysis'
 
@@ -99,6 +100,148 @@ interface EvalContext {
   original?: ApiWorkflow | null
 }
 
+// ---------------- TriggerWord Toggle (LoraManager)
+// 与插件 py/nodes/trigger_word_toggle.py（ComfyUI-Lora-Manager，2026-04-21 的 79dd9a1）的 process_trigger_words 逐分支对应：
+//   覆盖判断 → toggle_trigger_words 为空时输出 orinalMessage → 列表：组模式（有子项 / 允许调整权重 / 不允许）或非组模式
+//   → 不是列表时按 orinalMessage 拆分（fallback）。插件处理列表出错时记录日志并输出 orinalMessage，这里同样处理。
+// 无法确认与 Python 结果相同的情况（例如文本含 \r，Python 与 JS 的正则 . 不同）返回 error，不猜测。
+
+/** JS 正则中 . / ^ / $ 视为换行、而 Python 不视为换行的字符 */
+const JS_LINE_BREAK = new RegExp('[\\r\\u2028\\u2029]')
+/** Python 的 str.isspace 字符（strip() 去掉的字符；与 JS 的 \s 不完全相同：JS 含 U+FEFF，不含 \x1c-\x1f 与 \x85） */
+const PY_SPACE = '\\t\\n\\v\\f\\r\\x1c-\\x20\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000'
+const PY_STRIP = new RegExp(`^[${PY_SPACE}]+|[${PY_SPACE}]+$`, 'g')
+const pyStrip = (s: string) => s.replace(PY_STRIP, '')
+/** Python 的真值判断（bool(x)） */
+const pyTruthy = (v: unknown) => !(v === false || v === null || v === undefined || v === 0 || v === '' || (Array.isArray(v) && !v.length) || (!!v && typeof v === 'object' && !Array.isArray(v) && !Object.keys(v).length))
+/** Python 的 f"{x:.2f}"：恰好在两位小数中间时按银行家舍入（JS 的 toFixed 向上），其他情况两者相同 */
+function pyFixed2(x: number): string {
+  const s = x * 100
+  const f = Math.floor(s)
+  // x * 8 为整数时 x * 100 精确，才可能恰好在中间
+  if (Number.isInteger(x * 8) && s - f === 0.5) return ((f % 2 === 0 ? f : f + 1) / 100).toFixed(2)
+  return x.toFixed(2)
+}
+/** Python float()：只接受十进制数字与一个小数点（插件的正则只会给出 [\d.]+） */
+const pyFloat = (s: string) => (/^(\d+\.?\d*|\.\d+)$/.test(s) ? Number(s) : null)
+
+/** 插件处理时会抛出异常的情况（AttributeError / ValueError 等）：插件输出 orinalMessage */
+class PyError extends Error {}
+/** 无法确认与插件结果相同 */
+class Unknowable extends Error {}
+
+interface TriggerItem {
+  text: string
+  active: boolean
+  strength: unknown
+}
+
+/** _parse_trigger_item：text 去空白；text 为 (词:权重) 时拆出词与权重（strength 为 null 时才用拆出的权重）；不允许调整权重时 strength 为 null */
+function parseTriggerItem(item: unknown, allow: boolean): TriggerItem {
+  if (!item || typeof item !== 'object' || Array.isArray(item)) throw new PyError('item.get')
+  const o = item as Record<string, unknown>
+  const raw = pyTruthy(o.text) ? o.text : ''
+  if (typeof raw !== 'string') throw new PyError('strip')
+  let text = pyStrip(raw)
+  let strength = o.strength ?? null
+  // Python 的 . 不匹配 \n，JS 还不匹配 \r、U+2028、U+2029；Python 的 \d 还匹配其他文字的数字
+  if (JS_LINE_BREAK.test(text) || /(?![0-9])\p{Nd}/u.test(text)) throw new Unknowable(`触发词「${text.slice(0, 30)}」含有特殊字符`)
+  const m = /^\((.+):([\d.]+)\)$/.exec(text)
+  if (m) {
+    text = pyStrip(m[1])
+    if (strength === null) strength = pyFloat(m[2])
+  }
+  return { text, active: pyTruthy(o.active ?? false), strength: allow ? strength : null }
+}
+
+/** _format_word_output：允许调整权重且有权重时输出 (词:权重两位小数) */
+function formatTriggerWord(base: string, strength: unknown, allow: boolean): string {
+  if (!allow || strength === null) return base
+  if (typeof strength === 'boolean') return `(${base}:${pyFixed2(Number(strength))})`
+  if (typeof strength !== 'number' || !Number.isFinite(strength)) throw new PyError('format')
+  return `(${base}:${pyFixed2(strength)})`
+}
+
+/** _normalize_trigger_words：按 ,{2,} 分组再按 , 分词、去空白、去空串后的集合 */
+function normalizeTriggerWords(s: unknown): Set<string> {
+  if (typeof s !== 'string' || !s) return new Set()
+  return new Set(s.split(/,{2,}/).flatMap((g) => g.split(',')).map(pyStrip).filter(Boolean))
+}
+
+/**
+ * TriggerWord Toggle (LoraManager) 的输出。
+ * inputs：节点的输入（快照中的值）；override：trigger_words 输入的值（连接时为它在运行时收到的文本，未知时由调用方处理）。
+ */
+export function triggerToggleOutput(inputs: Record<string, unknown>, override: unknown): { text: string } | { error: string } {
+  const om = unwrap(inputs.orinalMessage)
+  const original = typeof om === 'string' ? om : ''
+  const ov = unwrap(override)
+  if (pyTruthy(ov) && typeof ov === 'string') {
+    const a = normalizeTriggerWords(ov)
+    const b = normalizeTriggerWords(original)
+    if (a.size !== b.size || [...a].some((w) => !b.has(w))) return { text: ov }
+  }
+  let data = 'toggle_trigger_words' in inputs ? unwrap(inputs.toggle_trigger_words) : null
+  if (!pyTruthy(data)) return { text: original }
+  const groupMode = pyTruthy(inputs.group_mode)
+  const allow = pyTruthy(inputs.allow_strength_adjustment ?? false)
+  try {
+    if (typeof data === 'string') {
+      try {
+        data = parseJsonLoose(data)
+      } catch {
+        throw new PyError('json.loads')
+      }
+    }
+    if (!Array.isArray(data)) {
+      // 不是列表：按 orinalMessage 拆分
+      const parts = groupMode ? original.split(/,{2,}/).map(pyStrip).filter(Boolean) : original.split(',').map(pyStrip).filter(Boolean)
+      return { text: parts.join(', ') }
+    }
+    const list: unknown[] = data
+    const hasItems = (x: unknown) => !!x && typeof x === 'object' && !Array.isArray(x) && Array.isArray((x as Record<string, unknown>).items)
+    let out: string[]
+    if (groupMode && list.some(hasItems)) {
+      // _process_group_items：启用的组输出启用的子项（子项不带权重，按 ", " 拼接），没有启用的子项时跳过该组；组的权重套在外层
+      out = []
+      for (const item of list) {
+        const g = parseTriggerItem(item, allow)
+        if (!g.text || !g.active) continue
+        let text = g.text
+        if (hasItems(item)) {
+          const active = ((item as Record<string, unknown>).items as unknown[]).map((c) => parseTriggerItem(c, false)).filter((c) => c.text && c.active)
+          if (!active.length) continue
+          text = active.map((c) => c.text).join(', ')
+        }
+        out.push(formatTriggerWord(text, g.strength, allow))
+      }
+    } else if (groupMode && !allow) {
+      // 组模式、不允许调整权重：组的 text 原样输出（不拆分 (词:权重)）
+      out = list
+        .map((item) => {
+          if (!item || typeof item !== 'object' || Array.isArray(item)) throw new PyError('item.get')
+          const o = item as Record<string, unknown>
+          const raw = pyTruthy(o.text) ? o.text : ''
+          if (typeof raw !== 'string') throw new PyError('strip')
+          return { text: pyStrip(raw), active: pyTruthy(o.active ?? false) }
+        })
+        .filter((x) => x.text && x.active)
+        .map((x) => x.text)
+    } else {
+      // 组模式且允许调整权重，或非组模式：逐项解析权重后输出
+      out = list
+        .map((item) => parseTriggerItem(item, allow))
+        .filter((x) => x.text && x.active)
+        .map((x) => formatTriggerWord(x.text, x.strength, allow))
+    }
+    return { text: out.join(', ') }
+  } catch (e) {
+    if (e instanceof PyError) return { text: original }
+    if (e instanceof Unknowable) return { error: e.message }
+    throw e
+  }
+}
+
 /** Python re.sub 的常见用法转为 JS；无法确认等价时返回 null */
 function pyRegexReplace(s: string, pattern: string, repl: string, flags: { i: boolean; m: boolean; s: boolean }, count: number): string | null {
   if (/\(\?P|\(\?[aiLmsux]+\)|\\[AZ]/.test(pattern) || /[\\$]/.test(repl)) return null
@@ -148,28 +291,26 @@ export function evalText(api: ApiWorkflow, v: unknown, ctx: EvalContext = {}, se
   }
   const toggle = toggleStructure(n)
   if (toggle) {
-    // 与 ComfyUI-Lora-Manager 的 trigger_word_toggle.py 相同的分支（见 mapping.ts 的说明）
-    if (unwrap(i.allow_strength_adjustment) === true) return fail(`${label(api, nid)} 启用了触发词权重调整，输出在运行时决定`, [nid])
-    const original = typeof i.orinalMessage === 'string' ? i.orinalMessage : ''
-    const words = (s: string) => new Set(s.split(/,+/).map((x) => x.trim()).filter(Boolean))
-    const same = (a: string, b: string) => {
-      const x = words(a)
-      const y = words(b)
-      return x.size === y.size && [...x].every((w) => y.has(w))
-    }
+    // 与 ComfyUI-Lora-Manager 的 trigger_word_toggle.py 相同的分支（见 triggerToggleOutput）
+    const linked = ['group_mode', 'allow_strength_adjustment', 'toggle_trigger_words', 'orinalMessage'].filter((k) => isLink(i[k]))
+    if (linked.length) return fail(`${label(api, nid)} 的 ${linked.join('、')} 是连接，不是快照中的值，输出在运行时决定`, [nid])
     const inferred: string[] = []
-    let raw = ''
+    if ('allow_strength_adjustment' in i && typeof i.allow_strength_adjustment !== 'boolean')
+      inferred.push(`${label(api, nid)} 的 allow_strength_adjustment 不是布尔值（${JSON.stringify(i.allow_strength_adjustment).slice(0, 40)}），按 Python 的真值规则视为开启`)
+    let override: unknown = i.trigger_words
     if (isLink(i.trigger_words)) {
+      // trigger_words 在运行时由 LoRA Loader 输出（它加载的 LoRA 的触发词）。插件的网页界面在 Loader 变化时把同样的触发词写入 orinalMessage，
+      // 所以 Loader 加载的 LoRA 与工作流保存时相同时，两者的词集合相同，不会触发覆盖
       const loader = String(i.trigger_words[0])
       const orig = ctx.original?.[loader]
       if (!orig || !api[loader] || activeLoraNames(api[loader]).join('\n') !== activeLoraNames(orig).join('\n'))
         return fail(`${label(api, nid)} 输出 LoRA 触发词（来自 ${label(api, loader)}，加载的 LoRA 与工作流保存时不同，插件会绕过开关输出全部触发词），内容在运行时由插件读取`, [nid])
-      inferred.push(`${label(api, nid)} 的输出按工作流保存时的触发词与开关状态推断（假定 ${label(api, loader)} 输出的触发词与保存时相同）`)
-      raw = original
-    } else if (typeof i.trigger_words === 'string') raw = i.trigger_words
-    const list = (unwrap(i.toggle_trigger_words) as { text: string; active: boolean }[]) ?? []
-    const text = raw && !same(raw, original) ? raw : list.length ? list.filter((g) => g.active && g.text.trim()).map((g) => g.text.trim()).join(', ') : original
-    return { text, exact: !inferred.length, runtime: [], inferred, nodes: [nid] }
+      inferred.push(`${label(api, nid)} 的输出按节点中记录的触发词（orinalMessage）与开关状态推断（假定 ${label(api, loader)} 运行时输出的触发词与记录的相同）`)
+      override = null
+    }
+    const r = triggerToggleOutput(i, override)
+    if ('error' in r) return fail(`${label(api, nid)} 的输出无法确认与插件的计算结果相同：${r.error}`, [nid])
+    return { text: r.text, exact: !inferred.length, runtime: [], inferred, nodes: [nid] }
   }
   if (isLink(i.model) || isLink(i.clip)) return fail(`${label(api, nid)} 的文本输出（LoRA 触发词 / 已加载列表）在运行时产生`, [nid])
   if (/trigger/i.test(ct)) return fail(`${label(api, nid)} 是结构未验证的触发词节点，输出在运行时产生`, [nid])
