@@ -34,6 +34,7 @@ import {
   UPSCALE_IMAGE,
   UPSCALE_LORA,
   UPSCALE_OUTPUT,
+  UPSCALE_SEED,
   validateMapping,
 } from '@shared/mapping'
 import { suggestUpscaleMapping } from '@shared/upscale'
@@ -567,6 +568,8 @@ export function WorkflowEditor({ id, onDeleted, initialTab }: { id: number; onDe
                       'LoRA 列表替换为原图生成时的列表（含停用条目与 model / clip 权重）；单 LoRA Loader 只写入原图唯一启用的 LoRA'
                     ) : e.source === UPSCALE_OUTPUT ? (
                       '只取这个节点的图片作为放大结果；不写入任何值'
+                    ) : e.source === UPSCALE_SEED ? (
+                      '写入原图第一个采样器的 Seed（能从快照确定时）；不能确定时保持工作流的值并要求确认'
                     ) : (
                       '每张图使用计划中分配的 Seed'
                     )}

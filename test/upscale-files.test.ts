@@ -205,7 +205,7 @@ describe('批量放大：文件来源的执行（模拟 ComfyUI）', () => {
     const [u] = s.listUnits(r.runId!)
     expect(u.status).toBe('done')
     const src = u.meta.upscale!.source
-    expect(src).toMatchObject({ kind: 'file', unit_id: null, run_id: null, output: null, snapshot: 'file', path: file })
+    expect(src).toMatchObject({ kind: 'file', unit_id: null, run_id: null, output: null, snapshot: 'file', path: file, seed: 1 })
     // LoadImage 实际读取的是这张原图（内容相同）
     const [[pid, g]] = mock.submitted
     const loaded = mock.loaded.find(([p]) => p === pid)!

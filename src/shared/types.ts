@@ -593,6 +593,10 @@ export interface RecoveredGeneration {
   negative_exact: boolean
   checkpoint: string | null
   loras: RecoveredLora[] | null
+  /** 原图第一个采样器的 Seed：只有能从快照静态确定时才有值（字面值，或来自只输出一个整数的节点）；旧数据没有这个字段 */
+  seed?: number | null
+  /** Seed 的来源说明，或无法确定的原因 */
+  seed_note?: string | null
   issues: UpscaleIssue[]
 }
 export interface UpscaleMeta {

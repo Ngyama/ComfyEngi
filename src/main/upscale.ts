@@ -5,7 +5,7 @@
 import { createHash, randomUUID } from 'node:crypto'
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
 import { basename, dirname, extname, join, resolve } from 'node:path'
-import { applyInputs, primaryOutputIndex, UPSCALE_IMAGE } from '@shared/mapping'
+import { applyInputs, primaryOutputIndex, UPSCALE_IMAGE, UPSCALE_SEED } from '@shared/mapping'
 import { parseJsonLoose } from '@shared/prompt-source'
 import type { ApiWorkflow, InputValue, MappingEntry, OutputFile, RunUnit, UnitMeta, UpscaleIssue, UpscaleMeta, Workflow } from '@shared/types'
 import { isFileSelection, recoverGeneration, upscaleInputs, upscaleWorkflowProblems, type UpscaleCandidate, type UpscalePlan, type UpscaleSelection, type UpscaleSkipped, type UpscaleFolderScan } from '@shared/upscale'
@@ -117,7 +117,7 @@ function fileSource(file: string): Source {
     prompt_id: null,
     attempt_id: null,
     snapshot: 'file',
-    seed: null,
+    seed: rec.seed ?? null,
   }
   return { cand: { ...cand, positive: rec.positive, negative: rec.negative, checkpoint: rec.checkpoint, loras: rec.loras, snapshot: 'file' }, unit: null, rec, meta, sha }
 }
@@ -303,7 +303,7 @@ export function enqueueUpscale(store: Store, sels: UpscaleSelection[], workflowI
     const upload = { name: `u${sha.slice(0, 16)}_${randomUUID().replace(/-/g, '').slice(0, 10)}${ext}`, subfolder: UPLOAD_SUBFOLDER }
     const up = upscaleInputs(wf, s.rec, `${upload.subfolder}/${upload.name}`)
     if (!up.inputs) {
-      skip(up.issues[0]?.text ?? '无法构建')
+      skip(up.issues.find((i) => i.level === 'block')?.text ?? '无法构建')
       continue
     }
     // 运行记录来源沿用原图的任务信息；文件来源只有文件所在的文件夹
@@ -345,7 +345,8 @@ export function enqueueUpscale(store: Store, sels: UpscaleSelection[], workflowI
       // 写入放大工作流的正负 Prompt（与 inputs 中的值相同），用于运行记录的显示与搜索
       positive: String(up.inputs.find((x) => x.source === 'positive')?.value ?? s.rec.positive ?? ''),
       negative: String(up.inputs.find((x) => x.source === 'negative')?.value ?? s.rec.negative ?? ''),
-      seed: 0,
+      // 映射了「放大：Seed」时为写入的 Seed，否则为 0（采样参数保持放大工作流的值）
+      seed: Number(up.inputs.find((x) => x.source === UPSCALE_SEED)?.value ?? 0),
       inputs: up.inputs,
     })
   }

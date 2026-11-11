@@ -25,6 +25,7 @@ import {
   UPSCALE_IMAGE,
   UPSCALE_LORA,
   UPSCALE_OUTPUT,
+  UPSCALE_SEED,
   validateMapping,
 } from './mapping'
 import { controlInputs, controlProblems, controlsOf, mergeControlInputs, withTriggerCuts } from './node-controls'
@@ -511,7 +512,7 @@ export function recoverGeneration(graph: ApiWorkflow, opts: { original?: ApiWork
   const ctx: EvalContext = { original: opts.original }
   const issues: UpscaleIssue[] = []
   const samplers = findSamplers(graph)
-  const empty = { positive: null, negative: null, positive_exact: false, negative_exact: false, checkpoint: null, loras: null, issues, raw: new Map() }
+  const empty = { positive: null, negative: null, positive_exact: false, negative_exact: false, checkpoint: null, loras: null, seed: null, seed_note: '原图的工作流中找不到采样器', issues, raw: new Map() }
   if (!samplers.length) {
     issues.push({ level: 'block', text: '原图的工作流中找不到采样器，无法确定 Prompt、Checkpoint 与 LoRA' })
     return empty
@@ -560,9 +561,54 @@ export function recoverGeneration(graph: ApiWorkflow, opts: { original?: ApiWork
     negative_exact: !!neg?.r.exact,
     checkpoint: chain.checkpoint,
     loras: chain.loras,
+    ...originalSeed(graph, samplers),
     issues,
     raw: chain.raw,
   }
+}
+
+const isSeed = (v: unknown): v is number => typeof v === 'number' && Number.isSafeInteger(v) && v >= 0
+/** 只输出自己的一个整数值的节点（种子节点、整数常量） */
+const SEED_SOURCE_CLASSES = new Set(['SeedNode', 'easy int', 'easy seed', 'PrimitiveInt'])
+
+/**
+ * 原图第一个采样器（上游没有其他采样器的那个）的 Seed。只接受字面值，或连接到只输出一个整数的节点（SeedNode、easy int、PrimitiveInt 等，
+ * 节点没有连接输入、只有一个数字输入）；其他情况（运算节点、随机节点、超出 JSON 能精确表示的范围）返回 null 与原因，不猜测。
+ */
+function originalSeed(graph: ApiWorkflow, samplers: string[]): { seed: number | null; seed_note: string } {
+  const ups = new Map(samplers.map((s) => [s, upstreamOf(graph, s)]))
+  const first = samplers.find((s) => !samplers.some((o) => o !== s && ups.get(s)!.has(o))) ?? samplers[0]
+  const inputs = graph[first].inputs
+  const key = 'seed' in inputs ? 'seed' : 'noise_seed' in inputs ? 'noise_seed' : null
+  const at = `原图第一个采样器 ${label(graph, first)}`
+  if (!key) return { seed: null, seed_note: `${at} 没有 seed / noise_seed 输入` }
+  const v = inputs[key]
+  if (isSeed(v)) return { seed: v, seed_note: `${at} 的 ${key}` }
+  if (!isLink(v)) return { seed: null, seed_note: `${at} 的 ${key} 不是可以精确确定的非负整数（${JSON.stringify(v)}）` }
+  const nid = String(v[0])
+  const n = graph[nid]
+  if (!n) return { seed: null, seed_note: `${at} 的 ${key} 连接的节点 #${nid} 不存在` }
+  const vals = Object.values(n.inputs ?? {})
+  const nums = vals.filter((x): x is number => typeof x === 'number')
+  if (!SEED_SOURCE_CLASSES.has(n.class_type) || Number(v[1]) !== 0 || vals.some(isLink) || nums.length !== 1)
+    return { seed: null, seed_note: `${at} 的 ${key} 来自 ${label(graph, nid)}，不是只输出一个整数的节点（支持 ${[...SEED_SOURCE_CLASSES].join('、')}），无法从快照确定实际使用的值` }
+  if (!isSeed(nums[0])) return { seed: null, seed_note: `${at} 的 ${key} 来自 ${label(graph, nid)}，值 ${nums[0]} 不是可以精确确定的非负整数` }
+  return { seed: nums[0], seed_note: `${at} 的 ${key}，来自 ${label(graph, nid)}` }
+}
+
+/** 节点的全部上游节点 */
+function upstreamOf(graph: ApiWorkflow, nid: string): Set<string> {
+  const out = new Set<string>()
+  const stack = [nid]
+  while (stack.length) {
+    const cur = stack.pop()!
+    for (const v of Object.values(graph[cur]?.inputs ?? {}))
+      if (isLink(v) && !out.has(String(v[0]))) {
+        out.add(String(v[0]))
+        stack.push(String(v[0]))
+      }
+  }
+  return out
 }
 
 // ---------------------------------------------------------------- 放大工作流
@@ -609,8 +655,8 @@ export function upscaleWorkflowProblems(wf: UpWorkflow): Message[] {
 export const upscaleOutputNodes = (mapping: MappingEntry[]) => [...new Set(mapping.filter((m) => m.source === UPSCALE_OUTPUT).map((m) => String(m.node)))]
 
 /**
- * 一张图写入放大工作流的值。只写入映射的输入图片、正负 Prompt、Checkpoint、LoRA 加载节点、禁止触发词注入与工作流的节点控制，
- * 其他映射（Seed、尺寸、文件名前缀、LoRA 槽位）一律不写入。有 block 级问题时 inputs 为 null。
+ * 一张图写入放大工作流的值。只写入映射的输入图片、正负 Prompt、Checkpoint、LoRA 加载节点、禁止触发词注入、「放大：Seed」与工作流的节点控制，
+ * 其他映射（生成用的 Seed、尺寸、文件名前缀、LoRA 槽位）一律不写入。有 block 级问题时 inputs 为 null。
  */
 export function upscaleInputs(wf: UpWorkflow, rec: RecoveredGeneration & { raw?: Map<RecoveredLora, Record<string, unknown>> }, image: string): { inputs: InputValue[] | null; issues: UpscaleIssue[] } {
   const api = wf.api_json ?? {}
@@ -618,6 +664,7 @@ export function upscaleInputs(wf: UpWorkflow, rec: RecoveredGeneration & { raw?:
   const issues: UpscaleIssue[] = []
   const block = (text: string) => issues.push({ level: 'block', text })
   const out: InputValue[] = []
+  let seedNoted = false
   for (const e of mapping) {
     const node = String(e.node)
     const n: ApiNode | undefined = api[node]
@@ -669,8 +716,16 @@ export function upscaleInputs(wf: UpWorkflow, rec: RecoveredGeneration & { raw?:
       out.push({ node, input: 'lora_name', source: UPSCALE_LORA, value: name })
       for (const k of ld.strengths) out.push({ node, input: k, source: UPSCALE_LORA, value: l ? (/clip/i.test(k) ? l.clip : l.strength) : 0 })
     } else if (e.source === TRIGGER_DISABLE) out.push(...toggleDisableInputs(node, n))
+    else if (e.source === UPSCALE_SEED) {
+      // 能确定时写入原图的 Seed；不能确定时保持放大工作流的值并要求确认（不猜测）
+      if (rec.seed != null) {
+        out.push({ node, input: e.input, source: e.source, value: rec.seed })
+        if (!seedNoted) issues.push({ level: 'note', text: `Seed：写入原图的 ${rec.seed}（${rec.seed_note ?? '原图'}）` })
+      } else issues.push({ level: 'confirm', text: `无法确定原图的 Seed（${rec.seed_note ?? '没有 Seed 信息'}）：${label(api, node)} 的 ${e.input} 保持放大工作流的值（${JSON.stringify(n?.inputs?.[e.input] ?? null)}）` })
+      seedNoted = true
+    }
   }
-  if (issues.length) return { inputs: null, issues }
+  if (issues.some((i) => i.level === 'block')) return { inputs: null, issues }
   const controls = controlsOf(wf)
   if (controlProblems(api, mapping, controls).some(([l]) => l === 'error')) return { inputs: null, issues: [{ level: 'block', text: `放大工作流「${wf.name}」的节点控制有错误，请在工作流页面检查` }] }
   const merged = mergeControlInputs(api, out, controlInputs(api, controls))

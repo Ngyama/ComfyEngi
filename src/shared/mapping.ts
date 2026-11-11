@@ -36,6 +36,8 @@ export const SOURCES: [string, string][] = [
   ['upscale_checkpoint', '放大：Checkpoint 名称'],
   ['upscale_lora', '放大：LoRA 加载节点'],
   ['upscale_output', '放大：最终输出节点'],
+  // 可选：写入原图第一个采样器的 Seed（能静态确定时）；不映射时放大工作流的 Seed 保持原值
+  ['upscale_seed', '放大：Seed'],
 ]
 export const SIZE_SOURCES = ['width', 'height']
 export const UPSCALE_IMAGE = 'upscale_image'
@@ -43,7 +45,9 @@ export const UPSCALE_CHECKPOINT = 'upscale_checkpoint'
 export const UPSCALE_LORA = 'upscale_lora'
 /** 指定最终输出节点（不写入任何值，只决定从哪个节点取图） */
 export const UPSCALE_OUTPUT = 'upscale_output'
-export const UPSCALE_SOURCES = [UPSCALE_IMAGE, UPSCALE_CHECKPOINT, UPSCALE_LORA, UPSCALE_OUTPUT]
+/** 写入原图的 Seed（可以映射到多个节点，例如二次采样与分区放大各自的 Seed 输入） */
+export const UPSCALE_SEED = 'upscale_seed'
+export const UPSCALE_SOURCES = [UPSCALE_IMAGE, UPSCALE_CHECKPOINT, UPSCALE_LORA, UPSCALE_OUTPUT, UPSCALE_SEED]
 /** 映射了「放大：输入图片」的工作流是放大工作流 */
 export const isUpscaleMapping = (mapping: Pick<MappingEntry, 'source'>[] | null | undefined) => (mapping ?? []).some((m) => m.source === UPSCALE_IMAGE)
 /** 映射来源：禁止 TriggerWord Toggle 注入触发词（由工作流检查中的开关添加，不出现在手动映射列表） */
@@ -397,7 +401,7 @@ export function validateMapping(api: ApiWorkflow, mapping: MappingEntry[]): Mess
     if (PROMPT_SOURCES.includes(src) || src.endsWith('_name') || src === 'filename_prefix' || src === UPSCALE_IMAGE || src === UPSCALE_CHECKPOINT) {
       if (typeof cur !== 'string')
         out.push(['warning', `${tag}：${label} 的「${inp}」当前值不是文本（${describeValue(cur)}），请确认是否映射正确`])
-    } else if (src === 'seed' || SIZE_SOURCES.includes(src)) {
+    } else if (src === 'seed' || src === UPSCALE_SEED || SIZE_SOURCES.includes(src)) {
       if (!isInt(cur)) out.push(['warning', `${tag}：${label} 的「${inp}」当前值不是整数（${describeValue(cur)}）`])
     } else if (src.endsWith('_strength')) {
       if (typeof cur !== 'number') out.push(['warning', `${tag}：${label} 的「${inp}」当前值不是数字（${describeValue(cur)}）`])
@@ -420,7 +424,7 @@ export function validateMapping(api: ApiWorkflow, mapping: MappingEntry[]): Mess
     if (!sources.has(UPSCALE_CHECKPOINT)) out.push(['warning', '放大工作流没有映射「放大：Checkpoint 名称」：放大时使用工作流中的 Checkpoint，不恢复原图的 Checkpoint'])
     if (!sources.has(UPSCALE_LORA)) out.push(['warning', '放大工作流没有映射「放大：LoRA 加载节点」：放大时不恢复原图的 LoRA'])
     for (const s of ['seed', 'width', 'height', 'filename_prefix'])
-      if (sources.has(s)) out.push(['warning', `放大工作流中的「${SOURCE_LABELS[s]}」映射不会写入：放大时采样参数、尺寸与文件名前缀都保持工作流原值`])
+      if (sources.has(s)) out.push(['warning', `放大工作流中的「${SOURCE_LABELS[s]}」映射不会写入：放大时采样参数、尺寸与文件名前缀都保持工作流原值${s === 'seed' ? `（要使用原图的 Seed，请改为映射「${SOURCE_LABELS[UPSCALE_SEED]}」）` : ''}`])
   } else if (!sources.has('seed')) out.push(['warning', '未映射 Seed，所有图片将使用工作流中原有的固定 Seed'])
   return out
 }
@@ -435,6 +439,7 @@ export function guessInput(source: string, inputs: Record<string, unknown>): str
   let pref: string[]
   if (PROMPT_SOURCES.includes(source)) pref = ['text']
   else if (source === 'seed') pref = ['seed', 'noise_seed']
+  else if (source === UPSCALE_SEED) pref = ['seed', 'noise_seed', 'value', 'int']
   else if (SIZE_SOURCES.includes(source)) pref = [source, 'value', 'int', 'Value']
   else if (source === UPSCALE_IMAGE) pref = ['image']
   else if (source === UPSCALE_CHECKPOINT) pref = ['ckpt_name', 'value']
