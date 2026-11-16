@@ -236,6 +236,16 @@ function planInternal(store: Store, sels: UpscaleSelection[], workflowId: number
     if (m.source.unit_id != null && m.source.output != null) busyRun.add(`${keyOf(m.source.unit_id, m.source.output)}@${m.workflow.id}`)
     if (m.source.sha256) busySha.add(`${m.source.sha256}@${m.workflow.id}`)
   }
+  // 已经用同一个放大工作流成功放大过的图（同一输出，或内容相同的文件）：需要确认，重新选择整个文件夹时默认只跑没跑过的
+  const doneRun = new Map<string, RunUnit>()
+  const doneSha = new Map<string, RunUnit>()
+  for (const u of store.listSection(UPSCALE_SECTION, ['done'], 100000)) {
+    const m = u.meta?.upscale
+    if (!m) continue
+    if (m.source.unit_id != null && m.source.output != null) doneRun.set(`${keyOf(m.source.unit_id, m.source.output)}@${m.workflow.id}`, u)
+    if (m.source.sha256) doneSha.set(`${m.source.sha256}@${m.workflow.id}`, u)
+  }
+  const resultOf = (u: RunUnit) => u.outputs?.find((o) => o.role === 'final' && o.saved)?.saved ?? u.outputs?.find((o) => o.saved)?.saved ?? ''
   const runs = new Map<number, ReturnType<Store['getRun']>>()
   const seen = new Set<string>()
   const seenSha = new Map<string, string>()
@@ -247,6 +257,13 @@ function planInternal(store: Store, sels: UpscaleSelection[], workflowId: number
     const dup = (text: string) => src.cand.issues.unshift({ level: 'block', text })
     if (wf && src.cand.kind === 'run' && busyRun.has(`${src.cand.key}@${wf.id}`)) dup(`这张图已在放大队列中（使用「${wf.name}」，等待或正在处理），不重复加入`)
     else if (wf && src.sha && busySha.has(`${src.sha}@${wf.id}`)) dup(`内容相同的图片（SHA-256 相同）已在放大队列中（使用「${wf.name}」，等待或正在处理），不重复加入`)
+    else if (wf) {
+      const done = (src.cand.kind === 'run' ? doneRun.get(`${src.cand.key}@${wf.id}`) : undefined) ?? (src.sha ? doneSha.get(`${src.sha}@${wf.id}`) : undefined)
+      if (done) {
+        const at = resultOf(done)
+        src.cand.issues.unshift({ level: 'confirm', text: `已经用「${wf.name}」放大过${at ? `（结果：${at}）` : ''}：勾选「同时加入「需要确认」的图片」才会再放大一次，新结果另存为带 (2) 的文件名，不覆盖` })
+      }
+    }
     if (src.sha) {
       const prev = seenSha.get(src.sha)
       if (prev) dup(`与这次选择的「${prev}」内容相同（SHA-256 相同），不重复加入`)

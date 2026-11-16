@@ -222,5 +222,18 @@ describe('批量放大：文件来源的执行（模拟 ComfyUI）', () => {
     expect(readFileSync(file).equals(data)).toBe(true)
     // 再次扫描文件夹时不包含放大结果
     expect(scanUpscaleFolder(dir, true).files).toEqual([file])
+    // 已放大过：同一工作流需要确认（默认不加入）；复制到别处的同一内容也识别；换一个工作流可以直接加入
+    const copy = join(tempDir(), 'copy.png')
+    writeFileSync(copy, data)
+    for (const f of [file, copy]) {
+      const [c] = planUpscale(s, [{ file: f }], upId).candidates
+      expect(c.state).toBe('confirm')
+      expect(c.issues[0].text).toBe(`已经用「放大工作流」放大过（结果：${fin.saved}）：勾选「同时加入「需要确认」的图片」才会再放大一次，新结果另存为带 (2) 的文件名，不覆盖`)
+    }
+    const skipped = enqueueUpscale(s, [{ file }], upId)
+    expect(skipped.runId).toBeNull()
+    expect(skipped.skipped[0].reason).toMatch(/^已经用「放大工作流」放大过/)
+    const other = s.save('workflows', { name: '另一个', api_json: UP, mapping: UP_MAP })
+    expect(planUpscale(s, [{ file }], other).candidates[0].state).toBe('ok')
   })
 })

@@ -6,7 +6,7 @@ import { INSTALL_DIR_ERROR, insideInstallDir } from './install-dir'
 
 import { appendFileSync, mkdirSync } from 'node:fs'
 import { join } from 'node:path'
-import { app, BrowserWindow, dialog, protocol, shell } from 'electron'
+import { app, BrowserWindow, dialog, powerSaveBlocker, protocol, shell } from 'electron'
 import { LoraManager } from './lora-manager'
 import { RUNNER_EVENT_CHANNEL } from '@shared/api'
 import type { RunnerEvent } from '@shared/types'
@@ -49,7 +49,17 @@ if (!app.requestSingleInstanceLock()) {
   let runner: Runner
   const logs: string[] = []
 
+  // 执行器工作时阻止系统睡眠（屏幕仍可关闭），暂停、停止、完成后恢复：挂机跑队列时不会因睡眠中断
+  let sleepBlock: number | null = null
+  const keepAwake = (on: boolean) => {
+    if (on && sleepBlock == null) sleepBlock = powerSaveBlocker.start('prevent-app-suspension')
+    else if (!on && sleepBlock != null) {
+      powerSaveBlocker.stop(sleepBlock)
+      sleepBlock = null
+    }
+  }
   const send = (e: RunnerEvent) => {
+    if (e.kind === 'status') keepAwake(['running', 'waiting', 'pausing', 'stopping'].includes(e.status.state))
     if (e.kind === 'log') {
       logs.push(e.text)
       if (logs.length > 1000) logs.splice(0, logs.length - 1000)

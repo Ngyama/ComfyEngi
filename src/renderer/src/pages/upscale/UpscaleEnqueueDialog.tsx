@@ -214,7 +214,7 @@ export function UpscaleEnqueueDialog({ items, header, onClose, onEnqueued }: { i
               {conf > 0 && (
                 <label className="flex items-start gap-2 rounded-xl bg-warning/10 p-3 text-xs leading-relaxed">
                   <Checkbox checked={accept} onCheckedChange={(v) => setAccept(v === true)} className="mt-0.5" />
-                  <span>同时加入「需要确认」的 {conf} 张：这些图的生成条件不能完全从记录中确定（见各项说明），只会写入能确定的部分。</span>
+                  <span>同时加入「需要确认」的 {conf} 张（原因见各项说明）：生成条件不能完全确定的只写入能确定的部分；已经放大过的会再放大一次，结果另存，不覆盖。</span>
                 </label>
               )}
               <div className="space-y-1.5">
