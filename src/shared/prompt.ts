@@ -9,7 +9,7 @@ export const MODULES: [string, string][] = [
   ['camera', '镜头'],
   ['character', '主角色'],
   ['outfit', '主角色服装'],
-  ['content', '主角色状态 / 局部姿态 / 剧情场景'],
+  ['content', '人物动作 Prompt / 主角色状态 / 剧情场景'],
   ['expression', '主角色表情'],
   ['interaction', '动作卡（基础 Prompt / 子体位 / 双人互动）'],
   ['male', '旧版男性描述'],

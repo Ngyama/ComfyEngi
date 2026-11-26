@@ -53,6 +53,11 @@ export class FileLibrary {
   /** 期望的文件名（不含扩展名与重名序号）。服装带上所属角色名，避免各角色的同名服装难以区分 */
   private baseName(row: Row): string {
     if (row.type === 'outfits') return safeFileName(`${this.entries.get(`characters:${row.character_id}`)?.row.name || '未命名'} - ${row.name || '未命名'}`)
+    // 人物动作 Prompt 没有名称：文件名为「情绪组 - 视角 - 体位」（分类改名时一起改名）
+    if (row.type === 'templates' && row.kind === 'action') {
+      const cat = (id: unknown, missing: string) => this.entries.get(`templates:${id}`)?.row.name || missing
+      return safeFileName(`${cat(row.mood_id, '未分组')} - ${row.pov ? 'POV' : '非POV'} - ${cat(row.posture_id, '未分类')}${row.name ? ` - ${row.name}` : ''}`)
+    }
     return safeFileName(row.name)
   }
   private fits(path: string, base: string): boolean {
@@ -280,7 +285,7 @@ export class FileLibrary {
     delete row._revision
     delete row._folder
     if (table === 'outfits' && !this.entries.has(`characters:${row.character_id}`)) throw new Error('服装角色不存在')
-    const dir = table === 'templates' ? `prompts/${({state:'states',pose:'poses',expression:'expressions',camera:'cameras',male:'male',global:'global',scene:'scenes',position:'positions',subposition:'positions',card_tpl:'card-templates',act:'acts'} as Row)[row.kind] || 'global'}` : table === 'workflows' ? 'workflows' : `prompts/${table}`
+    const dir = table === 'templates' ? `prompts/${({state:'states',pose:'poses',expression:'expressions',camera:'cameras',male:'male',global:'global',scene:'scenes',position:'positions',subposition:'positions',card_tpl:'card-templates',act:'acts',mood:'action-moods',posture:'action-postures',action:'actions'} as Row)[row.kind] || 'global'}` : table === 'workflows' ? 'workflows' : `prompts/${table}`
     mkdirSync(join(this.root,dir),{recursive:true})
     const newDir = table === 'characters' && opts.folder ? this.folderPath(opts.folder) : join(this.root,dir)
     const path = old?.path || (table === 'workflows' ? join(this.root,dir,`${id}-${randomUUID()}.json`) : this.freePath(newDir, this.baseName(row)))
@@ -293,7 +298,10 @@ export class FileLibrary {
     if (old && old.row.name !== row.name) {
       this.syncName(key)
       if (table === 'characters') for (const [k, e] of this.entries) if (e.row.type === 'outfits' && e.row.character_id === id) this.syncName(k)
+      if (table === 'templates' && (row.kind === 'mood' || row.kind === 'posture')) for (const [k, e] of this.entries) if (e.row.type === 'templates' && e.row.kind === 'action' && (e.row.mood_id === id || e.row.posture_id === id)) this.syncName(k)
     }
+    // 人物动作 Prompt 移到另一个组合：文件名随分类变化
+    if (old && table === 'templates' && row.kind === 'action' && (old.row.mood_id !== row.mood_id || old.row.posture_id !== row.posture_id || !!old.row.pov !== !!row.pov)) this.syncName(key)
     return id
   }
   remove(table:string,id:number) {

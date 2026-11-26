@@ -6,6 +6,7 @@
 import { drawCamera, drawPool, effectivePool, fixedConflicts, isSoloCard, poolsOf, resolvePool, unitRandom } from './cards'
 import { APPENDED, cardTemplates, categoryLabel, drawBehavior, drawTemplate, fillTemplate, isTemplateCard, legacyExpressionIds, pickedTemplates, TEMPLATE_SLOTS, templatePlaceholders } from './card-templates'
 import { compose, fillPlaceholders, joinParts, unescapeSeparator } from './prompt'
+import { actionParts, anchorMessage, anchorProblem, composeActionPrompt, FEMALE_TAG, legacyPlaceholders, MALE_TAG, promptAnchors, tagAnchors } from './action-prompts'
 import type {
   CardPick,
   CardPoolKey,
@@ -103,6 +104,11 @@ export function newItem(stateId: number | null = null, outfitId: number | null =
 /** 双人互动条目：主体位（可带子体位）；secondEnabled 为 true 时第二角色同时出场 */
 export function newInteractionItem(positionId: number, subpositionId: number | null = null, outfitId: number | null = null, secondEnabled = false): TaskItem {
   return { ...newItem(null, outfitId), position_id: positionId, subposition_id: subpositionId, second_enabled: secondEnabled }
+}
+
+/** 人物动作 Prompt 条目：直接引用 Prompt 库中的一份完整 Prompt */
+export function newActionItem(actionId: number, outfitId: number | null = null): TaskItem {
+  return { ...newItem(null, outfitId), action_id: actionId }
 }
 
 /** 动作卡条目：使用动作卡保存的默认组合规则（不需要再选择姿态、表情、互动） */
@@ -664,7 +670,93 @@ export function expandTask(data: TaskData, lib: PlanLibrary, settings: Settings,
     })
   }
 
+  /**
+   * 人物动作 Prompt：每张图都使用同一份用户写好的完整 Prompt（内部变化由 Wildcard 与工作流负责）。
+   * 全局、场景、镜头在前，附加在末尾；主角色特征与服装插在 1girl 之后，第二角色的插在 1man 之后。
+   * 第二角色只在任务选择了第二角色、且 Prompt 中有 1man 时出场（加入其 LoRA）。
+   * 负面 Prompt 仍按模块拼接（与其他动作相同）；Prompt 自己的负面作为 content 模块的负面
+   */
+  const expandAction = (it: TaskItem, pi: number) => {
+    const t = tpl(it.action_id)
+    if (!t || t.kind !== 'action') return void errors.push(`第 ${pi + 1} 个动作：引用的人物动作 Prompt 已被删除，请重新选择`)
+    const parts = actionParts(t, (id) => lib.templates.get(id))
+    const label = `${parts.mood} / ${parts.view} / ${parts.posture}`
+    const where = `第 ${pi + 1} 个动作「${label}」`
+    const body = t.positive ?? ''
+    if (!body.trim()) errors.push(`${where}：Prompt 内容为空，请在「动作 Prompt」中填写`)
+    const outfit = checkOutfit(it.outfit_id, where)
+    const cameras = cameraCandidates(it, where)
+    const scene = it.scene_id ? tpl(it.scene_id) : defaultScene
+    if (it.scene_id && !scene) errors.push(`${where}：所选场景已被删除`)
+    const anchors = promptAnchors(body)
+    // 主角色：有特征或服装要插入时，1girl 必须是唯一的独立 Tag
+    const female = [char?.positive, outfit?.positive]
+    if (female.some((x) => (x ?? '').trim()) && anchorProblem(anchors.girl)) errors.push(`${where}：${anchorMessage(FEMALE_TAG, anchors.girl, '主角色特征与服装')}`)
+    if (char && tagAnchors(char.positive ?? '', FEMALE_TAG).top.length && anchors.girl.top.length === 1) onceWarn(`${where}：主角色「${char.name}」的基础 Prompt 中也有 1girl，插入后会出现两次`)
+    // 第二角色：任务选择了第二角色时，Prompt 中有 1man 才出场；没有 1man 时为单人画面
+    const manCount = anchors.man.top.length + anchors.man.nested
+    let second = false
+    if (char2) {
+      if (!manCount) onceWarn(`${where}：Prompt 中没有 1man，第二角色「${char2.name}」不出场（不加入其特征、服装与 LoRA）`)
+      else if (anchorProblem(anchors.man)) errors.push(`${where}：${anchorMessage(MALE_TAG, anchors.man, '第二角色特征与服装')}`)
+      else second = true
+    }
+    const outfit2 = second ? checkOutfit(it.second_outfit_id, `${where}（第二角色）`, char2) : null
+    const legacy = legacyPlaceholders(body)
+    if (legacy.length) onceWarn(`${where}：Prompt 中有旧版模板占位符 ${legacy.join(' ')}，新版不会替换它们（会原样提交），请在「动作 Prompt」中删除`)
+    const sized = !!it.sizes
+    const count = sized ? sizeTotal(it.sizes) : toInt(it.count)
+    if (count <= 0) {
+      errors.push(sized ? `${where}：竖图、横图、方图的张数都为 0，请至少为一种尺寸设置张数` : `${where}：生成张数必须大于 0`)
+      return
+    }
+    const slots = sized ? sizeSchedule(it.sizes, 0).map((s) => s.size) : Array.from({ length: count }, () => undefined)
+    slots.forEach((size, k) => {
+      const camera = drawCamera(cameras, comboSeed, pi, k)
+      const m = baseModules(outfit)
+      m.scene = scene ? filled(scene, char) : ['', '']
+      m.camera = filled(camera, char)
+      m.content = [body, t.negative ?? '']
+      m.extra = [fillPlaceholders(it.extra_positive ?? '', char), fillPlaceholders(it.extra_negative ?? '', char)]
+      if (second) {
+        m.character2 = pair(char2)
+        m.outfit2 = pair(outfit2)
+      }
+      const r = composeActionPrompt({ body, global: m.global[0], scene: m.scene[0], camera: m.camera[0], extra: m.extra[0], female: [m.character[0], m.outfit[0]], male: second ? [m.character2![0], m.outfit2![0]] : null })
+      const meta: UnitMeta = {
+        task: taskName,
+        character: charName,
+        story: story?.name ?? '',
+        genre: story?.genre ?? '',
+        section: '动作',
+        item: label,
+        item_no: pi + 1,
+        outfit: outfit?.name ?? '',
+        expression: '',
+        camera: camera?.name ?? '',
+        male: false,
+        male_templates: [],
+        n: k + 1,
+        of: count,
+        action: { id: t.id, ...parts },
+      }
+      if (cameras.length > 1) meta.combo_seed = comboSeed
+      if (scene) meta.scene = scene.name
+      if (second) {
+        meta.character2 = char2!.name
+        if (outfit2) meta.outfit2 = outfit2.name
+      }
+      if (size) {
+        meta.size = size.label
+        meta.width = size.width
+        meta.height = size.height
+      }
+      add('pose', pi, label, k, m, meta, second, size, r.positive)
+    })
+  }
+
   ;(data.items ?? []).forEach((it, pi) => {
+    if (it.action_id != null) return expandAction(it, pi)
     if (it.card_id != null) return expandCard(it, pi)
     let where = `第 ${pi + 1} 个动作`
     const stateIds = itemStateIds(it)

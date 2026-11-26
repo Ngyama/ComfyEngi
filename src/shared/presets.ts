@@ -3,6 +3,7 @@
 // 生成时总是使用素材库中的最新内容。保存时记录引用素材的内容指纹，之后素材被修改或删除时给出提示（不阻止使用，也不自动替换）。
 // 服装属于角色，保存为「服装槽位」：导入时每个槽位选择一次当前角色的服装，应用到所有使用该槽位的动作。
 
+import { actionLabel } from './action-prompts'
 import { cardTemplates, isTemplateCard } from './card-templates'
 import { itemCameraIds, itemStateIds, itemStateIds2, newItem, sizeTotal } from './planner'
 import type { Outfit, OutfitSlot, PresetData, PresetItem, PresetKind, RefStamp, TaskItem, Template } from './types'
@@ -23,6 +24,7 @@ export function fingerprint(t: Pick<Template, 'positive' | 'negative'>): string 
 /** 一个动作引用的全部素材 ID（动作卡、场景、镜头、表情、行为，以及旧方式动作的状态、主体位等） */
 export function itemRefIds(it: Partial<TaskItem>): number[] {
   const list = [
+    it.action_id,
     it.card_id,
     it.scene_id,
     ...itemCameraIds(it),
@@ -72,7 +74,7 @@ export function presetFromItems(items: TaskItem[], ctx: { templates: Template[];
   const byId = new Map(ctx.templates.map((t) => [t.id, t]))
   const refs: Record<string, RefStamp> = {}
   const stamp = (t: Template) => {
-    refs[String(t.id)] ??= { name: t.name, kind: t.kind, hash: fingerprint(t) }
+    refs[String(t.id)] ??= { name: t.kind === 'action' ? actionLabel(t, (id) => byId.get(id)) : t.name, kind: t.kind, hash: fingerprint(t) }
     return refs[String(t.id)]
   }
   for (const it of items)
@@ -110,6 +112,7 @@ export interface PresetStatus {
 export function presetStatus(data: PresetData, templates: Template[]): PresetStatus {
   const byId = new Map(templates.map((t) => [t.id, t]))
   const label = (t: Template) => {
+    if (t.kind === 'action') return actionLabel(t, (id) => byId.get(id))
     const parent = t.kind === 'card_tpl' && t.parent_id != null ? byId.get(t.parent_id) : null
     return parent ? `${parent.name} / ${t.name || '（未命名）'}` : t.name || '（未命名）'
   }
@@ -176,10 +179,14 @@ export function insertItems<T>(items: T[], added: T[], mode: InsertMode, at?: nu
   return [...items, ...added]
 }
 
-/** 动作序列一行的关键信息：动作卡 | 服装 | 表情 | 行为 | 张数（缺少的部分省略） */
-export function itemSummary(it: Partial<TaskItem> & { outfit_slot?: number | null }, getT: (id: number) => { name: string } | null | undefined, outfitName?: string | null): string[] {
+/** 动作序列一行的关键信息：人物动作 Prompt / 动作卡 | 服装 | 表情 | 行为 | 张数（缺少的部分省略） */
+export function itemSummary(it: Partial<TaskItem> & { outfit_slot?: number | null }, getT: (id: number) => Pick<Template, 'name'> & Partial<Template> | null | undefined, outfitName?: string | null): string[] {
   const name = (id: number | null | undefined) => (id != null ? (getT(id)?.name ?? '（已删除）') : '')
   const parts: string[] = []
+  if (it.action_id != null) {
+    const t = getT(it.action_id)
+    parts.push(t && t.kind === 'action' ? actionLabel(t, getT) : '（Prompt 已删除）')
+  }
   if (it.card_id != null) parts.push(name(it.card_id))
   if (outfitName) parts.push(outfitName)
   if (it.expression_id != null) parts.push(name(it.expression_id))

@@ -8,8 +8,10 @@
  * - position / subposition：动作卡（旧版双人主体位）/ 它的子体位（结构变体，parent_id 指向动作卡）。动作卡配置保存在 card 字段
  * - scene：场景（环境、地点、背景）
  * - male / camera：兼容素材（旧版男性描述、镜头），不在素材库中显示；镜头已是素材库的独立分类
+ * - mood / posture / action：人物动作 Prompt 库。情绪组与体位只是分类（名称 + 顺序）；action 是用户写好的完整人物动作 Prompt，
+ *   用 mood_id、pov、posture_id 定位（情绪组 × POV / 非 POV × 体位），正文原样保存
  */
-export type TemplateKind = 'global' | 'scene' | 'state' | 'pose' | 'position' | 'subposition' | 'act' | 'expression' | 'male' | 'camera' | 'card_tpl'
+export type TemplateKind = 'global' | 'scene' | 'state' | 'pose' | 'position' | 'subposition' | 'act' | 'expression' | 'male' | 'camera' | 'card_tpl' | 'mood' | 'posture' | 'action'
 
 export const TEMPLATE_KINDS: Record<TemplateKind, string> = {
   global: '全局 Prompt',
@@ -23,6 +25,9 @@ export const TEMPLATE_KINDS: Record<TemplateKind, string> = {
   male: '男性描述',
   camera: '镜头',
   card_tpl: '动作模板',
+  mood: '情绪组',
+  posture: '体位',
+  action: '人物动作 Prompt',
 }
 
 /** 合并为「状态」的旧类型 */
@@ -74,6 +79,10 @@ export interface Template extends Timestamps {
   card?: ActionCard | null
   /** 互斥组（状态、表情可选）：同一素材池中同组的素材，一张图片最多随机抽取一个 */
   exclusive?: string
+  /** 人物动作 Prompt（kind action）的分类：情绪组 ID、是否 POV、体位 ID。只用于组织和定位，不参与拼接 */
+  mood_id?: number | null
+  posture_id?: number | null
+  pov?: boolean | number | null
 }
 
 // ---------------------------------------------------------------- 动作卡
@@ -257,6 +266,11 @@ export interface ObjectInfoNode {
 export type ObjectInfo = Record<string, ObjectInfoNode>
 
 export interface TaskItem {
+  /**
+   * 人物动作 Prompt（kind action 的 ID）：有此字段的动作直接使用这份完整 Prompt，
+   * 在 1girl / 1man 之后插入角色特征与服装，前后拼接全局、场景、镜头与附加。不再抽取姿态、表情或行为
+   */
+  action_id?: number | null
   /** 主角色的状态（可多选，按选择顺序拼接到同一张图）。旧任务的 pose_id 读取时转换为一个元素的数组 */
   state_ids?: number[]
   /** 第二角色的状态（可多选）。旧任务的 second_pose_id 读取时转换 */
@@ -530,6 +544,8 @@ export interface UnitMeta {
   template?: string
   template_category?: string
   template_label?: string
+  /** 人物动作 Prompt：引用的 Prompt ID 与入队时的分类名称（之后改名、移动不影响已入队的记录） */
+  action?: { id: number; mood: string; view: string; posture: string }
   /** 入队时冻结的输出目录：完成后最终图片复制到这里（没有时不复制） */
   output_dir?: string
   /** 套图复刻：原图路径、保存时使用的文件名（不含扩展名）与替换记录 */
@@ -659,7 +675,7 @@ export interface PlanUnit {
   width?: number
   height?: number
   inputs?: InputValue[]
-  /** 正面 Prompt 来自 Prompt 模板（按占位符位置填入），不能再按模块拆分写入多个节点 */
+  /** 正面 Prompt 是一整段（人物动作 Prompt 或旧版模板动作卡，顺序由用户的 Prompt 决定），不能再按模块拆分写入多个节点 */
   from_template?: boolean
   /** 本张的 Prompt 在预览中手改过（正面、负面都是一整段，不能再按模块拆分） */
   manual?: boolean

@@ -65,7 +65,8 @@ function record(table: TableName, v: unknown): Record<string, unknown> {
       if (val !== 'high' && val !== 'normal' && val !== 'low') throw new BadArg('无效的优先级')
       out[c] = val
     } else if (c === 'card') out[c] = val === null ? null : normalizeCard(plain(val, '动作卡'))
-    else if (c === 'parent_id') out[c] = val === null ? null : int(val, 'parent_id')
+    else if (c === 'parent_id' || c === 'mood_id' || c === 'posture_id') out[c] = val === null ? null : int(val, c)
+    else if (c === 'pov') out[c] = !!val
     else if (TEXT_COLS.has(c)) out[c] = str(val, c)
     else if (INT_COLS.has(c)) out[c] = int(val, c)
     else if (c === 'loras') {

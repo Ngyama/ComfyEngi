@@ -269,7 +269,7 @@ describe('计划展开', () => {
     lib.addWorkflow(split)
     const item = { ...newCardItem(card), count: 6, expression_id: lib.exprs[0], behavior_ids: [kiss, hug] }
     const task = lib.makeTask([item])
-    expect(planForTask(s, task).errors.join()).toContain('模板动作卡需要写入完整的正面 Prompt')
+    expect(planForTask(s, task).errors.join()).toContain('需要写入完整的正面 Prompt')
     const wid = lib.addWorkflow([newEntry('positive', '6', 'text'), newEntry('negative', '7', 'text')], SAMPLE_WORKFLOW)
     const t2 = lib.makeTask([item], '套图2', { workflow_id: wid })
     const plan = planForTask(s, t2)

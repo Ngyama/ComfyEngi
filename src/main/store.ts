@@ -41,7 +41,8 @@ CREATE TABLE IF NOT EXISTS templates (
     id INTEGER PRIMARY KEY, kind TEXT NOT NULL, name TEXT NOT NULL DEFAULT '',
     positive TEXT NOT NULL DEFAULT '', negative TEXT NOT NULL DEFAULT '', category TEXT NOT NULL DEFAULT '',
     tags TEXT NOT NULL DEFAULT '', note TEXT NOT NULL DEFAULT '', sort INTEGER NOT NULL DEFAULT 0,
-    created_at REAL, updated_at REAL, target TEXT NOT NULL DEFAULT 'any', parent_id INTEGER, priority TEXT NOT NULL DEFAULT 'normal', card TEXT, exclusive TEXT NOT NULL DEFAULT '');
+    created_at REAL, updated_at REAL, target TEXT NOT NULL DEFAULT 'any', parent_id INTEGER, priority TEXT NOT NULL DEFAULT 'normal', card TEXT, exclusive TEXT NOT NULL DEFAULT '',
+    mood_id INTEGER, posture_id INTEGER, pov INTEGER);
 CREATE INDEX IF NOT EXISTS idx_templates_kind ON templates(kind);
 CREATE TABLE IF NOT EXISTS characters (
     id INTEGER PRIMARY KEY, name TEXT NOT NULL DEFAULT '', tag TEXT NOT NULL DEFAULT '',
@@ -93,7 +94,7 @@ BEGIN SELECT RAISE(ABORT, '提交快照不可修改'); END;
  * 0 = 旧版 Python 程序创建的数据库；1 = Electron 版（表结构相同，仅登记版本）。
  * 将来需要改表结构时在 MIGRATIONS 中追加步骤；每次迁移前都会先自动备份。
  */
-export const SCHEMA_VERSION = 8
+export const SCHEMA_VERSION = 9
 const MIGRATIONS: Record<number, (db: DatabaseSync) => void> = {
   1: () => {
     /* v0 → v1：结构不变 */
@@ -127,10 +128,15 @@ const MIGRATIONS: Record<number, (db: DatabaseSync) => void> = {
   7: () => {},
   // v7 → v8：动作序列预设与套图模板 presets（由 SCHEMA 建表；已有数据不变）
   8: () => {},
+  // v8 → v9：人物动作 Prompt 库（情绪组 / 体位分类与 Prompt 的定位字段；只新增列，已有数据不变）
+  9: (db) => {
+    const cols = (db.prepare('PRAGMA table_info(templates)').all() as { name: string }[]).map((c) => c.name)
+    for (const c of ['mood_id', 'posture_id', 'pov']) if (!cols.includes(c)) db.exec(`ALTER TABLE templates ADD COLUMN ${c} INTEGER`)
+  },
 }
 
 export const TABLES = {
-  templates: { cols: ['kind', 'name', 'positive', 'negative', 'category', 'tags', 'note', 'sort', 'target', 'parent_id', 'priority', 'card', 'exclusive'], json: ['card'] },
+  templates: { cols: ['kind', 'name', 'positive', 'negative', 'category', 'tags', 'note', 'sort', 'target', 'parent_id', 'priority', 'card', 'exclusive', 'mood_id', 'posture_id', 'pov'], json: ['card'] },
   characters: { cols: ['name', 'tag', 'positive', 'negative', 'loras', 'note', 'sort'], json: ['loras'] },
   outfits: { cols: ['character_id', 'name', 'positive', 'negative', 'note', 'sort'], json: [] as string[] },
   stories: { cols: ['genre', 'name', 'note', 'scenes', 'sort'], json: ['scenes'] },
@@ -304,10 +310,19 @@ export class Store {
     return Number(r.lastInsertRowid)
   }
 
-  /** 动作卡的子体位与 Prompt 模板（类似角色的服装：复制、删除动作卡时一起处理） */
+  /**
+   * 从属素材（类似角色的服装：复制、删除时一起处理）：动作卡的子体位与 Prompt 模板（parent_id），
+   * 情绪组 / 体位下的人物动作 Prompt（mood_id / posture_id）
+   */
+  private childrenOf(table: TableName, id: number): { list: Template[]; field: 'parent_id' | 'mood_id' | 'posture_id' } {
+    const kind = table === 'templates' ? (this.get('templates', id) as Template | null)?.kind : undefined
+    if (kind === 'position') return { list: this.list('templates').filter((t) => (t.kind === 'subposition' || t.kind === 'card_tpl') && t.parent_id === id), field: 'parent_id' }
+    if (kind === 'mood') return { list: this.list('templates').filter((t) => t.kind === 'action' && t.mood_id === id), field: 'mood_id' }
+    if (kind === 'posture') return { list: this.list('templates').filter((t) => t.kind === 'action' && t.posture_id === id), field: 'posture_id' }
+    return { list: [], field: 'parent_id' }
+  }
   private subpositionsOf(table: TableName, id: number): Template[] {
-    if (table !== 'templates' || (this.get('templates', id) as Template | null)?.kind !== 'position') return []
-    return this.list('templates').filter((t) => (t.kind === 'subposition' || t.kind === 'card_tpl') && t.parent_id === id)
+    return this.childrenOf(table, id).list
   }
 
   remove(table: TableName, id: number) {
@@ -344,10 +359,11 @@ export class Store {
         }
       }
       const remap = new Map<number, number>()
-      for (const t of this.subpositionsOf(table, id)) {
+      const children = this.childrenOf(table, id)
+      for (const t of children.list) {
         const { id: old, _revision: _rev, ...rest } = t
         void _rev
-        remap.set(old, this.save('templates', { ...rest, parent_id: newId }))
+        remap.set(old, this.save('templates', { ...rest, [children.field]: newId }))
       }
       // 动作卡中固定或限定的子体位指向副本自己的子体位（其他素材池引用全局素材，保持不变）
       const card = (rec as Partial<Template>).card
