@@ -6,7 +6,7 @@ import { byPriority, isStateKind, type Library, type RunnerStatus, type Task, ty
 import { toast } from 'sonner'
 import { api } from './api'
 
-export type Page = 'loras' | 'plan' | 'replica' | 'workflows' | 'queue' | 'history' | 'upscale' | 'library' | 'mining' | 'characters' | 'stories' | 'settings'
+export type Page = 'prompts' | 'loras' | 'plan' | 'replica' | 'workflows' | 'queue' | 'history' | 'upscale' | 'library' | 'mining' | 'characters' | 'stories' | 'settings'
 
 // ---------------------------------------------------------------- 批量放大的选择（跨任务累计，切换页面后保留）
 export interface UpscalePick {
@@ -46,6 +46,8 @@ export interface NavTarget {
   workflowId?: number
   /** 打开工作流后显示的标签：节点详情或高级（映射） */
   tab?: 'node' | 'advanced'
+  /** 打开「动作 Prompt」并选中这份 Prompt */
+  actionId?: number
 }
 interface NavState {
   page: Page

@@ -103,7 +103,9 @@ function Overview({ d, x }: { d: ExecutionDetail; x: ExecutionInspection }) {
           ['Seed', u.seed],
           ['生成尺寸（工作流）', x.size ? `${String(x.size.width)} × ${String(x.size.height)}（节点 #${x.size.node} ${x.size.class_type}）` : '—'],
           ['图片实际宽高', o?.image_width ? `${o.image_width} × ${o.image_height}` : '—'],
-          ['动作卡', u.meta?.card ? `${u.meta.card}${u.meta.variant ? ` · ${u.meta.variant}` : ''}（组合 Seed ${u.meta.combo_seed ?? '—'}）` : '—'],
+          u.meta?.action
+            ? ['人物动作 Prompt', `${u.meta.action.mood} / ${u.meta.action.view} / ${u.meta.action.posture}（入队时的分类名称，Prompt #${u.meta.action.id}）`]
+            : ['动作卡', u.meta?.card ? `${u.meta.card}${u.meta.variant ? ` · ${u.meta.variant}` : ''}（组合 Seed ${u.meta.combo_seed ?? '—'}）` : '—'],
           ['快照校验', x.graph_json ? (x.intact ? `SHA-256 一致（${a.body_sha256.slice(0, 16)}…）` : '快照内容与记录的 SHA-256 不一致') : '没有快照'],
           ['ComfyUI 历史核对', a.comfy_match === null ? '没有可比较的历史记录' : a.comfy_match ? 'ComfyUI 记录的工作流与快照相同' : 'ComfyUI 记录的工作流与快照不同'],
         ]}

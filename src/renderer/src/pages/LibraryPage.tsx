@@ -1,4 +1,5 @@
-// 素材库：全局 / 场景 / 状态 / 表情 / 镜头视角 / 动作卡。卡片浏览 + 右侧编辑，修改自动保存。
+// 素材库：全局 / 场景 / 镜头视角，以及旧版的状态 / 表情 / 动作卡（只在还有数据时显示，供旧任务使用）。卡片浏览 + 右侧编辑，修改自动保存。
+// 人物动作 Prompt 在单独的「动作 Prompt」页面管理。
 // 状态（旧版单人动作与行为合并而来）、表情、场景、镜头只编辑名称、正面 Prompt、显示优先级与可选的互斥组；它们是全局共享素材。
 // 动作卡 = 若干完整 Prompt 的姿态模板；表情、行为（状态素材）在套图任务的动作序列中选择。
 // 优先级只影响选择列表中的排列（高 → 普通 → 低，同级保持手动排序），不影响 Prompt。
@@ -16,20 +17,21 @@ import { matchesName, useDraft } from '@/lib/hooks'
 import { confirm, reloadLib, templatesOf, useLib, useNav } from '@/lib/stores'
 import { cn } from '@/lib/utils'
 import { CardTemplatePanel } from './CardTemplates'
-import { defaultSkeleton } from '@shared/card-templates'
 import { cardMaterialIds } from '@shared/cards'
 import { PLACEHOLDER_HELP } from '@shared/prompt'
 import { TEMPLATE_KINDS, type Library, type Template, type TemplateKind } from '@shared/types'
 
 type Tab = 'global' | 'scene' | 'state' | 'expression' | 'camera' | 'cards'
-const TABS: [Tab, string][] = [
+/** legacy：旧版素材，新任务不再使用；只在还有数据时显示（旧任务仍引用它们） */
+const TABS: [Tab, string, boolean?][] = [
   ['global', '全局'],
   ['scene', '场景'],
-  ['state', '状态'],
-  ['expression', '表情'],
   ['camera', '镜头视角'],
-  ['cards', '动作卡'],
+  ['state', '状态（旧版）', true],
+  ['expression', '表情（旧版）', true],
+  ['cards', '动作卡（旧版）', true],
 ]
+const LEGACY_HINT = '旧版素材：新的套图任务直接引用「动作 Prompt」中的完整 Prompt，不再使用它们；这里保留给已有任务和预设。'
 const STATE_HINT = '状态素材（局部姿态、手部动作、双人互动等，旧版「单人动作」与「行为」都在这里）。全局共享：动作卡只记录各素材池使用哪些状态，不复制 Prompt。'
 const HINTS: Record<TemplateKind, string> = {
   global: '画质、画风等通用 Prompt。每个套图任务选择其中一个。',
@@ -43,6 +45,9 @@ const HINTS: Record<TemplateKind, string> = {
   expression: '表情 Prompt（全局共享）。在套图任务的动作序列中为主角色、第二角色各选一个固定表情，可以在不同动作之间复用；生成时写入模板中 {表情} / {男表情} 的位置。',
   male: '男性描述（兼容素材）：分类为「基础」的可作为任务的男性基础描述；旧版的男性动作 / 表情模板仍可在任务的男性设置中选择。',
   camera: '视角、景别、构图等镜头 Prompt（全局共享）。在套图任务的动作详情中多选：选 1 个时每张图片都使用它，选多个时每张图片随机抽取 1 个。POV 不会自动启用男性出场。',
+  mood: '情绪组（在「动作 Prompt」中管理）',
+  posture: '体位（在「动作 Prompt」中管理）',
+  action: '人物动作 Prompt（在「动作 Prompt」中管理）',
 }
 /** 状态可能被引用的位置：主角色 / 第二角色的状态、双人动作的行为，以及旧任务中的单选动作字段 */
 const STATE_REFS = ['state_ids', 'second_state_ids', 'act_ids', 'pose_id', 'second_pose_id', 'male_pose_ids', 'behavior_ids']
@@ -58,6 +63,9 @@ const REF_FIELDS: Record<TemplateKind, string[]> = {
   male: ['male_base_id', 'male_ids'],
   camera: ['camera_id', 'camera_ids'],
   card_tpl: [],
+  mood: [],
+  posture: [],
+  action: ['action_id'],
 }
 /** 使用某个素材的动作卡（旧版素材池的固定素材或随机候选；动作卡或其模板上旧版的表情设置） */
 function cardsUsing(lib: Library | null, id: number): string[] {
@@ -68,20 +76,6 @@ function cardsUsing(lib: Library | null, id: number): string[] {
 }
 /** 可设置互斥组的素材 */
 const WITH_EXCLUSIVE: TemplateKind[] = ['state', 'pose', 'act', 'expression']
-
-/** 从状态创建单人动作卡：一张模板动作卡 + 一个模板（默认正文中写入状态的 Prompt）。原状态保留为共享素材，不修改 */
-async function createSoloCards(list: Template[]): Promise<number[]> {
-  const out: number[] = []
-  for (const t of list) {
-    const r = await call(api['templates.save']({ kind: 'position', name: t.name, negative: t.negative ?? '', priority: t.priority ?? 'normal', card: { solo: true, templates: true } } as never))
-    if (!r) continue
-    out.push(r.id)
-    const body = (t.positive ?? '').trim().replace(/[,，\s]+$/, '')
-    await call(api['templates.save']({ kind: 'card_tpl', parent_id: r.id, name: t.name, positive: defaultSkeleton(true).replace('\n\n', body ? `\n${body},\n` : '\n\n'), category: '', sort: 1 } as never))
-  }
-  await reloadLib()
-  return out
-}
 
 /** 只有全局 Prompt 和镜头编辑负面 Prompt；其他素材只有名称与正面（旧文件中的负面仍会使用，如实显示并可清空） */
 const WITH_NEGATIVE: TemplateKind[] = ['global', 'camera']
@@ -206,23 +200,6 @@ export function TemplateEditor({ t, onClose, onDeleted }: { t: Template; onClose
             <TextInput value={draft.exclusive ?? ''} onChange={(v) => patch({ exclusive: v })} placeholder="不填则不受限制" />
           </div>
         )}
-        {kind !== 'expression' && WITH_EXCLUSIVE.includes(kind) && (
-          <div className="flex items-center gap-2 rounded-lg bg-tint/[0.03] px-3 py-2 text-[11.5px] text-muted-foreground">
-            <span className="min-w-0 flex-1">旧版单人动作可以转换为单人动作卡：复制名称与 Prompt 作为基础 Prompt，原状态保留为共享素材。</span>
-            <Button
-              size="xs"
-              variant="secondary"
-              data-testid="state-to-card"
-              onClick={async () => {
-                flush()
-                const r = await createSoloCards([{ ...t, ...draft }])
-                if (r.length) toast.success(`已创建单人动作卡「${draft.name}」`, { description: '在「动作卡」中编辑模板' })
-              }}
-            >
-              转为单人动作卡
-            </Button>
-          </div>
-        )}
         {showNeg ? (
           <PromptField label="负面 Prompt" value={draft.negative} onChange={(v) => patch({ negative: v })} placeholder={kind === 'camera' ? '这个镜头专用的负面 Prompt，可留空' : '通用负面 Prompt，可留空。新任务的负面 Prompt 统一来自这里'} minRows={2} copy />
         ) : (
@@ -281,7 +258,7 @@ function LegacyNegative({ value, onClear }: { value: string; onClear: () => void
 
 export default function LibraryPage() {
   const lib = useLib((s) => s.lib)
-  const [tab, setTab] = useState<Tab>('state')
+  const [tab, setTab] = useState<Tab>('global')
   const [q, setQ] = useState('')
   const [sel, setSel] = useState<number | null>(null)
   const kind: TemplateKind | null = tab === 'cards' ? null : tab
@@ -308,7 +285,7 @@ export default function LibraryPage() {
       <div className="flex min-w-0 flex-1 flex-col">
         <PageHeader
           title="素材库"
-          description={kind ? HINTS[kind] : HINTS.position}
+          description={TABS.find(([k]) => k === tab)?.[2] ? LEGACY_HINT : kind ? HINTS[kind] : HINTS.position}
           actions={
             <>
               <Button variant="ghost" size="sm" onClick={() => useNav.getState().go('mining')} data-testid="open-mining">
@@ -324,7 +301,7 @@ export default function LibraryPage() {
         />
         <div className="flex flex-wrap items-center gap-3 px-6 pb-2.5">
           <div className="flex rounded-xl bg-tint/[0.04] p-1">
-            {TABS.map(([k, label]) => (
+            {TABS.filter(([k, , legacy]) => !legacy || tabCount[k] > 0 || tab === k).map(([k, label, legacy]) => (
               <button
                 key={k}
                 type="button"
@@ -334,7 +311,7 @@ export default function LibraryPage() {
                 }}
                 data-active={tab === k || undefined}
                 data-testid={`lib-tab-${k}`}
-                className="h-7 rounded-lg px-3 text-[12.5px] text-muted-foreground transition hover:text-foreground data-[active]:bg-tint/[0.09] data-[active]:text-foreground"
+                className={cn('h-7 rounded-lg px-3 text-[12.5px] text-muted-foreground transition hover:text-foreground data-[active]:bg-tint/[0.09] data-[active]:text-foreground', legacy && 'opacity-70')}
               >
                 {label}
                 <span className="ml-1.5 text-[11px] opacity-60">{tabCount[k]}</span>

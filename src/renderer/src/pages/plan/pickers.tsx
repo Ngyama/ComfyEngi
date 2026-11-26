@@ -1,20 +1,18 @@
-// 主界面使用的快捷选择器：全局 Prompt、角色（主角色 / 第二角色）、剧情、动作、工作流。
+// 主界面使用的快捷选择器：全局 Prompt、角色（主角色 / 第二角色）、剧情、工作流。添加动作的 Prompt 选择器在 prompts/ActionPicker。
 
-import { useEffect, useMemo, useState, type ReactNode } from 'react'
-import { BookOpen, Check, Dices, Plus, Settings2, Shirt, Sparkles, Users, Workflow as WorkflowIcon } from 'lucide-react'
+import { useEffect, useMemo, useState } from 'react'
+import { BookOpen, Check, Dices, Plus, Settings2, Shirt, Users, Workflow as WorkflowIcon } from 'lucide-react'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
-import { Avatar, Chip, EmptyState, FieldLabel, PriorityBadge, SearchBox, StatusDot } from '@/components/common'
+import { Avatar, Chip, EmptyState, FieldLabel, SearchBox, StatusDot } from '@/components/common'
 import { api, call } from '@/lib/api'
 import { hueOf, matchesName } from '@/lib/hooks'
 import { reloadLib, templatesOf, useLib, useNav } from '@/lib/stores'
 import { cn } from '@/lib/utils'
 import { pickRandomStory } from '@shared/planner'
-import { isTemplateCard } from '@shared/card-templates'
-import type { CardTemplatePick, Story } from '@shared/types'
-import { PoseTemplatePicker, posesOf } from './TemplateSource'
+import type { Story } from '@shared/types'
 
 // ---------------------------------------------------------------- 角色
 export function CharacterPicker({
@@ -239,185 +237,6 @@ export function StoryPicker({
 
 // ---------------------------------------------------------------- 动作
 /** 新增的动作：动作卡（每张卡一个动作，带启用的姿态模板），或旧方式的状态（多个状态合并为一个动作） */
-export type NewAction = { card_id: number; card_pick?: CardTemplatePick } | { state_ids: number[] }
-
-export function PosePicker({ open, onOpenChange, onAdd, insertAfter }: { open: boolean; onOpenChange: (o: boolean) => void; onAdd: (items: NewAction[]) => void; insertAfter: number | null }) {
-  const lib = useLib((s) => s.lib)
-  const go = useNav((s) => s.go)
-  const states = templatesOf(lib, 'state')
-  const cards = templatesOf(lib, 'position')
-  const subs = templatesOf(lib, 'subposition')
-  const [mode, setMode] = useState<'card' | 'state'>('card')
-  const [q, setQ] = useState('')
-  const [picked, setPicked] = useState<string[]>([])
-  // 动作卡：当前在右侧选择姿态模板的卡，以及各卡启用的姿态模板（没有时为全部）
-  const [focus, setFocus] = useState<number | null>(null)
-  const [picks, setPicks] = useState<Record<number, CardTemplatePick | undefined>>({})
-  useEffect(() => {
-    if (open) {
-      setQ('')
-      setPicked([])
-      setMode('card')
-      setFocus(null)
-      setPicks({})
-    }
-  }, [open])
-  const stateList = states.filter((p) => matchesName(p, q))
-  const tpls = templatesOf(lib, 'card_tpl')
-  // 动作卡按名称或姿态模板名称搜索
-  const cardList = cards.filter((p) => matchesName(p, q) || subs.some((s) => s.parent_id === p.id && matchesName(s, q)) || tpls.some((t) => t.parent_id === p.id && matchesName(t, q)))
-  const toggle = (key: string) => setPicked((p) => (p.includes(key) ? p.filter((x) => x !== key) : [...p, key]))
-  // 每张动作卡一个动作（按点选顺序）；旧方式点选的多个状态合并为同一个动作
-  const toActions = (keys: string[]): NewAction[] => {
-    const st = keys.filter((k) => k.startsWith('s:')).map((k) => Number(k.split(':')[1]))
-    const cs = keys.filter((k) => k.startsWith('c:')).map((k): NewAction => {
-      const id = Number(k.split(':')[1])
-      return picks[id] ? { card_id: id, card_pick: picks[id] } : { card_id: id }
-    })
-    return [...cs, ...(st.length ? [{ state_ids: st }] : [])]
-  }
-  const commit = (keys: string[]) => {
-    if (!keys.length) return
-    onAdd(toActions(keys))
-    onOpenChange(false)
-  }
-  const nNew = toActions(picked).length
-  const Badge = ({ k }: { k: string }) => {
-    const n = picked.indexOf(k)
-    return n >= 0 ? <span className="absolute top-2 right-2 grid size-5 place-items-center rounded-full bg-primary text-[11px] font-semibold text-primary-foreground">{n + 1}</span> : null
-  }
-  const tile = (key: string, t: (typeof cards)[number], extra?: ReactNode) => (
-    <button
-      key={key}
-      type="button"
-      data-testid={key.startsWith('c:') ? 'card-tile' : 'state-tile'}
-      onClick={() => toggle(key)}
-      onDoubleClick={() => commit([key])}
-      className={cn('relative rounded-xl bg-card p-3 text-left ring-1 ring-tint/[0.08] transition hover:bg-accent', picked.includes(key) && 'bg-primary/10 ring-primary/50')}
-    >
-      <Badge k={key} />
-      <div className="flex items-center gap-1.5 pr-6">
-        <span className="truncate text-[13px] font-medium">{t.name || '（未命名）'}</span>
-        <PriorityBadge value={t.priority} />
-      </div>
-      {extra}
-      <div className="mt-1 line-clamp-2 font-mono text-[11px] leading-snug text-muted-foreground">{t.positive || '—'}</div>
-    </button>
-  )
-  return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent
-        className="flex max-h-[82vh] flex-col gap-3 sm:max-w-3xl"
-        onKeyDown={(e) => {
-          if (e.key === 'Enter' && picked.length) commit(picked)
-        }}
-      >
-        <DialogHeader>
-          <DialogTitle>添加动作</DialogTitle>
-          <DialogDescription>
-            {mode === 'card' ? '每张动作卡添加为一个动作：在右侧取消不想用的姿态模板（默认全部启用），表情和行为在动作详情中选择。' : '旧方式：点选的多个状态合并为一个动作，同一张图片中一起使用。'}
-            {insertAfter === null ? '添加到序列末尾' : `插入到第 ${insertAfter + 1} 个动作之后`}。双击可直接添加单个。
-          </DialogDescription>
-        </DialogHeader>
-        <div className="flex items-center gap-3">
-          <div className="flex rounded-xl bg-tint/[0.04] p-1">
-            {(
-              [
-                ['card', '动作卡'],
-                ['state', '状态（旧方式）'],
-              ] as const
-            ).map(([k, l]) => (
-              <button key={k} type="button" onClick={() => setMode(k)} data-active={mode === k || undefined} className="h-7 rounded-lg px-3 text-[12.5px] text-muted-foreground data-[active]:bg-tint/[0.09] data-[active]:text-foreground">
-                {l}
-              </button>
-            ))}
-          </div>
-          <SearchBox value={q} onChange={setQ} placeholder="搜索名称…" autoFocus className="flex-1" />
-        </div>
-        {mode === 'card' && cardList.length > 0 && (
-          <div className="flex min-h-0 flex-1 gap-3">
-            <div className="w-60 shrink-0 space-y-1 overflow-y-auto p-1">
-              {cardList.map((c) => {
-                const key = `c:${c.id}`
-                const on = picked.includes(key)
-                const info = isTemplateCard(c) ? posesOf(lib, c, picks[c.id]) : null
-                return (
-                  <div
-                    key={key}
-                    role="button"
-                    tabIndex={0}
-                    data-testid="card-tile"
-                    onClick={() => {
-                      setFocus(c.id)
-                      if (!on) toggle(key)
-                    }}
-                    onDoubleClick={() => commit([key])}
-                    className={cn('relative cursor-pointer rounded-xl bg-card p-2.5 text-left ring-1 ring-tint/[0.08] transition hover:bg-accent', on && 'bg-primary/10 ring-primary/50', (focus ?? -1) === c.id && 'ring-2 ring-primary/70')}
-                  >
-                    <button type="button" aria-label={on ? `不添加 ${c.name}` : `添加 ${c.name}`} onClick={(e) => (e.stopPropagation(), toggle(key))} className={cn('absolute top-2 right-2 grid size-5 place-items-center rounded-full text-[11px] font-semibold', on ? 'bg-primary text-primary-foreground' : 'ring-1 ring-tint/[0.2]')}>
-                      {on ? picked.indexOf(key) + 1 : ''}
-                    </button>
-                    <div className="flex items-center gap-1.5 pr-7">
-                      <span className="truncate text-[13px] font-medium">{c.name || '（未命名）'}</span>
-                      <PriorityBadge value={c.priority} />
-                    </div>
-                    <div className="mt-0.5 truncate text-[10.5px] text-muted-foreground">
-                      <span className={c.card?.solo ? 'text-emerald-700' : 'text-sky-700'}>{c.card?.solo ? '单人' : '双人'}</span>
-                      {info ? ` · ${info.picked ? `${info.picked}${info.picked !== info.total ? ` / ${info.total}` : ''} 个姿态模板` : '没有启用姿态模板'}` : ' · 旧版动作卡'}
-                    </div>
-                  </div>
-                )
-              })}
-            </div>
-            <div className="min-w-0 flex-1 overflow-y-auto rounded-xl bg-tint/[0.02] p-3 ring-1 ring-tint/[0.07]" data-testid="card-poses">
-              {(() => {
-                const c = cardList.find((x) => x.id === focus) ?? null
-                if (!c) return <div className="pt-8 text-center text-xs text-muted-foreground">点击左侧的动作卡，在这里选择参与的姿态模板。默认全部启用。</div>
-                if (!isTemplateCard(c)) return <div className="text-xs text-muted-foreground">旧版动作卡：按卡片的默认组合规则生成。</div>
-                return (
-                  <div className="space-y-2">
-                    <div className="text-[13px] font-medium">{c.name} · 姿态模板</div>
-                    <PoseTemplatePicker
-                      card={c}
-                      pick={picks[c.id]}
-                      onChange={(p) => {
-                        setPicks((m) => ({ ...m, [c.id]: p }))
-                        if (!picked.includes(`c:${c.id}`)) toggle(`c:${c.id}`)
-                      }}
-                    />
-                  </div>
-                )
-              })()}
-            </div>
-          </div>
-        )}
-        <div className={cn('grid min-h-0 auto-rows-min grid-cols-3 gap-2 overflow-y-auto pb-1', mode === 'state' || !cardList.length ? 'flex-1' : 'hidden')}>
-          {mode === 'state' && stateList.map((t) => tile(`s:${t.id}`, t))}
-          {((mode === 'card' && !cardList.length) || (mode === 'state' && !stateList.length)) && (
-            <div className="col-span-3">
-              <EmptyState
-                icon={<Sparkles />}
-                title={q ? '没有匹配的素材' : mode === 'card' ? '还没有动作卡' : '还没有状态素材'}
-                description={mode === 'card' ? '动作卡在「素材库 → 动作卡」中管理：姿态模板只需写一次。' : '状态在「素材库 → 状态」中管理。'}
-              />
-            </div>
-          )}
-        </div>
-        <DialogFooter className="sm:justify-between">
-          <Button variant="ghost" onClick={() => (onOpenChange(false), go('library'))}>
-            管理动作卡
-          </Button>
-          <Button disabled={!picked.length} onClick={() => commit(picked)}>
-            <Plus /> 添加 {nNew || ''} 个动作
-          </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
-  )
-}
-
-// ---------------------------------------------------------------- 全局 Prompt
-/** 整套任务的全局 Prompt（画质、画风与通用负面）：与剧情、角色并列在页面顶部选择 */
 export function GlobalPicker({ open, onOpenChange, value, onPick }: { open: boolean; onOpenChange: (o: boolean) => void; value: number | null; onPick: (id: number | null) => void }) {
   const lib = useLib((s) => s.lib)
   const go = useNav((s) => s.go)

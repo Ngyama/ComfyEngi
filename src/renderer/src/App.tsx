@@ -3,7 +3,7 @@ import LorasPage from '@/pages/LorasPage'
 import { VaultPanel } from '@/components/VaultPanel'
 import { api } from '@/lib/api'
 import { useEffect, useState, type ComponentType } from 'react'
-import { BookOpen, Copy, History, Layers, ListOrdered, Maximize2, Pickaxe, Settings, Shapes, Users, Workflow } from 'lucide-react'
+import { BookOpen, Copy, History, Layers, ListOrdered, Maximize2, Pickaxe, Settings, Shapes, Users, Workflow, Drama } from 'lucide-react'
 import { Toaster } from '@/components/ui/sonner'
 import { TooltipProvider } from '@/components/ui/tooltip'
 import { ConfirmHost, StatusDot } from '@/components/common'
@@ -16,6 +16,7 @@ import WorkflowsPage from '@/pages/WorkflowsPage'
 import HistoryPage from '@/pages/HistoryPage'
 import UpscalePage from '@/pages/upscale/UpscalePage'
 import LibraryPage from '@/pages/LibraryPage'
+import PromptLibraryPage from '@/pages/prompts/PromptLibraryPage'
 import MiningPage from '@/pages/mining/MiningPage'
 import CharactersPage from '@/pages/CharactersPage'
 import StoriesPage from '@/pages/StoriesPage'
@@ -24,6 +25,7 @@ import SettingsPage from '@/pages/settings/SettingsPage'
 type NavItem = { key: Page; label: string; icon: ComponentType<{ className?: string }> }
 /** 侧边栏分两组：靠上为素材与资料，靠下为生成与系统 */
 const NAV_TOP: NavItem[] = [
+  { key: 'prompts', label: '动作 Prompt', icon: Drama },
   { key: 'library', label: '素材库', icon: Shapes },
   { key: 'mining', label: 'Prompt 提取', icon: Pickaxe },
   { key: 'loras', label: 'LoRA 管理', icon: Shapes },
@@ -41,6 +43,7 @@ const NAV_BOTTOM: NavItem[] = [
 ]
 
 const PAGES: Record<Page, ComponentType> = {
+  prompts: PromptLibraryPage,
   loras: LorasPage,
   plan: PlanPage,
   replica: ReplicaPage,

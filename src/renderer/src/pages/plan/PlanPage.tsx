@@ -23,6 +23,7 @@ import {
   User,
   UserPlus,
   Sparkles,
+  Drama,
 } from 'lucide-react'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
@@ -33,12 +34,15 @@ import { api, call } from '@/lib/api'
 import { hueOf } from '@/lib/hooks'
 import { confirm, reloadLib, templatesOf, useLib, useNav, usePlan, useRunner } from '@/lib/stores'
 import { cn } from '@/lib/utils'
-import { defaultItemCount, defaultSizes, expandTask, itemCameraIds, itemStateIds, newCardItem, newItem, newTaskWithDefaults, setItemSizes, sizeCount } from '@shared/planner'
+import { defaultItemCount, defaultSizes, expandTask, itemCameraIds, itemStateIds, newActionItem, newTaskWithDefaults, setItemSizes, sizeCount } from '@shared/planner'
 import type { Plan } from '@shared/api'
 import { DEFAULT_SETTINGS, SIZE_PRESETS, type Library, type PlanUnit, type Preset, type TaskData, type TaskItem } from '@shared/types'
 import { PlanPreviewDialog, TaskSettingsDialog } from './dialogs'
 import { LoraPanel } from './LoraPanel'
-import { CharacterPicker, GlobalPicker, PosePicker, StoryPicker, WorkflowMenu, type NewAction } from './pickers'
+import { CharacterPicker, GlobalPicker, StoryPicker, WorkflowMenu } from './pickers'
+import { ActionPicker } from '../prompts/ActionPicker'
+import { ActionItemDetail } from './ActionDetail'
+import { actionLabel, hasMale, promptAnchors } from '@shared/action-prompts'
 import { isTemplateCard } from '@shared/card-templates'
 import { CardItemDetail } from './CardDetail'
 import { posesOf } from './TemplateSource'
@@ -227,10 +231,19 @@ function PoseCard({
   const scene = T(item.scene_id ?? null)
   const card = item.card_id != null ? T(item.card_id) : undefined
   const isCard = item.card_id != null
+  // 人物动作 Prompt 条目
+  const isAction = item.action_id != null
+  const action = isAction ? T(item.action_id!) : undefined
+  const actionOk = action?.kind === 'action'
+  const actionMale = actionOk && hasMale(promptAnchors(action!.positive))
   const templated = isTemplateCard(card)
   const tuned = isCard && !templated && (!!Object.keys(item.card_rules ?? {}).length || !!(item.card_exclude ?? []).length)
   const poseInfo = templated && card ? posesOf(lib, card, item.card_pick) : null
-  const label = isCard
+  const label = isAction
+    ? actionOk
+      ? actionLabel(action!, (x) => T(x))
+      : '（Prompt 已删除）'
+    : isCard
     ? (card?.name ?? '（动作卡已删除）')
     : item.position_id
       ? position
@@ -241,7 +254,7 @@ function PoseCard({
       : states.length
         ? states.map((t) => t?.name ?? '（状态已删除）').join(' + ')
         : '（未选择状态）'
-  const missing = isCard ? !card : item.position_id ? !position : !states.length || states.some((t) => !t)
+  const missing = isAction ? !actionOk : isCard ? !card : item.position_id ? !position : !states.length || states.some((t) => !t)
   const outfit = item.outfit_id ? lib?.outfits.find((o) => o.id === item.outfit_id) : undefined
   const exprs = item.expression_ids.map((e) => T(e)?.name ?? '（已删除）')
   const cameras = itemCameraIds(item).map((id) => T(id)?.name ?? '（已删除）')
@@ -249,7 +262,8 @@ function PoseCard({
   // 模板动作卡：固定表情 + 行为候选（每张随机 0～1 个）
   const cardExpr = templated && item.expression_id != null ? (T(item.expression_id)?.name ?? '（表情已删除）') : null
   const behaviors = templated ? (item.behavior_ids ?? []).map((b) => T(b)?.name ?? '（已删除）') : []
-  const summary = templated ? itemSummary(item, (x) => T(x), outfit?.name).join(' | ') : undefined
+  const summary = templated || isAction ? itemSummary(item, (x) => T(x), outfit?.name).join(' | ') : undefined
+  const outfit2 = isAction && item.second_outfit_id ? lib?.outfits.find((o) => o.id === item.second_outfit_id) : undefined
   const sizeText = item.sizes
     ? SIZE_PRESETS.filter((p) => sizeCount(item.sizes, p.key))
         .map((p) => `${p.label[0]}${sizeCount(item.sizes, p.key)}`)
@@ -275,7 +289,13 @@ function PoseCard({
       <span className="grid size-7 shrink-0 place-items-center rounded-lg bg-tint/[0.06] text-xs font-semibold text-muted-foreground tabular-nums">{index + 1}</span>
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-2">
+          {isAction && <Drama className="size-3.5 shrink-0 text-primary/70" />}
           <span data-testid="pose-name" className={cn('truncate text-[14px] font-medium', missing && 'text-destructive')}>{label}</span>
+          {isAction && actionOk && (
+            <span className={cn('shrink-0 rounded-md px-1.5 py-0.5 text-[10.5px]', actionMale ? 'bg-sky-500/10 text-sky-700' : 'bg-emerald-500/10 text-emerald-700')} data-testid="action-badge">
+              {actionMale ? (second ? `双人 + ${second}` : '双人') : '单人'}
+            </span>
+          )}
           {isCard && card && (
             <span className={cn('shrink-0 rounded-md px-1.5 py-0.5 text-[10.5px]', card.card?.solo ? 'bg-emerald-500/10 text-emerald-700' : 'bg-sky-500/10 text-sky-700')} data-testid="card-badge">
               {card.card?.solo ? '单人' : `双人${second ? ` + ${second}` : ''}`}
@@ -329,10 +349,21 @@ function PoseCard({
             <Shirt className="size-3 shrink-0" />
             <span className="truncate">{outfit?.name ?? '未指定服装'}</span>
           </span>
-          <span className={cn('inline-flex min-w-0 items-center gap-1', (templated ? !cardExpr : !exprs.length && !isCard) && 'opacity-60')} data-testid="row-expression">
-            <Smile className="size-3 shrink-0" />
-            <span className="truncate">{templated ? (cardExpr ?? '未选择表情') : isCard ? '姿态、表情、互动按动作卡规则抽取' : exprs.length ? exprs.join('、') : '无表情'}</span>
-          </span>
+          {isAction ? (
+            actionMale && second ? (
+              <span className={cn('inline-flex min-w-0 items-center gap-1', !outfit2 && 'opacity-60')} data-testid="row-outfit2">
+                <Shirt className="size-3 shrink-0" />
+                <span className="truncate">
+                  {second}：{outfit2?.name ?? '未指定服装'}
+                </span>
+              </span>
+            ) : null
+          ) : (
+            <span className={cn('inline-flex min-w-0 items-center gap-1', (templated ? !cardExpr : !exprs.length && !isCard) && 'opacity-60')} data-testid="row-expression">
+              <Smile className="size-3 shrink-0" />
+              <span className="truncate">{templated ? (cardExpr ?? '未选择表情') : isCard ? '姿态、表情、互动按动作卡规则抽取' : exprs.length ? exprs.join('、') : '无表情'}</span>
+            </span>
+          )}
         </div>
         {error && (
           <div className="mt-1.5 flex items-center gap-1 text-[11.5px] text-destructive">
@@ -442,19 +473,22 @@ export default function PlanPage() {
     toast.success(`已导入「${preset.name}」`, { description: `${added.length} 个动作${mode === 'replace' ? '（已替换原有动作）' : ''}` })
   }
 
-  const addPoses = (ids: NewAction[]) => {
+  /** 添加人物动作 Prompt：每份 Prompt 一个动作，插在选中动作之后 */
+  const addActions = (ids: number[]) => {
     const at = selected !== null && selected < items.length ? selected + 1 : items.length
     const prev = at > 0 ? items[at - 1] : null
-    // 服装默认继承上一个动作
-    // 动作卡：单人卡生成单人图片，双人卡在任务选择了第二角色时由第二角色出场（不需要在动作中启用）
-    // 新动作使用尺寸配置：默认张数放在竖图
+    // 服装、场景、镜头默认继承上一个动作；新动作使用尺寸配置，默认张数放在竖图
     const sizes = defaultSizes(defaultItemCount(lib?.settings))
     update((x) =>
       x.items.splice(
         at,
         0,
-        ...ids.map((a) => {
-          const it = 'card_id' in a ? { ...newCardItem(a.card_id, prev?.outfit_id ?? null), ...(a.card_pick ? { card_pick: a.card_pick } : {}) } : { ...newItem(null, prev?.outfit_id ?? null), state_ids: a.state_ids }
+        ...ids.map((id) => {
+          const it = newActionItem(id, prev?.outfit_id ?? null)
+          if (prev?.second_outfit_id) it.second_outfit_id = prev.second_outfit_id
+          if (prev?.scene_id) it.scene_id = prev.scene_id
+          const cams = prev ? itemCameraIds(prev) : []
+          if (cams.length) Object.assign(it, { camera_ids: cams, camera_id: cams[0] })
           setItemSizes(it, sizes)
           return it
         }),
@@ -631,7 +665,7 @@ export default function PlanPage() {
             icon={char2 ? <Avatar name={char2.name} hue={hueOf(char2.name)} /> : <div className="grid size-9 shrink-0 place-items-center rounded-xl bg-tint/[0.05] text-muted-foreground"><UserPlus className="size-4" /></div>}
             label="第二角色"
             title={char2 ? char2.name : d.second_character_id ? '（第二角色已被删除）' : '不使用'}
-            sub={char2 ? `${outfitsOf(char2.id)} 套服装 · ${(char2.loras ?? []).filter((l) => l.name).length} 个 LoRA · 在动作中启用` : '可选：双人图片时选择'}
+            sub={char2 ? `${outfitsOf(char2.id)} 套服装 · ${(char2.loras ?? []).filter((l) => l.name).length} 个 LoRA · Prompt 有 1man 时出场` : '可选：双人图片时选择'}
             empty={!char2}
             onClick={() => setPicker('char2')}
           />
@@ -704,7 +738,7 @@ export default function PlanPage() {
               className="flex w-full items-center justify-center gap-2 rounded-xl border border-dashed border-tint/[0.16] py-4 text-[13px] text-muted-foreground transition hover:border-primary/40 hover:bg-primary/[0.04] hover:text-primary"
             >
               <Plus className="size-4" />
-              {items.length ? '添加动作' : '从素材库添加第一个动作'}
+              {items.length ? '添加动作' : '从动作 Prompt 添加第一个动作'}
             </button>
           </div>
         </div>
@@ -751,7 +785,9 @@ export default function PlanPage() {
       {/* 姿态详情：宽屏时并排，窄屏时浮在序列上方 */}
       {detailOpen && (
         <div className="absolute top-3 right-3 bottom-[76px] z-30 w-[520px] max-w-[calc(100%-24px)] overflow-hidden rounded-2xl bg-popover shadow-2xl ring-1 shadow-tint/15 ring-tint/[0.128] 2xl:static 2xl:my-3 2xl:mr-3 2xl:w-[520px] 2xl:shrink-0 2xl:bg-inset/60 2xl:shadow-none">
-          {items[selected!].card_id != null ? (
+          {items[selected!].action_id != null ? (
+            <ActionItemDetail key={selected} index={selected!} units={units.filter((u) => u.section === 'pose' && u.item_index === selected)} error={itemError(selected!)} onClose={() => select(null)} />
+          ) : items[selected!].card_id != null ? (
             <CardItemDetail key={selected} index={selected!} units={units.filter((u) => u.section === 'pose' && u.item_index === selected)} onClose={() => select(null)} />
           ) : (
             <PoseDetail index={selected!} firstUnit={firstUnitOf(selected!)} onClose={() => select(null)} />
@@ -768,7 +804,7 @@ export default function PlanPage() {
         onClear={() => changeSecondCharacter(null)}
         clearLabel="清除选择"
         title="选择第二角色"
-        description="与主角色来自同一个角色库。第二角色在每个动作中单独启用，可分别选择服装、动作和表情；未启用的动作生成单人图片。"
+        description="与主角色来自同一个角色库。人物动作 Prompt 中有 1man 时第二角色出场：特征与服装插在 1man 之后，并加载其 LoRA；没有 1man 的 Prompt 生成单人图片。"
       />
       <StoryPicker
         open={picker === 'story'}
@@ -779,7 +815,7 @@ export default function PlanPage() {
         onPick={(id) => update((x) => (x.story_id = id))}
         onOutfit={(id) => update((x) => (x.story_outfit_id = id))}
       />
-      <PosePicker open={picker === 'pose'} onOpenChange={(o) => setPicker(o ? 'pose' : null)} onAdd={addPoses} insertAfter={selected !== null && selected < items.length ? selected : null} />
+      <ActionPicker open={picker === 'pose'} onOpenChange={(o) => setPicker(o ? 'pose' : null)} onPick={addActions} multi insertAfter={selected !== null && selected < items.length ? selected : null} />
       <PresetDialog open={picker === 'presets'} onOpenChange={(o) => setPicker(o ? 'presets' : null)} insertAfter={selected !== null && selected < items.length ? selected : null} onImport={(a, m, p) => void importPreset(a, m, p)} />
       <SavePresetDialog open={picker === 'save-set'} onOpenChange={(o) => setPicker(o ? 'save-set' : null)} kind="set" from={0} to={Math.max(0, items.length - 1)} />
       <GlobalPicker open={picker === 'global'} onOpenChange={(o) => setPicker(o ? 'global' : null)} value={d.global_id} onPick={(id) => update((x) => (x.global_id = id))} />
